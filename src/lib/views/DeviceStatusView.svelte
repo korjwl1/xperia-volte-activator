@@ -100,7 +100,7 @@
         </div>
         <div class="flex flex-wrap gap-2">
           <div class="flex items-center gap-1.5 rounded-lg bg-white/15 px-2.5 py-1.5 text-xs font-medium">
-            {#if d.bootloader === "locked"}🔒 잠김{:else if d.bootloader === "unlocked"}🔓 언락{:else}확인 중{/if}
+            {#if d.bootloader === "locked"}🔒 부트로더 잠김{:else if d.bootloader === "unlocked"}🔓 부트로더 언락{:else}확인 중{/if}
           </div>
           <div class="flex items-center gap-1.5 rounded-lg bg-white/15 px-2.5 py-1.5 text-xs font-medium">
             {#if d.rooted === true}루팅됨{:else if d.rooted === false}루팅 없음{:else}확인 중{/if}
@@ -108,9 +108,12 @@
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {#each d.sims as sim (sim.slot)}
-            <div class="rounded-lg bg-black/20 px-3 py-2.5 space-y-1">
+            <div class="rounded-lg bg-black/20 px-3 py-2.5 space-y-1 border {sim.type === 'physical' ? 'border-white/10' : 'border-white/25 border-dashed'}">
               <div class="flex items-center gap-2 text-[11px] opacity-90">
-                SIM{sim.slot} · {sim.type === "esim" ? "eSIM" : "물리 SIM"}
+                SIM{sim.slot}
+                <span class="rounded px-1 py-0.5 text-[10px] font-semibold {sim.type === 'physical' ? 'bg-white/15' : 'bg-white/25'}">
+                  {sim.type === "physical" ? "물리" : "eSIM"}
+                </span>
               </div>
               {#if sim.carrier}
                 <div class="text-sm font-semibold">{sim.carrier}</div>

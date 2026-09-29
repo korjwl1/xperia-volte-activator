@@ -96,7 +96,7 @@
           <div class="text-muted-foreground">{wizard.device.firmware} · Android {wizard.device.android}</div>
           <div class="pt-1 flex flex-wrap gap-1">
             <Badge variant="outline" class="text-[10px] px-1.5 py-0">
-              {wizard.device.bootloader === "locked" ? "🔒 잠김" : wizard.device.bootloader === "unlocked" ? "🔓 언락" : "? 언락상태"}
+              {wizard.device.bootloader === "locked" ? "🔒 부트로더 잠김" : wizard.device.bootloader === "unlocked" ? "🔓 언락" : "? 언락상태"}
             </Badge>
             <Badge variant="outline" class="text-[10px] px-1.5 py-0">
               {wizard.device.sims.some((s) => s.volteEnabled) ? "VoLTE 사용 중" : "VoLTE 미사용"}
