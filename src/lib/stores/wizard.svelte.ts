@@ -18,7 +18,7 @@ const MANUAL_TEXT: Record<string, { title: string; steps: string[] }> = {
   "magisk-patch": {
     title: "Magisk 부트 패치 (폰 조작)",
     steps: [
-      "PC에서 추출한 init_boot.img를 폰의 Download 폴더로 전송 (자동)",
+      "PC에서 준비한 시스템 파일을 폰으로 전송합니다 (자동)",
       "폰의 Magisk 앱 → 설치 → 파일 선택 및 패치",
       "패치 산출물(magisk_patched-*.img)은 자동으로 감지됩니다 — 과거 파일은 거부됩니다",
     ],
@@ -236,7 +236,7 @@ export class Wizard {
     const cur = this.runSteps[this.cursor];
     if (cur) {
       cur.status = "running";
-      cur.logs.push("[재개] 재연결 감지 — 단계 상대 프로브로 이어서 진행 (§9-2)");
+      cur.logs.push("[재개] 재연결 확인 — 이어서 진행합니다");
     }
     this.begin();
   }

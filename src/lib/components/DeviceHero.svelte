@@ -6,8 +6,7 @@
 </script>
 
 <div class="grad-hero rounded-xl elev-2 text-primary-foreground overflow-hidden">
-  <div class="flex flex-col sm:flex-row items-stretch gap-6 p-6">
-    <div class="flex-1 min-w-0 space-y-4">
+  <div class="flex flex-col sm:flex-row items-stretch gap-6 p-6">    <div class="flex-1 min-w-0 space-y-4">
       <div>
         <div class="text-[11px] uppercase tracking-widest opacity-80">Connected Device</div>
         <h1 class="text-2xl font-semibold mt-1">{device.productName}</h1>
@@ -78,6 +77,5 @@
   </div>
 
   {#if !device.volte.enabled && device.volte.reason}
-    <div class="bg-black/20 px-6 py-2 text-[11px] opacity-90">{device.volte.reason}</div>
   {/if}
 </div>

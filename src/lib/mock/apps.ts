@@ -61,7 +61,7 @@ export const mockBackupGroups: BackupGroup[] = [
   {
     id: "storage",
     label: "본체 저장소 (/sdcard)",
-    desc: "adb pull -a · 타임스탬프 보존",
+    desc: "사진·동영상·문서 등",
     items: [
       { id: "dcim", label: "DCIM (사진/영상)", cls: "full", checked: true, bytes: 18.2 * GB },
       { id: "download", label: "Download", cls: "full", checked: true, bytes: 3.1 * GB },

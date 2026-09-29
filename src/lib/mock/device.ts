@@ -13,7 +13,7 @@ export const mockDeviceStatus: DeviceStatus = {
   volte: {
     enabled: false,
     ims: "none",
-    reason: "프레임워크가 SKT(450/05)를 IMS 미지원으로 처리 중 · EFS 주입 흔적 없음",
+    reason: "해외 펌웨어에 한국 통신사 VoLTE 프로파일 없음",
   },
   sims: [
     { slot: 1, carrier: "(비어 있음)", plmn: "-" },
