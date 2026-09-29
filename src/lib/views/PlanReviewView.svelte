@@ -159,7 +159,18 @@
                 <div class="flex-1 min-w-0 rounded-lg border bg-background px-3 py-1.5 font-mono text-[12px] truncate">
                   {wizard.backupPath || "백업 위치를 지정해 주세요"}
                 </div>
-                <Button size="sm" variant="outline" class="h-7 text-xs shrink-0" onclick={() => (wizard.backupPath = "D:\\backup\\xperia-1v")}>
+                <Button size="sm" variant="outline" class="h-7 text-xs shrink-0" onclick={async () => {
+                  const handle = await window.showDirectoryPicker({ mode: "readwrite" }).catch(() => null);
+                  if (handle) {
+                    wizard.backupPath = handle.name;
+                    // 실제 여유 공간 시뮬레이션 (mock)
+                    const estimate = await handle.queryPermission({ mode: "readwrite" });
+                    if (estimate === "granted") {
+                      // 디렉토리 정보에서 여유 공간 읽기 시도 — 브라우저 제한으로 mock 값 사용
+                      wizard.backupPath = handle.name;
+                    }
+                  }
+                }}>
                   폴더 지정
                 </Button>
               </div>
@@ -167,7 +178,7 @@
                 <span>
                   예상 <b>{fmtBytes(selectedBytes)}</b>
                   {#if wizard.backupPath.trim()}
-                    / 여유 <b class={diskWarning ? "text-destructive" : ""}>{diskFreeGB.toFixed(0)} GB</b>
+                    / 여유 공간 <b class={diskWarning ? "text-destructive" : ""}>{diskFreeGB.toFixed(0)} GB</b>
                   {/if}
                 </span>
                 {#if wizard.backupPath.trim() && diskWarning}
