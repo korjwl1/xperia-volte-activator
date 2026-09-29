@@ -5,18 +5,32 @@
   import OptionCategory from "$lib/components/OptionCategory.svelte";
   import { TriangleAlert, FolderOpen } from "@lucide/svelte/icons";
   import { wizard } from "$lib/stores/wizard.svelte";
-  import { mockBackupGroups } from "$lib/mock/apps";
+  import { mockBackupGroups, mockDiskFree } from "$lib/mock/apps";
   import type { PlanStep } from "$lib/types";
 
   let activeTab = $state<"backup" | "rooting">("backup");
+  let showPathAlert = $state(false);
 
   const hasWipe = wizard.device?.bootloader === "locked";
   const defaultOn = hasWipe;
 
   let backupGroups = $state(
-    mockBackupGroups.map((g) => ({ id: g.id, label: g.label, desc: g.desc, checked: defaultOn })),
+    mockBackupGroups.map((g) => ({ id: g.id, label: g.label, desc: g.desc, checked: defaultOn, bytes: g.items.reduce((a: number, i) => a + (i.bytes ?? 0), 0) })),
   );
   let opts = $state({ restore: defaultOn, backup2: defaultOn, unroot: true, relock: true });
+
+  const fmtBytes = (b: number) => {
+    const gb = b / 1024 ** 3;
+    if (gb >= 1) return `${gb.toFixed(1)} GB`;
+    const mb = b / 1024 ** 2;
+    if (mb >= 1) return `${mb.toFixed(0)} MB`;
+    return `${Math.max(1, Math.round(b / 1024))} KB`;
+  };
+
+  const selectedBytes = $derived(backupGroups.filter((g) => g.checked).reduce((a, g) => a + g.bytes, 0));
+  const diskFreeGB = mockDiskFree / 1024 ** 3;
+  const usageRatio = $derived(selectedBytes / mockDiskFree);
+  const diskWarning = $derived(usageRatio > 0.85);
 
   const backupCategories = [
     { id: "settings", label: "설정", groupIds: ["settings"] },
@@ -68,6 +82,18 @@
   });
 
   function confirm() {
+    // 방어: 백업 선택 + 경로 미지정 or 용량 부족
+    if (backupGroups.some((g) => g.checked)) {
+      if (!wizard.backupPath.trim()) {
+        showPathAlert = true;
+        return;
+      }
+      if (diskWarning) {
+        showPathAlert = true;
+        return;
+      }
+    }
+    showPathAlert = false;
     const effUnroot = opts.unroot || opts.relock;
     wizard.groups = mockBackupGroups.map((g) => ({
       ...g,
@@ -105,8 +131,8 @@
 
 <div class="flex-1 min-h-0 flex flex-col">
   <div class="flex-1 min-h-0 flex gap-4 p-4 lg:p-6">
-    <!-- 좌: 옵션 -->
-    <div class="flex-[3] min-w-0 flex flex-col gap-4">
+    <!-- 좌: 옵션 (더 넓게) -->
+    <div class="flex-[7] min-w-0 flex flex-col gap-4">
       <div class="shrink-0 flex gap-1 rounded-lg bg-muted p-1">
         <button
           class="flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors
@@ -127,7 +153,7 @@
       <div class="flex-1 min-h-0 overflow-y-auto">
         {#if activeTab === "backup"}
           {#if backupGroups.some((g) => g.checked)}
-            <div class="sticky top-0 z-10 -mx-1 mb-3 bg-background/95 backdrop-blur border-b pb-3 px-1">
+            <div class="sticky top-0 z-10 -mx-1 mb-3 bg-background/95 backdrop-blur border-b pb-3 px-1 space-y-2">
               <div class="flex items-center gap-2.5">
                 <FolderOpen size={16} class="text-primary shrink-0" />
                 <div class="flex-1 min-w-0 rounded-lg border bg-background px-3 py-1.5 font-mono text-[12px] truncate">
@@ -136,6 +162,16 @@
                 <Button size="sm" variant="outline" class="h-7 text-xs shrink-0" onclick={() => (wizard.backupPath = "D:\\backup\\xperia-1v")}>
                   폴더 지정
                 </Button>
+              </div>
+              <div class="flex items-center justify-between text-[11px] px-1">
+                <span class="text-muted-foreground">
+                  예상 <b class="text-foreground">{fmtBytes(selectedBytes)}</b>
+                  / 여유 <b class={diskWarning ? "text-destructive" : "text-success"}>{diskFreeGB.toFixed(0)} GB</b>
+                </span>
+                <span class="text-muted-foreground">({Math.round(usageRatio * 100)}% 사용)</span>
+              </div>
+              <div class="h-1.5 rounded-full bg-muted overflow-hidden mx-1">
+                <div class="h-full transition-all {diskWarning ? 'bg-destructive' : 'bg-success'}" style="width: {Math.min(100, usageRatio * 100)}%"></div>
               </div>
             </div>
           {/if}
@@ -155,6 +191,7 @@
                     label={group.label}
                     desc={group.desc}
                     onToggle={(v) => (group.checked = v)}
+                    right={group.bytes ? fmtBytes(group.bytes) : undefined}
                   />
                 {/each}
               </div>
@@ -216,8 +253,8 @@
       </div>
     </div>
 
-    <!-- 우: 실행 순서 -->
-    <div class="flex-[2] min-w-0 rounded-xl border bg-muted/30 flex flex-col overflow-hidden">
+    <!-- 우: 실행 순서 (좁게) -->
+    <div class="flex-[3] min-w-0 max-w-[280px] rounded-xl border bg-muted/30 flex flex-col overflow-hidden">
       <div class="shrink-0 px-4 py-3 border-b">
         <div class="text-sm font-semibold">실행 순서</div>
         <div class="text-[11px] text-muted-foreground">{planSteps.length}단계</div>
@@ -230,12 +267,24 @@
               {i + 1}
             </span>
             <span class="truncate">{step.title}</span>
-            {#if step.warn}<TriangleAlert size={12} class="shrink-0 text-destructive/70" />{/if}
+            {#if step.warn}
+              <TriangleAlert size={12} class="shrink-0 text-destructive/70 cursor-help" title="이 단계에서 기기가 초기화됩니다" />
+            {/if}
           </div>
         {/each}
       </div>
     </div>
   </div>
+
+  {#if showPathAlert}
+    <div class="shrink-0 bg-danger-container px-6 py-2 text-xs text-destructive font-medium">
+      {#if !wizard.backupPath.trim()}
+        백업 위치를 지정해 주세요
+      {:else}
+        디스크 여유 공간이 부족합니다 — 백업 항목을 줄이거나 다른 위치를 지정해 주세요
+      {/if}
+    </div>
+  {/if}
 
   <footer class="h-14 shrink-0 border-t bg-muted/40 flex items-center justify-between px-6">
     <Button variant="ghost" size="sm" onclick={() => (wizard.view = "step1")}>← 이전</Button>

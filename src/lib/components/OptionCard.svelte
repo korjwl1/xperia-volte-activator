@@ -10,9 +10,10 @@
     badge?: string;
     badgeVariant?: "default" | "secondary" | "destructive" | "outline";
     disabled?: boolean;
+    right?: string;
   }
 
-  let { checked, label, desc = "", onToggle, badge, badgeVariant = "secondary", disabled = false }: Props = $props();
+  let { checked, label, desc = "", onToggle, badge, badgeVariant = "secondary", disabled = false, right }: Props = $props();
 </script>
 
 <label
@@ -31,6 +32,9 @@
       <div class="text-[11px] text-muted-foreground truncate">{desc}</div>
     {/if}
   </div>
+  {#if right}
+    <span class="text-[11px] text-muted-foreground font-mono shrink-0">{right}</span>
+  {/if}
   {#if badge}
     <Badge variant={badgeVariant} class="text-[10px] shrink-0">{badge}</Badge>
   {/if}
