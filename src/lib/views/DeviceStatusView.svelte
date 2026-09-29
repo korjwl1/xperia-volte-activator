@@ -106,12 +106,12 @@
             <circle cx="12" cy="11" r="2.5" fill="rgba(0,0,0,0.55)" stroke="rgba(255,255,255,0.25)" stroke-width="0.5" />
             <!-- 상태바: 신호바 + 5G (상단 우측) -->
             <g fill="rgba(255,255,255,0.80)">
-              <rect x="41" y="10.5" width="1" height="3" rx="0.3" />
-              <rect x="43" y="9.5" width="1" height="4" rx="0.3" />
-              <rect x="45" y="8.5" width="1" height="5" rx="0.3" />
-              <rect x="47" y="7.5" width="1" height="6" rx="0.3" />
+              <rect x="44" y="10.5" width="1" height="3" rx="0.3" />
+              <rect x="46" y="9.5" width="1" height="4" rx="0.3" />
+              <rect x="48" y="8.5" width="1" height="5" rx="0.3" />
+              <rect x="50" y="7.5" width="1" height="6" rx="0.3" />
             </g>
-            <text x="57" y="13" text-anchor="end" fill="rgba(255,255,255,0.85)" font-size="6.5" font-weight="700" font-family="Segoe UI, sans-serif">5G</text>
+            <text x="63" y="13" text-anchor="end" fill="rgba(255,255,255,0.85)" font-size="6.5" font-weight="700" font-family="Segoe UI, sans-serif">5G</text>
             <!-- 홈 인디케이터 -->
             <rect x="22" y="157" width="27" height="1.5" rx="0.75" fill="rgba(255,255,255,0.35)" />
           </svg>
