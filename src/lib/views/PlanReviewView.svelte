@@ -148,7 +148,7 @@
       <div class="flex-1 min-h-0 overflow-y-auto">
         {#if activeTab === "backup"}
           {#if backupGroups.some((g) => g.checked)}
-            <div class="sticky top-0 z-10 -mx-1 mb-3 bg-background/95 backdrop-blur border-b pb-3 px-1 space-y-2">
+            <div class="sticky top-0 z-10 mb-3 bg-background/95 backdrop-blur border-b pb-3 space-y-2">
               <div class="flex items-center gap-2.5">
                 <FolderOpen size={16} class="text-primary shrink-0" />
                 <div class="flex-1 min-w-0 rounded-lg border bg-background px-3 py-1.5 font-mono text-[12px] truncate">
@@ -169,7 +169,7 @@
                   폴더 지정
                 </Button>
               </div>
-              <div class="flex items-center justify-between text-[11px] px-1">
+              <div class="flex items-center justify-between text-[11px]">
                 <span>
                   예상 <b>{fmtBytes(selectedBytes)}</b>
                   {#if wizard.backupPath.trim()}
