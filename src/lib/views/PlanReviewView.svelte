@@ -17,7 +17,7 @@
   let backupGroups = $state(
     mockBackupGroups.map((g) => ({ id: g.id, label: g.label, desc: g.desc, checked: defaultOn, bytes: g.items.reduce((a: number, i) => a + (i.bytes ?? 0), 0) })),
   );
-  let opts = $state({ restore: defaultOn, backup2: defaultOn, unroot: true, relock: true });
+  let opts = $state({ restore: defaultOn, unroot: true, relock: true });
 
   const fmtBytes = (b: number) => {
     const gb = b / 1024 ** 3;
@@ -73,7 +73,6 @@
     steps.push({ title: "적용 확인" });
     if (needsUnlock) {
       if (effUnroot) steps.push({ title: "언루팅" });
-      if (opts.backup2 && anyBackup) steps.push({ title: "2차 백업" });
       if (opts.relock) steps.push({ title: "부트로더 리락", warn: true });
       steps.push({ title: "최종 확인" });
       if (opts.restore && anyBackup) steps.push({ title: "복구" });
@@ -117,7 +116,6 @@
     push("verify", "적용 확인", "safe", false, undefined, 120);
     if (needsUnlock) {
       if (effUnroot) push("unroot", "언루팅", "warn", false, undefined, 180);
-      if (opts.backup2 && anyBackup) push("backup-2", "2차 백업", "warn", false, undefined, 900);
       if (opts.relock) push("relock", "부트로더 리락", "danger", true, "mode-wait", 120);
       push("final-verify", "최종 확인", "safe", false, "ims-check", 300);
       if (opts.restore && anyBackup) push("restore", "복구", "safe", false, undefined, 1500);
@@ -218,12 +216,6 @@
               label="복구 자동 실행"
               desc="모든 작업 완료 후 백업한 데이터를 자동으로 복원합니다"
               onToggle={(v) => (opts.restore = v)}
-            />
-            <OptionCard
-              checked={opts.backup2}
-              label="2차 백업"
-              desc="리락 직전에 언락 이후 생성된 데이터를 백업합니다"
-              onToggle={(v) => (opts.backup2 = v)}
             />
           </div>
 
