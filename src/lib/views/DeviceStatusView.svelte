@@ -5,7 +5,7 @@
   import { Badge } from "$lib/components/ui/badge";
   import DeviceHero from "$lib/components/DeviceHero.svelte";
   import {
-    CircleCheck, TriangleAlert, OctagonX, Info, Wrench,
+    CircleCheck, TriangleAlert, OctagonX, Info, Wrench, Usb,
   } from "@lucide/svelte/icons";
   import { api } from "$lib/api";
   import { wizard } from "$lib/stores/wizard.svelte";
