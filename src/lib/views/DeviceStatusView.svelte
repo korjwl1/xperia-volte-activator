@@ -64,10 +64,9 @@
     </div>
 
   {:else if device}
-    <div class="flex-1 grad-hero flex flex-col overflow-hidden">
-      <!-- 중앙 콘텐츠 -->
-      <div class="flex-1 flex items-center justify-center overflow-y-auto">
-        <div class="w-full max-w-3xl px-8 py-8 flex flex-col items-center gap-8 text-primary-foreground">
+    <div class="flex-1 grad-hero relative flex items-center justify-center overflow-hidden">
+      <!-- 중앙 콘텐츠 — 전체 화면 기준 중앙 -->
+      <div class="w-full max-w-3xl px-8 py-8 flex flex-col items-center gap-8 text-primary-foreground">
           <!-- 1행: 기기 정보 + 이미지 -->
           <div class="w-full flex items-center justify-between gap-10">
             <div class="flex-1 min-w-0 space-y-3">
@@ -149,11 +148,10 @@
             VoLTE 작업 시작
             <ArrowRight size={20} />
           </button>
-        </div>
       </div>
 
-      <!-- 크레딧 — 하단 고정 -->
-      <div class="shrink-0 pb-3 flex flex-col items-center gap-0.5 text-[11px] text-primary-foreground/50">
+      <!-- 크레딧 — 하단 absolute (공간 차지 안 함) -->
+      <div class="absolute bottom-3 left-0 right-0 flex flex-col items-center gap-0.5 text-[11px] text-primary-foreground/50 pointer-events-auto">
         <span>
           made by <a href="https://github.com/korjwl1" target="_blank" rel="noopener" class="underline hover:text-primary-foreground/80 transition-colors">korjwl1</a>
         </span>
