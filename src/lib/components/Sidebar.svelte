@@ -22,7 +22,7 @@
 </script>
 
 <aside class="w-60 shrink-0 border-r bg-muted/40 flex flex-col overflow-hidden">
-  <nav class="flex-1 p-2 space-y-0.5 overflow-y-auto">
+  <nav class="flex-1 p-2 pt-6 space-y-0.5 overflow-y-auto">
     {#each MACRO_STEPS as step, i (step.id)}
       <div>
         <button

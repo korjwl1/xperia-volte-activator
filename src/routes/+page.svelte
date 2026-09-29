@@ -49,7 +49,13 @@
     </main>
 
   {:else}
-    <!-- 2~4페이지: 사이드바 + 콘텐츠 -->
+    <!-- 2~4페이지 -->
+    <!-- 헤더 -->
+    <header class="h-10 shrink-0 border-b flex items-center px-4 gap-2 select-none">
+      <span class="text-sm font-semibold tracking-tight">Xperia VoLTE Activator</span>
+      <span class="ml-auto text-[11px] text-muted-foreground">v0.1.0</span>
+    </header>
+    <!-- 사이드바 + 콘텐츠 -->
     <div class="flex-1 min-h-0 flex">
       <Sidebar />
 

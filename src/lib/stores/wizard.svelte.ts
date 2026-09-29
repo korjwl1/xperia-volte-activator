@@ -7,9 +7,9 @@ import { buildPlan } from "$lib/mock/plan";
 export type WizardView = "device" | "step1" | "step2" | "step3" | "step4";
 
 export const MACRO_STEPS = [
-  { id: 1, view: "step1" as const, label: "SIM 및 통신사" },
-  { id: 2, view: "step2" as const, label: "작업 옵션" },
-  { id: 3, view: "step3" as const, label: "패치 진행" },
+  { id: 1, view: "step1" as const, label: "SIM 및 통신사 선택" },
+  { id: 2, view: "step2" as const, label: "작업 옵션 선택" },
+  { id: 3, view: "step3" as const, label: "VoLTE 패치 진행" },
   { id: 4, view: "step4" as const, label: "점검 및 마무리" },
 ] as const;
 
