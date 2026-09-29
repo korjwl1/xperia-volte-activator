@@ -104,14 +104,14 @@
             <rect x="4" y="4" width="63" height="157" rx="8" fill="url(#scr)" />
             <!-- 전면 카메라 (상단 좌측 펀치홀) -->
             <circle cx="12" cy="11" r="2.5" fill="rgba(0,0,0,0.55)" stroke="rgba(255,255,255,0.25)" stroke-width="0.5" />
-            <!-- 상태바: 신호바 + 5G (상단 우측, 같은 크기로 나란히) -->
+            <!-- 상태바: 신호바 + 5G (상단 우측) -->
             <g fill="rgba(255,255,255,0.80)">
-              <rect x="48" y="10" width="1.8" height="4" rx="0.5" />
-              <rect x="51.2" y="8.5" width="1.8" height="5.5" rx="0.5" />
-              <rect x="54.4" y="7" width="1.8" height="7" rx="0.5" />
-              <rect x="57.6" y="5.5" width="1.8" height="8.5" rx="0.5" />
+              <rect x="46" y="10.5" width="1" height="3" rx="0.3" />
+              <rect x="48" y="9.5" width="1" height="4" rx="0.3" />
+              <rect x="50" y="8.5" width="1" height="5" rx="0.3" />
+              <rect x="52" y="7.5" width="1" height="6" rx="0.3" />
             </g>
-            <text x="66" y="13" text-anchor="end" fill="rgba(255,255,255,0.85)" font-size="4.5" font-weight="700" font-family="Segoe UI, sans-serif">5G</text>
+            <text x="66" y="13" text-anchor="end" fill="rgba(255,255,255,0.85)" font-size="6.5" font-weight="700" font-family="Segoe UI, sans-serif">5G</text>
             <!-- 홈 인디케이터 -->
             <rect x="22" y="157" width="27" height="1.5" rx="0.75" fill="rgba(255,255,255,0.35)" />
           </svg>
