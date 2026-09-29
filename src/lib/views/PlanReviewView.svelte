@@ -164,14 +164,15 @@
                 </Button>
               </div>
               <div class="flex items-center justify-between text-[11px] px-1">
-                <span class="text-muted-foreground">
-                  예상 <b class="text-foreground">{fmtBytes(selectedBytes)}</b>
-                  / 여유 <b class={diskWarning ? "text-destructive" : "text-success"}>{diskFreeGB.toFixed(0)} GB</b>
+                <span>
+                  예상 <b>{fmtBytes(selectedBytes)}</b>
+                  {#if wizard.backupPath.trim()}
+                    / 여유 <b class={diskWarning ? "text-destructive" : ""}>{diskFreeGB.toFixed(0)} GB</b>
+                  {/if}
                 </span>
-                <span class="text-muted-foreground">({Math.round(usageRatio * 100)}% 사용)</span>
-              </div>
-              <div class="h-1.5 rounded-full bg-muted overflow-hidden mx-1">
-                <div class="h-full transition-all {diskWarning ? 'bg-destructive' : 'bg-success'}" style="width: {Math.min(100, usageRatio * 100)}%"></div>
+                {#if wizard.backupPath.trim() && diskWarning}
+                  <span class="text-destructive font-medium">여유 공간이 부족합니다</span>
+                {/if}
               </div>
             </div>
           {/if}
