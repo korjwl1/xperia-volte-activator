@@ -30,7 +30,7 @@
   <Card class="elev-1">
     <CardHeader class="pb-3">
       <CardTitle class="text-sm">백업 저장 위치</CardTitle>
-      <CardDescription class="text-xs">복구 승인 전까지 백업 폴더는 보존됩니다 (§6-1) · 한글/공백 경로 허용</CardDescription>
+      <CardDescription class="text-xs">복구가 끝날 때까지 백업 파일은 보존됩니다 · 한글/공백 경로 허용</CardDescription>
     </CardHeader>
     <CardContent class="space-y-4">
       <div class="space-y-2">
@@ -97,7 +97,7 @@
   <Alert class="border-info/30 bg-info-container/50">
     <AlertTitle class="text-[13px]">백업 형식</AlertTitle>
     <AlertDescription class="text-xs">
-      폴더 그대로 + manifest.json(해시·mtime) — Windows 비호환 파일명은 quarantine 세그먼트로 자동 격리 후, 복구 시 기기 측에서 원본 이름으로 복원됩니다 (§6-2/6-3)
+      원본 그대로 복사되며, Windows에서 표현 불가능한 파일명은 자동으로 안전하게 보관됩니다
     </AlertDescription>
   </Alert>
 </div>

@@ -78,7 +78,7 @@ export class Wizard {
     this.steps = buildPlan(this.profile, overrides);
     const after = this.steps.find((s) => s.id === "relock")?.enabled ?? false;
     if (before && !after) {
-      this.lastDepNotice = "의존성 규칙: 언루팅을 끄면 리락도 함께 해제됩니다 — 수정된 boot로 oem lock 시 AVB 검증 실패 위험 (§3-3)";
+      this.lastDepNotice = "언루팅을 끄면 리락도 함께 해제됩니다 — 수정된 시스템으로 잠그면 부팅 불능 위험이 있습니다";
     } else if (!on) {
       this.lastDepNotice = "";
     } else {
@@ -197,25 +197,25 @@ export class Wizard {
     switch (id) {
       case "backup-1":
       case "backup-2":
-        return `adb pull -a ... ${pct}% (sha256 스트리밍 계산 중)`;
+        return `파일 복사 중… ${pct}%`;
       case "unlock":
-        return `fastboot oem unlock 0x{마스킹됨} ... ${pct}%`;
+        return `잠금 해제 중… ${pct}%`;
       case "root":
-        return `fastboot flash init_boot_a/b ... ${pct}%`;
+        return `시스템 패치 중… ${pct}%`;
       case "efs-preflight":
-        return ["토폴로지: 루트 허브 직결 ✅", "컨트롤러: Intel xHCI ✅", "전원 관리: 임시 해제 → 종료 시 원복", "DIAG 건전성: 리드백 1.2MB 재시도 0회 ✅"][Math.floor(p * 4) % 4];
+        return ["USB 연결 확인", "드라이버 확인", "전원 관리 일시 해제", "연결 안정성 테스트 통과"][Math.floor(p * 4) % 4];
       case "efs":
-        return `uploadDirectory → / (${Math.floor(p * 46)}/46 파일) 리드백 해시 일치`;
+        return `프로파일 적용 중… (${Math.floor(p * 46)}/46 파일)`;
       case "verify":
-        return `전수 리드백 sha256 ... ${pct}% (불일치 0건)`;
+        return `무결성 검증 중… ${pct}%`;
       case "unroot":
-        return `fastboot flash init_boot_a/b (순정 해시 4f3a…c91 일치) ... ${pct}%`;
+        return `시스템 복원 중… ${pct}%`;
       case "relock":
-        return `fastboot oem lock — 리락 게이트 통과(언루팅+순정 근거) ... ${pct}%`;
+        return `잠금 중… ${pct}%`;
       case "final-verify":
-        return ["persist.dbg.volte_avail_ovr = (소실 — /data 초기화, 예상 동작)", "모뎀 자체 IMS 등록 대기 중… (재부팅 1/3)", "IMS: REGISTERED ✅ VoLTE 사용 가능"][Math.floor(p * 3) % 3];
+        return ["재부팅 대기 중…", "네트워크 등록 대기 중…", "VoLTE 활성 확인됨"][Math.floor(p * 3) % 3];
       case "restore":
-        return `앱 재설치 n/N · 파일 push -a ... ${pct}%`;
+        return `데이터 복원 중… ${pct}%`;
       default:
         return `진행 ${pct}%`;
     }

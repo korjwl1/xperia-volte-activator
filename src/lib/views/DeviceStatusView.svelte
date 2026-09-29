@@ -54,19 +54,19 @@
       <Usb size={15} class="text-info shrink-0" />
       <span>{device.usb.topology} · {device.usb.controller} · {device.usb.linkSpeed}</span>
       <Cable size={15} class="ml-auto shrink-0 opacity-60" />
-      <span class="opacity-80">§10-5 프리플라이트는 EFS 단계 직전 자동 실행</span>
+      <span class="opacity-80">연결 안정성은 작업 시작 전 자동 검사됩니다</span>
     </div>
 
     <!-- 환경 검사 -->
     <Card class="elev-1">
       <CardHeader class="pb-3">
-        <CardTitle class="text-sm">환경 검사 <span class="text-muted-foreground font-normal">Readiness</span></CardTitle>
+        <CardTitle class="text-sm">준비 상태</CardTitle>
         <CardDescription class="text-xs">
-          Blocker 해제 전 해당 작업이 비활성됩니다 · QPST 미설치는 정상 상태입니다 (§12.6)
+          문제가 있는 항목만 표시됩니다 · 모두 통과하면 표시되지 않습니다
         </CardDescription>
       </CardHeader>
       <CardContent class="space-y-1.5">
-        {#each env as item (item.id)}
+        {#each env.filter((e) => e.state !== "pass") as item (item.id)}
           <div class="flex items-center gap-3 rounded-lg border bg-background/60 px-3 py-2">
             <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md {stateStyle[item.state]}">
               {#if item.state === "pass"}<CircleCheck size={15} />
@@ -96,7 +96,7 @@
       <CardContent class="py-16 text-center space-y-2">
         <Usb size={28} class="mx-auto text-muted-foreground" />
         <p class="text-muted-foreground text-sm">연결된 Xperia가 없습니다</p>
-        <p class="text-xs text-muted-foreground">USB 케이블로 연결해 주세요 — 모드 전환 시 자동 재감지됩니다 (§9-3)</p>
+        <p class="text-xs text-muted-foreground">USB 케이블로 연결해 주세요 — 자동으로 감지됩니다</p>
       </CardContent>
     </Card>
   {/if}

@@ -40,7 +40,7 @@
     <TriangleAlert size={16} class="text-warning" />
     <AlertTitle>데이터 초기화 경로가 감지되었습니다</AlertTitle>
     <AlertDescription class="flex items-center gap-2 flex-wrap">
-      이 계획에는 초기화 단계가 포함되어 있어 백업을 권장합니다.
+      이 계획에는 기기 초기화 단계가 포함되어 있어 백업을 권장합니다.
       <span class="inline-flex items-center gap-1 rounded-full bg-info-container px-2 py-0.5 text-[11px] text-info font-medium">
         <CloudCheck size={11} />구글 백업: {mockGoogleBackupAge}
       </span>

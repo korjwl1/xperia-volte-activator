@@ -62,7 +62,7 @@
   <header class="h-10 shrink-0 border-b flex items-center px-3 gap-2 select-none">
     <span class="text-sm font-semibold tracking-tight">xperia-volte-activator</span>
     <Badge variant="outline" class="text-[10px] px-1.5 py-0">mock 모드</Badge>
-    <span class="ml-auto text-[11px] text-muted-foreground">v0.1.0 · 프론트 개발 단계 (백엔드 미연결)</span>
+    <span class="ml-auto text-[11px] text-muted-foreground">v0.1.0</span>
   </header>
 
   <div class="flex-1 flex min-h-0">

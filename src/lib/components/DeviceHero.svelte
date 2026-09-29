@@ -6,7 +6,7 @@
 </script>
 
 <div class="grad-hero rounded-xl elev-2 text-primary-foreground overflow-hidden">
-  <div class="flex items-stretch gap-6 p-6">
+  <div class="flex flex-col sm:flex-row items-stretch gap-6 p-6">
     <div class="flex-1 min-w-0 space-y-4">
       <div>
         <div class="text-[11px] uppercase tracking-widest opacity-80">Connected Device</div>
@@ -54,7 +54,7 @@
     </div>
 
     <!-- 폰 일러스트 -->
-    <svg viewBox="0 0 96 176" class="w-[88px] shrink-0 drop-shadow-lg" aria-hidden="true">
+    <svg viewBox="0 0 96 176" class="w-[88px] shrink-0 drop-shadow-lg hidden sm:block self-center" aria-hidden="true">
       <defs>
         <linearGradient id="scr" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stop-color="rgba(255,255,255,0.35)" />

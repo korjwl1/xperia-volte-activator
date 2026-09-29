@@ -38,7 +38,7 @@ export const mockBackupGroups: BackupGroup[] = [
   {
     id: "settings",
     label: "시스템 설정",
-    desc: "settings DB 덤프 + 배터리 최적화 예외 목록 (§12.6/recovery 1-2)",
+    desc: "화면 설정, 알림 설정 등",
     items: [
       { id: "qs-tiles", label: "상단 타일 순서 (15개)", cls: "full", checked: true },
       { id: "display", label: "밝기·타임아웃·폰트 크기", cls: "full", checked: true },
@@ -82,7 +82,7 @@ export const mockBackupGroups: BackupGroup[] = [
   {
     id: "sms",
     label: "SMS / 통화기록",
-    desc: "구글 백업 이중화용 로컬 백업",
+    desc: "PC에 저장 후 복원합니다",
     items: [{ id: "sms", label: "문자 메시지 + 통화 기록", cls: "full", checked: true, bytes: 5 * 1024 ** 2 }],
   },
 ];

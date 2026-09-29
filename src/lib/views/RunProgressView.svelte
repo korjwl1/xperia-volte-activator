@@ -44,13 +44,13 @@
   {#if wizard.usbError}
     <Alert variant="destructive" class="shrink-0">
       <Usb size={16} />
-      <AlertTitle>USB 연결 불안정 감지 (§9-4)</AlertTitle>
+      <AlertTitle>USB 연결이 불안정합니다</AlertTitle>
       <AlertDescription class="flex flex-col gap-2">
         <span>
           {wizard.usbErrorCount === 1
-            ? "같은 포트에 다시 연결하거나, 다른 포트(뒷면 직결 권장)로 바꿔 꽂아주세요."
-            : "반복 실패 — 케이블 교체·외부 허브 제거를 권장합니다. 지난 성공: 뒷면 2번 (Intel 칩셋)"}
-          세션은 보존되어 재연결 시 이어서 진행됩니다.
+            ? "같은 포트에 다시 연결하거나, 다른 포트(본체 뒷면 권장)로 바꿔 꽂아주세요."
+            : "반복 실패 — 케이블 교체나 허브 제거를 권장합니다."}
+          작업 상태는 보존되어 재연결 시 이어서 진행됩니다.
         </span>
         <div>
           <Button size="sm" onclick={() => wizard.dismissUsbError()}>재연결 완료 — 이어서 진행</Button>
@@ -95,7 +95,7 @@
       <CardContent class="flex items-center justify-between py-3">
         <div class="flex items-center gap-2 text-sm">
           <CircleCheck size={16} class="text-success" />
-          모든 단계 완료 — 복구 승인 전까지 백업 폴더가 보존됩니다 (§6-1)
+          모든 단계 완료 — 백업 파일은 복구 확인 시까지 보존됩니다
         </div>
         <div class="flex gap-2">
           <Button size="sm" onclick={() => alert("(mock) 백업 승인 — 폴더 보존 해제")}>복구 완료 승인</Button>
@@ -105,8 +105,8 @@
     </Card>
   {/if}
 
-  <!-- 분할: 단계 타임라인 | 콘솔 -->
-  <div class="flex-1 min-h-0 grid grid-cols-[minmax(280px,360px)_1fr] gap-3">
+  <!-- 분할: 단계 타임라인 | 콘솔 (반응형: 좁으면 세로 스택) -->
+  <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(280px,360px)_1fr] gap-3 *:min-h-[240px] lg:*:min-h-0">
     <!-- 좌: 단계 -->
     <Card class="elev-1 min-h-0 flex flex-col">
       <CardHeader class="py-3 pb-2 shrink-0 border-b">
@@ -140,7 +140,7 @@
       <CardHeader class="py-3 pb-2 shrink-0 border-b flex-row items-center justify-between">
         <CardTitle class="text-xs font-semibold text-muted-foreground tracking-wide">로그</CardTitle>
         <span class="flex items-center gap-1 text-[10px] text-muted-foreground">
-          <TriangleAlert size={10} /> 민감정보 마스킹 적용 (§12.5)
+          개인정보는 표시되지 않습니다
         </span>
       </CardHeader>
       <CardContent class="flex-1 p-0 min-h-0">
@@ -183,7 +183,7 @@
           {/each}
         </ol>
         <div class="flex items-center justify-between">
-          <span class="text-[11px] text-muted-foreground">자동 감지되면 모달이 닫힙니다 (§12)</span>
+          <span class="text-[11px] text-muted-foreground">완료하면 자동으로 다음 단계로 진행됩니다</span>
           <Button onclick={() => wizard.ackManual()}>폰에서 완료했어요</Button>
         </div>
       </CardContent>

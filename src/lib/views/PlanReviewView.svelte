@@ -52,7 +52,7 @@
   {#if wizard.lastDepNotice}
     <Alert class="border-warning/40 bg-warning-container/60">
       <TriangleAlert size={16} class="text-warning" />
-      <AlertTitle>의존성 규칙 적용됨</AlertTitle>
+      <AlertTitle>자동 조정됨</AlertTitle>
       <AlertDescription>{wizard.lastDepNotice}</AlertDescription>
     </Alert>
   {/if}
@@ -65,7 +65,7 @@
           <CardDescription class="text-xs">예상 {Math.round(estTotal / 60)}분 · 데이터 초기화 {wipeCount}회</CardDescription>
         </div>
         <div class="text-[11px] text-muted-foreground text-right leading-tight">
-          파괴 단계는 완결 백업 상태에서만<br />활성화됩니다 (§3-3)
+          위험 단계는 백업 완료 후에만<br />실행할 수 있습니다
         </div>
       </div>
     </CardHeader>
