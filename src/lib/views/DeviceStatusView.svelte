@@ -8,16 +8,26 @@
   let devices = $state<DeviceStatus[]>([]);
   let env = $state<EnvCheckItem[]>([]);
   let loading = $state(true);
+  let linkError = $state<string | null>(null); // 연결 수단 점검 실패 — 재시도 팝업 표시
+  let linkDismissed = $state(false);
   let pollTimer: ReturnType<typeof setInterval> | undefined;
 
   const device = $derived(devices.length === 1 ? devices[0] : null);
   const multiDevice = $derived(devices.length > 1);
+  const showLinkPopup = $derived(linkError !== null && !linkDismissed);
 
   async function refresh() {
     const list = await api.deviceList();
     devices = list;
     wizard.device = list.length === 1 ? list[0] : null;
     if (env.length === 0) env = await api.envCheck();
+    const st = await api.adbStatus();
+    linkError = st && !st.available ? (st.detail ?? "기기 연결 기능을 사용할 수 없습니다") : null;
+  }
+
+  function retryLink() {
+    linkDismissed = false;
+    refresh();
   }
 
   onMount(async () => {
@@ -166,6 +176,41 @@
       <Usb size={48} class="text-muted-foreground/30" />
       <p class="text-muted-foreground text-lg font-medium">연결된 기기가 없습니다</p>
       <p class="text-sm text-muted-foreground">USB 케이블로 Xperia를 연결하면 자동으로 인식됩니다</p>
+    </div>
+  {/if}
+
+  <!-- 연결 수단 점검 실패 팝업 -->
+  {#if showLinkPopup}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6">
+      <div class="w-full max-w-md rounded-2xl border-2 border-warning/40 bg-background elev-3 p-6 space-y-4">
+        <div class="flex items-center gap-3">
+          <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-warning-container text-warning">
+            <TriangleAlert size={20} />
+          </span>
+          <div class="space-y-0.5">
+            <h2 class="text-base font-semibold">기기와 연결할 수 없습니다</h2>
+            <p class="text-xs text-muted-foreground">{linkError}</p>
+          </div>
+        </div>
+        <p class="text-[11px] leading-relaxed text-muted-foreground">
+          PC의 USB 설정이나 보안 프로그램이 연결을 막고 있을 수 있습니다.
+          케이블과 포트를 확인한 뒤 다시 시도해 주세요.
+        </p>
+        <div class="flex justify-end gap-2">
+          <button
+            class="rounded-md border px-3 py-1.5 text-sm hover:bg-muted transition-colors"
+            onclick={() => (linkDismissed = true)}
+          >
+            닫기
+          </button>
+          <button
+            class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 transition-opacity"
+            onclick={retryLink}
+          >
+            다시 시도
+          </button>
+        </div>
+      </div>
     </div>
   {/if}
 </div>

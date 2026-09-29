@@ -1,6 +1,6 @@
 // 위자드 상태 머신 + 실행 시뮬레이션 러너 (mock)
 import type { BackupGroup, DeviceStatus, EnvCheckItem, PlanStep, RunStep, VolteConfig } from "$lib/types";
-import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
+import { api } from "$lib/api";
 import { mockBackupGroups } from "$lib/mock/apps";
 import { buildPlan } from "$lib/mock/plan";
 
@@ -60,9 +60,10 @@ export class Wizard {
   }
 
   async refreshDevice() {
-    // contract: device_list / device_status (mock 즉시 반환)
-    this.device = mockDeviceStatus;
-    this.env = mockEnvChecks;
+    // contract: device_list / env_check (데스크톱=실측, 브라우저 dev=mock 폴백)
+    const list = await api.deviceList();
+    this.device = list.length === 1 ? list[0] : null;
+    this.env = await api.envCheck();
   }
 
   goStep1() {
@@ -189,7 +190,7 @@ export class Wizard {
   private mockLog(id: string, p: number): string {
     const pct = Math.round(p * 100);
     switch (id) {
-      case "backup-1": case "backup-2": return `파일 복사 중… ${pct}%`;
+      case "backup-1": return `파일 복사 중… ${pct}%`;
       case "unlock": return `잠금 해제 중… ${pct}%`;
       case "root": return `시스템 패치 중… ${pct}%`;
       case "efs-preflight": return ["USB 연결 확인", "드라이버 확인", "전원 관리 일시 해제", "연결 안정성 테스트 통과"][Math.floor(p * 4) % 4];

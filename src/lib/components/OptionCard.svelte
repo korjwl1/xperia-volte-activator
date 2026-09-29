@@ -11,9 +11,11 @@
     badgeVariant?: "default" | "secondary" | "destructive" | "outline";
     disabled?: boolean;
     right?: string;
+    /** 용량 실측 진행 중 — 우측에 스켈레톤 표시 */
+    loading?: boolean;
   }
 
-  let { checked, label, desc = "", onToggle, badge, badgeVariant = "secondary", disabled = false, right }: Props = $props();
+  let { checked, label, desc = "", onToggle, badge, badgeVariant = "secondary", disabled = false, right, loading = false }: Props = $props();
 </script>
 
 <label
@@ -32,7 +34,9 @@
       <div class="text-[11px] text-muted-foreground truncate">{desc}</div>
     {/if}
   </div>
-  {#if right}
+  {#if loading}
+    <span class="inline-block h-3.5 w-14 shrink-0 rounded bg-muted animate-pulse" aria-label="용량 측정 중"></span>
+  {:else if right}
     <span class="text-[11px] text-muted-foreground font-mono shrink-0">{right}</span>
   {/if}
   {#if badge}

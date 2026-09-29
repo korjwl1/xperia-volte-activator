@@ -47,7 +47,6 @@ export function buildPlan(device: DeviceStatus | null, config: VolteConfig, over
   // 4. 후처리 — 사용자 선택
   if (needsUnlock) {
     steps.push({ id: "unroot", kind: "unroot", title: "루팅 해제", desc: "시스템을 원래대로 되돌립니다 — 리락 전 필수", optional: true, risk: "warn", estSec: 180 });
-    steps.push({ id: "backup-2", kind: "backup2", title: "2차 백업", desc: "언락 이후 생성된 데이터 저장", optional: true, risk: "warn", estSec: 900 });
     steps.push({ id: "relock", kind: "relock", title: "부트로더 리락", desc: "기기가 초기화됩니다", optional: true, risk: "danger", wipe: true, estSec: 120, manual: "mode-wait" });
     steps.push({ id: "final-verify", kind: "final-verify", title: "최종 확인", desc: "재부팅 후 VoLTE 작동 여부 확인", risk: "safe", estSec: 300, manual: "ims-check" });
     steps.push({ id: "restore", kind: "restore", title: "복구", desc: "백업한 데이터를 기기로 복원", optional: true, risk: "safe", estSec: 1500 });
@@ -61,7 +60,7 @@ export function buildPlan(device: DeviceStatus | null, config: VolteConfig, over
   // 의존성: 리락 ⟹ 언루팅
   if (merged.relock) merged.unroot = true;
   // 언락 후속 단계가 있으면 복구 가능
-  if (needsUnlock && !merged["backup-1"] && !merged["backup-2"]) merged.restore = false;
+  if (needsUnlock && !merged["backup-1"]) merged.restore = false;
 
   return steps.map((s) => seedToStep(s, s.optional ? !!merged[s.id] : true));
 }

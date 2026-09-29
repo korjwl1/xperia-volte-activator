@@ -37,22 +37,19 @@ const GB = 1024 ** 3;
 export const mockBackupGroups: BackupGroup[] = [
   {
     id: "settings",
-    label: "시스템 설정",
-    desc: "화면 설정, 알림 설정 등",
+    label: "설정",
+    desc: "백업 가능한 설정 항목",
     items: [
-      { id: "qs-tiles", label: "빠른 설정 타일 순서", cls: "full", checked: true, bytes: 1 * 1024 ** 2 },
-      { id: "display", label: "밝기·타임아웃·폰트 크기", cls: "full", checked: true, bytes: 1 * 1024 ** 2 },
-      { id: "ime", label: "기본 키보드", cls: "full", checked: true, bytes: 1 * 1024 ** 2 },
-      { id: "idle-whitelist", label: "배터리 최적화 예외 앱 목록", cls: "full", checked: true, bytes: 1 * 1024 ** 2 },
+      { id: "settings-all", label: "전체 설정 백업", cls: "full", checked: true, bytes: 2 * 1024 ** 2 },
     ],
   },
   {
     id: "apps",
     label: "앱",
-    desc: "APK 추출 + 앱 데이터 (복구 시 스토어 없이 재설치)",
+    desc: "APK 추출 + 앱 데이터",
     items: [
-      { id: "apk", label: "APK 파일 (전체 설치 앱)", cls: "full", checked: true, bytes: 2.5 * GB },
-      { id: "app-data", label: "앱 데이터 (카톡 사진·영상 포함)", cls: "full", checked: true, bytes: 2.1 * GB },
+      { id: "apk", label: "APK 파일", cls: "full", checked: true, bytes: 2.5 * GB },
+      { id: "app-data", label: "앱 데이터", cls: "full", checked: true, bytes: 2.1 * GB },
     ],
   },
   {
@@ -62,13 +59,12 @@ export const mockBackupGroups: BackupGroup[] = [
     items: [
       { id: "dcim", label: "사진·영상 (DCIM)", cls: "full", checked: true, bytes: 18.2 * GB },
       { id: "download", label: "다운로드", cls: "full", checked: true, bytes: 3.1 * GB },
-      { id: "pictures", label: "스크린샷 등 (Pictures)", cls: "full", checked: true, bytes: 1.4 * GB },
-      { id: "movies", label: "동영상 (Movies)", cls: "full", checked: true, bytes: 0 },
-      { id: "music", label: "음악 (Music)", cls: "full", checked: true, bytes: 0 },
-      { id: "documents", label: "문서 (Documents)", cls: "full", checked: true, bytes: 0 },
-      { id: "perfectviewer", label: "PerfectViewer 라이브러리", cls: "full", checked: true, bytes: 620 * 1024 ** 2 },
-      { id: "dxo", label: "DxO ONE", cls: "full", checked: true, bytes: 340 * 1024 ** 2 },
-      { id: "fs-rest", label: "위 항목 외 전체 파일 시스템", cls: "full", checked: false, bytes: 0 },
+      { id: "pictures", label: "Pictures", cls: "full", checked: true, bytes: 1.4 * GB },
+      { id: "movies", label: "Movies", cls: "full", checked: true, bytes: 0 },
+      { id: "music", label: "Music", cls: "full", checked: true, bytes: 0 },
+      { id: "documents", label: "Documents", cls: "full", checked: true, bytes: 0 },
+      { id: "recordings", label: "Recordings", cls: "full", checked: true, bytes: 0 },
+      { id: "fs-rest", label: "그 외 전체 파일 시스템", cls: "full", checked: false, bytes: 0 },
     ],
   },
   {

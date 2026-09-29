@@ -1,21 +1,23 @@
-// 백엔드 facade — 개발 단계: 실기기 감지 우선 + mock 폴백
+// 백엔드 facade — 데스크톱(Tauri) Rust 명령 우선, 브라우저 개발은 mock 폴백
+// adb 질의는 전부 백엔드(src-tauri/src/adb.rs)에서 수행 — 프론트/미들웨어에는 adb 코드 없음
 // 실쓰기(백업/플래싱/EFS)는 항상 mock — 실기기에는 영향 없음
 // 컴포넌트에서 @tauri-apps/api 직접 import 금지.
 
-import type { DeviceStatus, EnvCheckItem } from "$lib/types";
+import type { AdbStatus, DeviceStatus, EnvCheckItem } from "$lib/types";
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
 
 export const USE_MOCK = true;
 
-// ── 실기기 감지 (개발 서버 미들웨어 경유) ──
-async function fetchRealDevices(): Promise<DeviceStatus[]> {
+// ── Tauri 백엔드 경유 (데스크톱 빌드) ──
+const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+async function invokeBackend<T>(cmd: string, args?: Record<string, unknown>): Promise<T | null> {
+  if (!inTauri()) return null;
   try {
-    const res = await fetch("/api/dev/devices", { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return Array.isArray(data) ? data : [];
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<T>(cmd, args ?? {});
   } catch {
-    return []; // adb 없음, 서버 응답 없음 등 → mock 폴백
+    return null; // 명령 실패 → mock 폴백
   }
 }
 
@@ -34,15 +36,21 @@ export interface Api {
   deviceList(): Promise<DeviceStatus[]>;
   deviceStatus(serial: string): Promise<DeviceStatus | null>;
   storageSizes(): Promise<Record<string, number>>;
+  /** null = 백엔드 없음(브라우저 개발). available=false → 프론트에서 연결 재시도 팝업 */
+  adbStatus(): Promise<AdbStatus | null>;
+  openExternal(url: string): Promise<void>;
   envCheck(): Promise<EnvCheckItem[]>;
   envFix(id: string): Promise<{ ok: boolean; message: string }>;
 }
 
 const hybridApi: Api = {
   async deviceList() {
-    const real = await fetchRealDevices();
-    if (real.length > 0) return real.map(normalizeDevice);
-    // 실기기 없음 → mock 반환 (개발용)
+    if (inTauri()) {
+      // 데스크톱: 백엔드 실측이 유일한 소스 — 실패/미연결 시 빈 목록 (mock으로 위장하지 않음)
+      const rust = await invokeBackend<DeviceStatus[]>("device_list");
+      return (rust ?? []).map(normalizeDevice);
+    }
+    // 브라우저 개발(백엔드 없음): mock
     return [mockDeviceStatus];
   },
 
@@ -52,14 +60,24 @@ const hybridApi: Api = {
   },
 
   async storageSizes(): Promise<Record<string, number>> {
-    try {
-      const res = await fetch("/api/dev/devices?storage", { signal: AbortSignal.timeout(10000) });
-      if (res.ok) {
-        const data = await res.json();
-        if (Object.keys(data).some((k) => data[k] > 0)) return data;
-      }
-    } catch {}
+    const rust = await invokeBackend<Record<string, number>>("storage_sizes", { serial: "" });
+    if (rust) return rust;
     return {};
+  },
+
+  async adbStatus() {
+    return await invokeBackend<AdbStatus>("adb_status");
+  },
+
+  async openExternal(url) {
+    if (inTauri()) {
+      try {
+        const { openUrl } = await import("@tauri-apps/plugin-opener");
+        await openUrl(url);
+        return;
+      } catch {}
+    }
+    window.open(url, "_blank", "noopener");
   },
 
   async envCheck() {

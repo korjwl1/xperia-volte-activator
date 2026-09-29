@@ -18,9 +18,14 @@
 
   // 실측 용량 조회
   let realSizes = $state<Record<string, number>>({});
+  let sizesLoading = $state(true);
 
   onMount(async () => {
-    realSizes = await api.storageSizes();
+    try {
+      realSizes = await api.storageSizes();
+    } finally {
+      sizesLoading = false;
+    }
   });
 
   let backupGroups = $state(
@@ -30,7 +35,7 @@
       desc: g.desc,
       checked: defaultOn,
       bytes: g.items.reduce((a: number, i) => a + (i.bytes ?? 0), 0),
-      items: g.items,
+      items: g.items.map((i) => ({ ...i, checked: defaultOn })),
     })),
   );
 
@@ -54,10 +59,11 @@
       const sizeMap: Record<string, string> = {
         dcim: "dcim", download: "download", pictures: "pictures",
         movies: "movies", music: "music", documents: "documents",
-        perfectviewer: "perfectviewer", dxo: "dxo",
+        recordings: "recordings",
       };
       let namedTotal = 0;
       for (const item of files.items) {
+        if (item.id === "fs-rest") continue;
         if (sizeMap[item.id] && realSizes[sizeMap[item.id]]) {
           item.bytes = realSizes[sizeMap[item.id]];
           namedTotal += realSizes[sizeMap[item.id]];
@@ -65,13 +71,13 @@
           namedTotal += item.bytes;
         }
       }
-      // 전체 파일 시스템 = sdcard 전체 - 이미 카운트된 항목들
+      // 그 외 = sdcard 전체 - Android/data - 기명 항목 합계
       const fsRest = files.items.find((i) => i.id === "fs-rest");
       const sdcardTotal = realSizes["sdcard-total"] ?? 0;
       const androidData = realSizes["android-data"] ?? 0;
-      const nonFs = sdcardTotal - androidData; // sdcard에서 앱 데이터 제외
+      const nonAppData = sdcardTotal - androidData;
       if (fsRest) {
-        fsRest.bytes = Math.max(0, nonFs - namedTotal);
+        fsRest.bytes = Math.max(0, nonAppData - namedTotal);
       }
       files.bytes = files.items.reduce((a: number, i) => a + (i.bytes ?? 0), 0);
     }
@@ -93,9 +99,10 @@
     return `${Math.max(1, Math.round(b / 1024))} KB`;
   };
 
-  const selectedBytes = $derived(backupGroups.filter((g) => g.checked).reduce((a, g) => a + g.bytes, 0));
-  const diskFreeGB = $derived((realSizes["sdcard-total"] ? realSizes["sdcard-total"] * 1.2 : mockDiskFree) / 1024 ** 3);
-  const usageRatio = $derived(selectedBytes / mockDiskFree);
+  const selectedBytes = $derived(backupGroups.flatMap((g) => g.items).filter((i) => i.checked).reduce((a, i) => a + (i.bytes ?? 0), 0));
+  const freeBytes = $derived(realSizes["sdcard-free"] || mockDiskFree);
+  const diskFreeGB = $derived(freeBytes / 1024 ** 3);
+  const usageRatio = $derived(freeBytes > 0 ? selectedBytes / freeBytes : 0);
   const diskWarning = $derived(usageRatio > 0.85);
 
   const backupCategories = [
@@ -105,31 +112,36 @@
     { id: "sms", label: "메시지", groupIds: ["sms"] },
   ];
 
+
   function groupsFor(catId: string) {
     const cat = backupCategories.find((c) => c.id === catId);
     return cat ? backupGroups.filter((g) => cat.groupIds.includes(g.id)) : [];
   }
+  function itemsFor(catId: string) {
+    return groupsFor(catId).flatMap((g) => g.items);
+  }
   function setCategoryAll(catId: string, on: boolean) {
-    for (const g of groupsFor(catId)) g.checked = on;
+    for (const item of itemsFor(catId)) item.checked = on;
   }
   function isCategoryAll(catId: string) {
-    return groupsFor(catId).every((g) => g.checked);
+    const items = itemsFor(catId);
+    return items.length > 0 && items.every((i) => i.checked);
   }
   function countSelected(catId: string) {
-    return groupsFor(catId).filter((g) => g.checked).length;
+    return itemsFor(catId).filter((i) => i.checked).length;
   }
   function countTotal(catId: string) {
-    return groupsFor(catId).length;
+    return itemsFor(catId).length;
   }
 
   const planSteps = $derived.by(() => {
     const steps: { title: string; warn?: boolean }[] = [];
     const d = wizard.device;
     if (!d) return steps;
-    const anyBackup = backupGroups.some((g) => g.checked);
+    const hasBackup = backupGroups.flatMap((g) => g.items).some((i) => i.checked);
     const needsUnlock = d.bootloader === "locked";
     const effUnroot = opts.unroot || opts.relock;
-    if (anyBackup) steps.push({ title: "백업" });
+    if (hasBackup) steps.push({ title: "백업" });
     if (needsUnlock) {
       steps.push({ title: "부트로더 언락", warn: true });
       steps.push({ title: "기본 설정" });
@@ -142,32 +154,36 @@
       if (effUnroot) steps.push({ title: "언루팅" });
       if (opts.relock) steps.push({ title: "부트로더 리락", warn: true });
       steps.push({ title: "최종 확인" });
-      if (opts.restore && anyBackup) steps.push({ title: "복구" });
+      if (opts.restore && hasBackup) steps.push({ title: "복구" });
     }
     return steps;
   });
 
   function confirm() {
     // 방어: 백업 선택 + 경로 미지정 or 용량 부족
-    if (backupGroups.some((g) => g.checked)) {
-      if (!wizard.backupPath.trim() || diskWarning) {
-        showPathAlert = true;
-        setTimeout(() => (showPathAlert = false), 4000);
-        return;
-      }
+    const anyBackup = backupGroups.flatMap((g) => g.items).some((i) => i.checked);
+    if (anyBackup && (!wizard.backupPath.trim() || diskWarning)) {
+      showPathAlert = true;
+      setTimeout(() => (showPathAlert = false), 4000);
+      return;
     }
     showPathAlert = false;
     const effUnroot = opts.unroot || opts.relock;
-    wizard.groups = mockBackupGroups.map((g) => ({
-      ...g,
-      items: g.items.map((i) => ({ ...i, checked: backupGroups.find((bg) => bg.id === g.id)?.checked ?? false })),
-    }));
+    wizard.groups = mockBackupGroups.map((g) => {
+      const bgGroup = backupGroups.find((bg) => bg.id === g.id);
+      return {
+        ...g,
+        items: g.items.map((i) => {
+          const bgItem = bgGroup?.items.find((bi) => bi.id === i.id);
+          return { ...i, checked: bgItem?.checked ?? false };
+        }),
+      };
+    });
     const steps: PlanStep[] = [];
     const d = wizard.device;
     if (!d) return;
     const push = (id: string, title: string, risk: PlanStep["risk"] = "safe", wipe = false, manual?: string, estSec = 120) =>
       steps.push({ id, kind: id as PlanStep["kind"], title, desc: "", optional: false, enabled: true, risk, wipe, estSec, manual: manual as PlanStep["manual"] });
-    const anyBackup = backupGroups.some((g) => g.checked);
     const needsUnlock = d.bootloader === "locked";
     if (anyBackup) push("backup-1", "백업", "warn", false, undefined, 1800);
     if (needsUnlock) {
@@ -232,9 +248,19 @@
               </div>
               <div class="flex items-center justify-between text-[11px]">
                 <span>
-                  예상 <b>{fmtBytes(selectedBytes)}</b>
+                  예상
+                  {#if sizesLoading}
+                    <b class="inline-block h-3.5 w-14 align-middle bg-muted rounded animate-pulse"></b>
+                  {:else}
+                    <b>{fmtBytes(selectedBytes)}</b>
+                  {/if}
                   {#if wizard.backupPath.trim()}
-                    / 여유 공간 <b class={diskWarning ? "text-destructive" : ""}>{diskFreeGB.toFixed(0)} GB</b>
+                    / 여유 공간
+                    {#if sizesLoading}
+                      <b class="inline-block h-3.5 w-10 align-middle bg-muted rounded animate-pulse"></b>
+                    {:else}
+                      <b class={diskWarning ? "text-destructive" : ""}>{diskFreeGB.toFixed(0)} GB</b>
+                    {/if}
                   {/if}
                 </span>
                 {#if wizard.backupPath.trim() && diskWarning}
@@ -253,13 +279,13 @@
                 onToggleAll={() => setCategoryAll(cat.id, !isCategoryAll(cat.id))}
               />
               <div class="space-y-1.5">
-                {#each groupsFor(cat.id) as group (group.id)}
+                {#each groupsFor(cat.id).flatMap((g) => g.items) as item (item.id)}
                   <OptionCard
-                    checked={group.checked}
-                    label={group.label}
-                    desc={group.desc}
-                    onToggle={(v) => (group.checked = v)}
-                    right={group.bytes ? fmtBytes(group.bytes) : undefined}
+                    checked={item.checked}
+                    label={item.label}
+                    onToggle={(v) => (item.checked = v)}
+                    right={item.bytes ? fmtBytes(item.bytes) : undefined}
+                    loading={sizesLoading && (cat.id === "apps" || cat.id === "files")}
                   />
                 {/each}
               </div>

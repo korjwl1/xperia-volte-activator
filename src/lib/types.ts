@@ -39,11 +39,19 @@ export interface EnvCheckItem {
   fixable: boolean;
 }
 
+/** 기기 연결 수단 점검 — 백엔드 `adb_status` 계약 (.plans/02-contracts/tauri-commands.md) */
+export interface AdbStatus {
+  available: boolean;
+  /** adb-server: 실행 중인 adb 서버 경유 / usb-direct: USB 직접 연결 / none: 감지된 수단 없음 */
+  mode: "adb-server" | "usb-direct" | "none";
+  detail: string | null;
+}
+
 export type Profile = "clean-return" | "keep-root" | "unroot-only";
 
 export type StepKind =
   | "backup" | "unlock" | "setup" | "root" | "efs-preflight" | "efs" | "verify"
-  | "unroot" | "backup2" | "relock" | "final-verify" | "restore" | "dexopt";
+  | "unroot" | "relock" | "final-verify" | "restore" | "dexopt";
 
 export type ManualId =
   | "usb-debug" | "su-grant" | "magisk-patch" | "oem-toggle" | "mode-wait" | "ims-check";

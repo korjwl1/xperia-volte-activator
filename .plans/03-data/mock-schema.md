@@ -25,7 +25,10 @@ RunStep { id,title,status:'pending'|'running'|'done'|'failed'|'skipped'|'manual-
 
 ## mock 시드 (src/lib/mock/*)
 - device.ts: 잠김/비루팅/VoLTE off/SIM2=SKT — "신규 상태"(매트릭스 1행)
-- apps.ts: 실측 대표 20여 개 (카톡❌, 토스⚠️OK플래그, 신한❌, 인스타✅, Firefox⚠️계정동기화, …)
+- apps.ts: 백업 그룹 4카테고리(설정/앱/파일/메시지, 항목 단위 checked).
+  파일은 표준 폴더 7(DCIM/Download/Pictures/Movies/Music/Documents/Recordings) +
+  "그 외 전체 파일 시스템"(미체크 기본) — Audiobooks/Podcasts/Ringtones/Alarms 등 기기 특화 폴더는 그 외에 포함.
+  표준 폴더/APK/Android/data 용량은 `storage_sizes` 실측으로 갱신(도착 전엔 프론트 스켈레톤)
 - env.ts: WebView2 pass, 드라이버 pass, adb pass, 프리셋 warn(미설정), QPST info(미설치=정상)
-- plan.ts: clean-return 기본 단계열 (백업→언락→루팅→EFS+검증→언루팅→2차백업→리락→최종검증→복구)
+- plan.ts: clean-return 기본 단계열 (백업→언락→루팅→EFS+검증→언루팅→리락→최종검증→복구)
 - run.ts: 시뮬레이션 러너 (진행률/로그/수동대기/오류 유발 토글)
