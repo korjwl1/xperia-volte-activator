@@ -73,11 +73,11 @@
       </div>
     </div>
 
-    <!-- 하단 액션 바 (step3/4 제외) -->
-    {#if wizard.view === "step1" || wizard.view === "step2"}
+    <!-- 하단 액션 바 (step1만, step2는 뷰 내부 버튼) -->
+    {#if wizard.view === "step1"}
       <footer class="h-14 shrink-0 border-t bg-muted/40 flex items-center justify-between px-6">
         <Button variant="ghost" size="sm" onclick={onPrev}>← 이전</Button>
-        <Button size="sm" disabled={!canNext} onclick={onNext}>다음</Button>
+        <Button size="sm" onclick={onNext}>다음</Button>
       </footer>
     {/if}
   {/if}
