@@ -83,12 +83,9 @@
   function confirm() {
     // 방어: 백업 선택 + 경로 미지정 or 용량 부족
     if (backupGroups.some((g) => g.checked)) {
-      if (!wizard.backupPath.trim()) {
+      if (!wizard.backupPath.trim() || diskWarning) {
         showPathAlert = true;
-        return;
-      }
-      if (diskWarning) {
-        showPathAlert = true;
+        setTimeout(() => (showPathAlert = false), 4000);
         return;
       }
     }
