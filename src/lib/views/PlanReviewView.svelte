@@ -5,6 +5,7 @@
   import OptionCard from "$lib/components/OptionCard.svelte";
   import OptionCategory from "$lib/components/OptionCategory.svelte";
   import { TriangleAlert, FolderOpen } from "@lucide/svelte/icons";
+  import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "$lib/components/ui/tooltip";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { api } from "$lib/api";
   import { mockBackupGroups, mockDiskFree } from "$lib/mock/apps";
@@ -109,7 +110,7 @@
     { id: "settings", label: "설정", groupIds: ["settings"] },
     { id: "apps", label: "앱", groupIds: ["apps"] },
     { id: "files", label: "파일", groupIds: ["files"] },
-    { id: "sms", label: "메시지", groupIds: ["sms"] },
+    { id: "sms", label: "통화 및 문자", groupIds: ["sms"] },
   ];
 
 
@@ -348,18 +349,34 @@
         <div class="text-[11px] text-muted-foreground">{planSteps.length}단계</div>
       </div>
       <div class="flex-1 overflow-y-auto p-2">
+        <TooltipProvider delayDuration={150}>
         {#each planSteps as step, i (i)}
-          <div class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] {step.warn ? 'text-destructive' : ''}">
-            <span class="w-5 h-5 shrink-0 rounded-full border flex items-center justify-center text-[10px]
-              {step.warn ? 'border-destructive/40 text-destructive' : 'border-border text-muted-foreground'}">
-              {i + 1}
-            </span>
-            <span class="truncate">{step.title}</span>
-            {#if step.warn}
-              <TriangleAlert size={12} class="shrink-0 text-destructive/70 cursor-help" title="이 단계에서 기기가 초기화됩니다" />
-            {/if}
-          </div>
+          {#if step.warn}
+            <!-- 부트로더 언락/리락: ! 삼각형 + 목차/글자까지 행 전체가 초기화 안내 툴팁 트리거 -->
+            <Tooltip>
+              <TooltipTrigger
+                class="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-destructive text-left cursor-help"
+              >
+                <span class="w-5 h-5 shrink-0 rounded-full border border-destructive/40 flex items-center justify-center text-[10px] text-destructive">
+                  {i + 1}
+                </span>
+                <span class="truncate">{step.title}</span>
+                <TriangleAlert size={12} class="shrink-0 text-destructive/70" />
+              </TooltipTrigger>
+              <TooltipContent>
+                부트로더 언락/리락 단계는 핸드폰 데이터가 초기화될 수 있습니다. 백업을 권장합니다.
+              </TooltipContent>
+            </Tooltip>
+          {:else}
+            <div class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px]">
+              <span class="w-5 h-5 shrink-0 rounded-full border flex items-center justify-center text-[10px] border-border text-muted-foreground">
+                {i + 1}
+              </span>
+              <span class="truncate">{step.title}</span>
+            </div>
+          {/if}
         {/each}
+        </TooltipProvider>
       </div>
     </div>
   </div>

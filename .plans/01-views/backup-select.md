@@ -6,7 +6,7 @@ status: implemented (mock + 실측 용량)
 초기화 루트가 있는 계획에서만 노출. 4 카테고리 · 아이템 단위 체크박스 제공. 기본 전체 체크(초기화 시).
 
 ## 상태 필드
-- 카테고리 4종: [설정] [앱] [파일] [메시지] — `backupCategories`가 groupIds로 그룹 매핑
+- 카테고리 4종: [설정] [앱] [파일] [통화 및 문자] — `backupCategories`가 groupIds로 그룹 매핑
 - 그룹/항목 구조 `mockBackupGroups: BackupGroup[]`:
   - 설정: 전체 설정 백업 1항목 (덤프 전체 + 화이트리스트 복원)
   - 앱: APK 파일 (pm path→stat 실측) + 앱 데이터 (Android/data 실측)
@@ -14,7 +14,8 @@ status: implemented (mock + 실측 용량)
     + "그 외 전체 파일 시스템"
     (그 외 = sdcard 전체 − Android/data − 기명 항목 합계 — Audiobooks/Podcasts/Ringtones/Alarms 등
      기기 특화 폴더도 여기에 포함)
-  - 메시지: SMS + 통화 기록
+  - 통화 및 문자: 통화 기록 → 문자 → 연락처
+    (연락처는 구글 동기화/SIM 저장 여부와 무관하게 기기 내 연락처 DB를 백업 대상에 포함)
 - 체크 상태는 **항목 단위** (`item.checked`) — 카테고리 헤더의 "전체 해제"는 하위 일괄 토글
 - `sizesLoading` — 실측 용량 도착 전까지 항목 우측에 스켈레톤(animate-pulse),
   상단 sticky "예상 X GB"도 스켈레톤. 도착 시 `realSizes`로 바이트 갱신

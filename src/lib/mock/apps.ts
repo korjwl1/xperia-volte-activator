@@ -69,9 +69,14 @@ export const mockBackupGroups: BackupGroup[] = [
   },
   {
     id: "sms",
-    label: "메시지",
-    desc: "문자 메시지와 통화 기록",
-    items: [{ id: "sms", label: "SMS + 통화 기록", cls: "full", checked: true, bytes: 5 * 1024 ** 2 }],
+    label: "통화 및 문자",
+    desc: "통화 기록, 문자 메시지, 연락처",
+    items: [
+      { id: "calllog", label: "통화 기록", cls: "full", checked: true, bytes: 1 * 1024 ** 2 },
+      { id: "sms", label: "문자", cls: "full", checked: true, bytes: 4 * 1024 ** 2 },
+      // 구글 동기화/SIM 저장과 무관하게 기기 내 연락처 DB도 백업 대상에 포함
+      { id: "contacts", label: "연락처", cls: "full", checked: true, bytes: 2 * 1024 ** 2 },
+    ],
   },
 ];
 

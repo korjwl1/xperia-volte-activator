@@ -25,7 +25,7 @@ RunStep { id,title,status:'pending'|'running'|'done'|'failed'|'skipped'|'manual-
 
 ## mock 시드 (src/lib/mock/*)
 - device.ts: 잠김/비루팅/VoLTE off/SIM2=SKT — "신규 상태"(매트릭스 1행)
-- apps.ts: 백업 그룹 4카테고리(설정/앱/파일/메시지, 항목 단위 checked).
+- apps.ts: 백업 그룹 4카테고리(설정/앱/파일/통화 및 문자, 항목 단위 checked). 통화 및 문자 = 통화 기록/문자/연락처 3항목.
   파일은 표준 폴더 7(DCIM/Download/Pictures/Movies/Music/Documents/Recordings) +
   "그 외 전체 파일 시스템"(미체크 기본) — Audiobooks/Podcasts/Ringtones/Alarms 등 기기 특화 폴더는 그 외에 포함.
   표준 폴더/APK/Android/data 용량은 `storage_sizes` 실측으로 갱신(도착 전엔 프론트 스켈레톤)
