@@ -37,41 +37,48 @@
   // 실측 용량이 도착하면 업데이트
   $effect(() => {
     if (Object.keys(realSizes).length === 0) return;
-    const sizeMap: Record<string, number> = {
-      "dcim": realSizes["dcim"] ?? 0,
-      "download": realSizes["download"] ?? 0,
-      "pictures": realSizes["pictures"] ?? 0,
-      "perfectviewer": realSizes["perfectviewer"] ?? 0,
-      "dxo": realSizes["dxo"] ?? 0,
-      "kakao-media": realSizes["kakao-media"] ?? 0,
-    };
-    // storage 그룹 업데이트
-    const storage = backupGroups.find((g) => g.id === "storage");
-    if (storage) {
-      let total = 0;
-      for (const item of storage.items) {
-        if (sizeMap[item.id] !== undefined) {
-          item.bytes = sizeMap[item.id];
-          total += sizeMap[item.id];
+
+    // 앱 그룹
+    const apps = backupGroups.find((g) => g.id === "apps");
+    if (apps) {
+      const apkItem = apps.items.find((i) => i.id === "apk");
+      if (apkItem && realSizes["apk-total"]) apkItem.bytes = realSizes["apk-total"];
+      const dataItem = apps.items.find((i) => i.id === "app-data");
+      if (dataItem && realSizes["android-data"]) dataItem.bytes = realSizes["android-data"];
+      apps.bytes = apps.items.reduce((a: number, i) => a + (i.bytes ?? 0), 0);
+    }
+
+    // 파일 그룹
+    const files = backupGroups.find((g) => g.id === "files");
+    if (files) {
+      const sizeMap: Record<string, string> = {
+        dcim: "dcim", download: "download", pictures: "pictures",
+        movies: "movies", music: "music", documents: "documents",
+        perfectviewer: "perfectviewer", dxo: "dxo",
+      };
+      let namedTotal = 0;
+      for (const item of files.items) {
+        if (sizeMap[item.id] && realSizes[sizeMap[item.id]]) {
+          item.bytes = realSizes[sizeMap[item.id]];
+          namedTotal += realSizes[sizeMap[item.id]];
         } else if (item.bytes) {
-          total += item.bytes;
+          namedTotal += item.bytes;
         }
       }
-      storage.bytes = total;
-    }
-    // hidden 그룹 업데이트
-    const hidden = backupGroups.find((g) => g.id === "hidden");
-    if (hidden) {
-      const kakao = realSizes["kakao-media"] ?? 0;
+      // 전체 파일 시스템 = sdcard 전체 - 이미 카운트된 항목들
+      const fsRest = files.items.find((i) => i.id === "fs-rest");
+      const sdcardTotal = realSizes["sdcard-total"] ?? 0;
       const androidData = realSizes["android-data"] ?? 0;
-      const others = Math.max(0, androidData - kakao);
-      hidden.items[0].bytes = kakao;
-      if (hidden.items[1]) hidden.items[1].bytes = others;
-      hidden.bytes = kakao + others;
+      const nonFs = sdcardTotal - androidData; // sdcard에서 앱 데이터 제외
+      if (fsRest) {
+        fsRest.bytes = Math.max(0, nonFs - namedTotal);
+      }
+      files.bytes = files.items.reduce((a: number, i) => a + (i.bytes ?? 0), 0);
     }
-    // 전체 재계산
+
+    // 설정/메시지는 예상치 (실측 불가 — 텍스트 덤프)
     for (const g of backupGroups) {
-      if (g.id !== "storage" && g.id !== "hidden") {
+      if (g.id === "settings" || g.id === "sms") {
         g.bytes = g.items.reduce((a: number, i) => a + (i.bytes ?? 0), 0);
       }
     }
@@ -94,7 +101,8 @@
   const backupCategories = [
     { id: "settings", label: "설정", groupIds: ["settings"] },
     { id: "apps", label: "앱", groupIds: ["apps"] },
-    { id: "files", label: "파일", groupIds: ["storage", "hidden", "sms"] },
+    { id: "files", label: "파일", groupIds: ["files"] },
+    { id: "sms", label: "메시지", groupIds: ["sms"] },
   ];
 
   function groupsFor(catId: string) {

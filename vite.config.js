@@ -105,12 +105,16 @@ function devDeviceApi() {
       server.middlewares.use("/api/dev/devices", async (req, res) => {
         try {
           const devices = await getConnectedDevices();
-          // 백업 경로별 실제 용량 쿼리
+      // 백업 경로별 실제 용량 쿼리
       if (req.url.includes("/storage")) {
+        const serial = devices[0]?.serial ?? "";
         const paths = [
           { id: "dcim", path: "/sdcard/DCIM" },
           { id: "download", path: "/sdcard/Download" },
           { id: "pictures", path: "/sdcard/Pictures" },
+          { id: "movies", path: "/sdcard/Movies" },
+          { id: "music", path: "/sdcard/Music" },
+          { id: "documents", path: "/sdcard/Documents" },
           { id: "perfectviewer", path: "/sdcard/PerfectViewer" },
           { id: "dxo", path: "/sdcard/DxO ONE" },
           { id: "kakao-media", path: "/sdcard/Android/data/com.kakao.talk" },
@@ -120,11 +124,35 @@ function devDeviceApi() {
         const sizes = {};
         for (const p of paths) {
           try {
-            const { stdout } = await exec(`adb -s ${devices[0]?.serial ?? ""} shell du -sk "${p.path}"`, { timeout: 5000 });
+            const { stdout } = await exec(`adb -s ${serial} shell du -sk "${p.path}"`, { timeout: 5000 });
             const kb = parseInt(stdout.trim().split("\t")[0]) || 0;
             sizes[p.id] = kb * 1024;
           } catch { sizes[p.id] = 0; }
         }
+
+        // 앱 APK 용량 측정
+        try {
+          const { stdout: pkgList } = await exec(`adb -s ${serial} shell pm list packages -3`, { timeout: 5000 });
+          const pkgs = pkgList.trim().split("\n").map((l) => l.replace("package:", "").trim()).filter(Boolean);
+          let totalApkBytes = 0;
+          const apkSizes = {};
+          for (const pkg of pkgs.slice(0, 30)) { // 상위 30개만 (전체는 오래 걸림)
+            try {
+              const { stdout: pathOut } = await exec(`adb -s ${serial} shell pm path ${pkg}`, { timeout: 3000 });
+              const apkPath = pathOut.trim().split("\n")[0]?.replace("package:", "").trim();
+              if (apkPath) {
+                const { stdout: sizeOut } = await exec(`adb -s ${serial} shell stat -c %s "${apkPath}"`, { timeout: 3000 });
+                const bytes = parseInt(sizeOut.trim()) || 0;
+                apkSizes[pkg] = bytes;
+                totalApkBytes += bytes;
+              }
+            } catch {}
+          }
+          sizes["apk-total"] = totalApkBytes;
+          sizes["apk-count"] = pkgs.length;
+          sizes["apk-sampled"] = Math.min(30, pkgs.length);
+        } catch { sizes["apk-total"] = 0; }
+
         res.setHeader("Content-Type", "application/json");
         res.end(JSON.stringify(sizes));
         return;
