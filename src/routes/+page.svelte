@@ -1,47 +1,39 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { Button } from "$lib/components/ui/button";
-  import { wizard, type WizardView } from "$lib/stores/wizard.svelte";
+  import Sidebar from "$lib/components/Sidebar.svelte";
+  import { wizard } from "$lib/stores/wizard.svelte";
   import DeviceStatusView from "$lib/views/DeviceStatusView.svelte";
   import VolteConfigView from "$lib/views/VolteConfigView.svelte";
   import PlanReviewView from "$lib/views/PlanReviewView.svelte";
   import BackupSelectView from "$lib/views/BackupSelectView.svelte";
   import BackupTargetView from "$lib/views/BackupTargetView.svelte";
   import RunProgressView from "$lib/views/RunProgressView.svelte";
+  import FinishView from "$lib/views/FinishView.svelte";
 
-  const viewOrder: WizardView[] = ["device", "volte-config", "plan", "backup-select", "backup-target", "run"];
-  const viewIndex = $derived(viewOrder.indexOf(wizard.view));
-
-  const nextLabel = $derived(
-    wizard.view === "device" ? "다음"
-    : wizard.view === "volte-config" ? "작업 내역 확인"
-    : wizard.view === "plan" ? (wizard.hasWipeRoute ? "백업 항목 선택" : "실행")
-    : wizard.view === "backup-select" ? "다음"
-    : "백업 시작"
-  );
+  // 백업 단계 표시 여부 (step2 다음에 백업이 필요한 경우 별도 서브 뷰)
+  let backupSubView = $state<"none" | "select" | "target">("none");
 
   const canNext = $derived(
-    wizard.view === "device" ? wizard.device !== null
-    : wizard.view === "volte-config" ? true
-    : wizard.view === "plan" ? true
-    : wizard.view === "backup-select" ? wizard.anyChecked
-    : wizard.backupPath.trim().length > 0
+    wizard.view === "step1" ? true
+    : wizard.view === "step2" ? true
+    : true
   );
 
   function onNext() {
     switch (wizard.view) {
-      case "device": wizard.view = "volte-config"; break;
-      case "volte-config": wizard.goPlan(); break;
-      case "plan": wizard.confirmPlan(); break;
-      case "backup-select": wizard.view = "backup-target"; break;
-      case "backup-target": wizard.startRun(); break;
+      case "step1":
+        wizard.applyVolteConfig();
+        wizard.view = "step2";
+        break;
+      case "step2":
+        wizard.confirmStep2();
+        break;
     }
   }
 
   function onPrev() {
-    if (viewIndex <= 0) return;
-    const prev = viewOrder[viewIndex - 1];
-    wizard.view = prev;
+    if (wizard.view === "step2") wizard.view = "step1";
   }
 
   onMount(() => {
@@ -50,48 +42,36 @@
 </script>
 
 <div class="h-screen flex flex-col bg-background text-foreground overflow-hidden">
-  <!-- 헤더 (첫 페이지 제외) -->
-  {#if wizard.view !== "device"}
-    <header class="h-10 shrink-0 border-b flex items-center px-4 gap-2 select-none">
-      <span class="text-sm font-semibold tracking-tight">Xperia VoLTE Activator</span>
-      <span class="ml-auto text-[11px] text-muted-foreground">v0.1.0</span>
-    </header>
-  {/if}
-
-  <!-- 콘텐츠 — 첫 페이지는 풀스크린, 이후는 중앙 정렬 -->
   {#if wizard.view === "device"}
-    <main class="flex-1 min-h-0 flex flex-col overflow-hidden">
+    <!-- 1페이지: 풀스크린 (헤더/사이드바/푸터 없음) -->
+    <main class="flex-1 min-h-0 flex flex-col">
       <DeviceStatusView />
     </main>
-  {:else if wizard.view === "run"}
-    <main class="flex-1 min-h-0 overflow-y-auto">
-      <div class="h-full p-4 lg:p-6">
-        <RunProgressView />
-      </div>
-    </main>
+
   {:else}
-    <main class="flex-1 min-h-0 overflow-y-auto flex items-center justify-center">
-      <div class="w-full max-w-3xl p-6 lg:p-8">
-        {#if wizard.view === "volte-config"}
+    <!-- 2~4페이지: 사이드바 + 콘텐츠 -->
+    <div class="flex-1 min-h-0 flex">
+      <Sidebar />
+
+      <div class="flex-1 min-w-0 flex flex-col">
+        {#if wizard.view === "step1"}
           <VolteConfigView />
-        {:else if wizard.view === "plan"}
+        {:else if wizard.view === "step2"}
           <PlanReviewView />
-        {:else if wizard.view === "backup-select"}
-          <BackupSelectView />
+        {:else if wizard.view === "step3"}
+          <RunProgressView />
         {:else}
-          <BackupTargetView />
+          <FinishView />
         {/if}
       </div>
-    </main>
-  {/if}
+    </div>
 
-  <!-- 하단 액션 바 (첫 페이지와 실행 제외) -->
-  {#if wizard.view !== "device" && wizard.view !== "run"}
-    <footer class="h-14 shrink-0 border-t bg-muted/40 flex items-center justify-between px-6">
-      <Button variant="ghost" size="sm" onclick={() => (wizard.view = "device")}>← 이전</Button>
-      <div class="flex items-center gap-3">
-        <Button size="sm" disabled={!canNext} onclick={onNext}>{nextLabel}</Button>
-      </div>
-    </footer>
+    <!-- 하단 액션 바 (step3/4 제외) -->
+    {#if wizard.view === "step1" || wizard.view === "step2"}
+      <footer class="h-14 shrink-0 border-t bg-muted/40 flex items-center justify-between px-6">
+        <Button variant="ghost" size="sm" onclick={onPrev}>← 이전</Button>
+        <Button size="sm" disabled={!canNext} onclick={onNext}>다음</Button>
+      </footer>
+    {/if}
   {/if}
 </div>

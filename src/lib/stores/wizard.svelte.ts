@@ -4,7 +4,14 @@ import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
 import { mockBackupGroups } from "$lib/mock/apps";
 import { buildPlan } from "$lib/mock/plan";
 
-export type WizardView = "device" | "volte-config" | "plan" | "backup-select" | "backup-target" | "run";
+export type WizardView = "device" | "step1" | "step2" | "step3" | "step4";
+
+export const MACRO_STEPS = [
+  { id: 1, view: "step1" as const, label: "SIM 및 통신사" },
+  { id: 2, view: "step2" as const, label: "작업 옵션" },
+  { id: 3, view: "step3" as const, label: "패치 진행" },
+  { id: 4, view: "step4" as const, label: "점검 및 마무리" },
+] as const;
 
 const MANUAL_TEXT: Record<string, { title: string; steps: string[] }> = {
   "mode-wait": {
@@ -13,15 +20,11 @@ const MANUAL_TEXT: Record<string, { title: string; steps: string[] }> = {
   },
   "usb-debug": {
     title: "USB 디버깅 승인 대기",
-    steps: ["초기 세팅 완료 후 개발자 옵션 활성화", "USB 디버깅 켜기", "PC 연결 시 폰 화면의 허용 프롬프트에서 '허용'"],
+    steps: ["재부팅 후 개발자 옵션 활성화", "USB 디버깅 켜기", "PC 연결 시 폰 화면에서 '허용' 선택"],
   },
   "magisk-patch": {
     title: "Magisk 부트 패치 (폰 조작)",
-    steps: [
-      "PC에서 준비한 시스템 파일을 폰으로 전송합니다 (자동)",
-      "폰의 Magisk 앱 → 설치 → 파일 선택 및 패치",
-      "패치 산출물(magisk_patched-*.img)은 자동으로 감지됩니다 — 과거 파일은 거부됩니다",
-    ],
+    steps: ["PC에서 준비한 시스템 파일을 폰으로 전송합니다 (자동)", "폰의 Magisk 앱 → 설치 → 파일 선택 및 패치", "패치가 완료되면 자동으로 감지됩니다"],
   },
   "ims-check": {
     title: "최종 IMS 등록 확인",
@@ -52,16 +55,18 @@ export class Wizard {
   private timer: ReturnType<typeof setInterval> | undefined;
   private cursor = 0;
 
-  // ── 탐색 ──────────────────────────────
+  get macroStepIdx(): number {
+    return MACRO_STEPS.findIndex((s) => s.view === this.view);
+  }
+
   async refreshDevice() {
     // contract: device_list / device_status (mock 즉시 반환)
     this.device = mockDeviceStatus;
     this.env = mockEnvChecks;
   }
 
-  goPlan() {
-    this.applyVolteConfig();
-    this.view = "plan";
+  goStep1() {
+    this.view = "step1";
   }
 
   applyVolteConfig() {
@@ -78,8 +83,6 @@ export class Wizard {
     const after = this.steps.find((s) => s.id === "relock")?.enabled ?? false;
     if (before && !after) {
       this.lastDepNotice = "언루팅을 끄면 리락도 함께 해제됩니다 — 수정된 시스템으로 잠그면 부팅 불능 위험이 있습니다";
-    } else if (!on) {
-      this.lastDepNotice = "";
     } else {
       this.lastDepNotice = "";
     }
@@ -93,11 +96,11 @@ export class Wizard {
     return this.steps.some((s) => s.id === "backup-1" && s.enabled);
   }
 
-  confirmPlan() {
+  confirmStep2() {
     this.groups = $state.snapshot(mockBackupGroups.map((g) => ({ ...g, items: g.items.map((i) => ({ ...i })) })));
     this.skipBackup = false;
-    this.view = this.hasWipeRoute ? "backup-select" : "run";
-    if (this.view === "run") this.prepareRun();
+    this.view = "step3";
+    this.prepareRun();
   }
 
   setGroupAll(gid: string, on: boolean) {
@@ -107,10 +110,7 @@ export class Wizard {
   }
 
   get selectedBytes(): number {
-    return this.groups.reduce(
-      (acc, g) => acc + g.items.reduce((a, i) => a + (i.checked ? i.bytes ?? 0 : 0), 0),
-      0,
-    );
+    return this.groups.reduce((acc, g) => acc + g.items.reduce((a, i) => a + (i.checked ? i.bytes ?? 0 : 0), 0), 0);
   }
 
   get anyChecked(): boolean {
@@ -120,12 +120,12 @@ export class Wizard {
   skipBackupFlow() {
     this.skipBackup = true;
     this.backupPath = "";
-    this.view = "run";
+    this.view = "step3";
     this.prepareRun();
   }
 
   startRun() {
-    this.view = "run";
+    this.view = "step3";
     this.prepareRun();
     this.begin();
   }
@@ -160,9 +160,7 @@ export class Wizard {
       cur.status = "running";
       cur.logs.push(`[시작] ${cur.title}`);
     }
-    // USB 오류 시뮬레이션 (§9-4 데모): 백업/EFS 전송 중 1회
-    if (this.simulateUsbError && !this.erroredOnce &&
-        (cur.id.startsWith("backup") || cur.id === "efs")) {
+    if (this.simulateUsbError && !this.erroredOnce && (cur.id.startsWith("backup") || cur.id === "efs")) {
       this.erroredOnce = true;
       this.usbErrorCount++;
       this.usbError = true;
@@ -170,7 +168,6 @@ export class Wizard {
       cur.logs.push("[오류] DIAG 전송 타임아웃 — USB 연결이 불안정합니다 (재시도 카운트 3/3)");
       return;
     }
-    // 수동 개입 지점
     const step = this.steps.find((s) => s.id === cur.id);
     if (step?.manual && cur.progress === 0) {
       cur.status = "manual-wait";
@@ -180,9 +177,7 @@ export class Wizard {
       return;
     }
     cur.progress = Math.min(1, cur.progress + 0.04 + Math.random() * 0.05);
-    if (Math.random() < 0.35) {
-      cur.logs.push(this.mockLog(cur.id, cur.progress));
-    }
+    if (Math.random() < 0.35) cur.logs.push(this.mockLog(cur.id, cur.progress));
     if (cur.progress >= 1) {
       cur.status = "done";
       cur.logs.push("[완료]");
@@ -194,38 +189,23 @@ export class Wizard {
   private mockLog(id: string, p: number): string {
     const pct = Math.round(p * 100);
     switch (id) {
-      case "backup-1":
-      case "backup-2":
-        return `파일 복사 중… ${pct}%`;
-      case "unlock":
-        return `잠금 해제 중… ${pct}%`;
-      case "root":
-        return `시스템 패치 중… ${pct}%`;
-      case "efs-preflight":
-        return ["USB 연결 확인", "드라이버 확인", "전원 관리 일시 해제", "연결 안정성 테스트 통과"][Math.floor(p * 4) % 4];
-      case "efs":
-        return `프로파일 적용 중… (${Math.floor(p * 46)}/46 파일)`;
-      case "verify":
-        return `무결성 검증 중… ${pct}%`;
-      case "unroot":
-        return `시스템 복원 중… ${pct}%`;
-      case "relock":
-        return `잠금 중… ${pct}%`;
-      case "final-verify":
-        return ["재부팅 대기 중…", "네트워크 등록 대기 중…", "VoLTE 활성 확인됨"][Math.floor(p * 3) % 3];
-      case "restore":
-        return `데이터 복원 중… ${pct}%`;
-      default:
-        return `진행 ${pct}%`;
+      case "backup-1": case "backup-2": return `파일 복사 중… ${pct}%`;
+      case "unlock": return `잠금 해제 중… ${pct}%`;
+      case "root": return `시스템 패치 중… ${pct}%`;
+      case "efs-preflight": return ["USB 연결 확인", "드라이버 확인", "전원 관리 일시 해제", "연결 안정성 테스트 통과"][Math.floor(p * 4) % 4];
+      case "efs": return `프로파일 적용 중… (${Math.floor(p * 46)}/46 파일)`;
+      case "verify": return `무결성 검증 중… ${pct}%`;
+      case "unroot": return `시스템 복원 중… ${pct}%`;
+      case "relock": return `잠금 중… ${pct}%`;
+      case "final-verify": return ["재부팅 대기 중…", "네트워크 등록 대기 중…", "VoLTE 활성 확인됨"][Math.floor(p * 3) % 3];
+      case "restore": return `데이터 복원 중… ${pct}%`;
+      default: return `진행 ${pct}%`;
     }
   }
 
   ackManual() {
     const cur = this.runSteps[this.cursor];
-    if (cur) {
-      cur.status = "running";
-      cur.progress = 0.01;
-    }
+    if (cur) { cur.status = "running"; cur.progress = 0.01; }
     this.manualCurrent = null;
     this.begin();
   }
@@ -233,20 +213,33 @@ export class Wizard {
   dismissUsbError() {
     this.usbError = false;
     const cur = this.runSteps[this.cursor];
-    if (cur) {
-      cur.status = "running";
-      cur.logs.push("[재개] 재연결 확인 — 이어서 진행합니다");
-    }
+    if (cur) { cur.status = "running"; cur.logs.push("[재개] 재연결 확인 — 이어서 진행합니다"); }
     this.begin();
   }
 
   abort() {
     this.pause();
-    this.runSteps.forEach((s) => {
-      if (s.status === "running") s.status = "pending";
-    });
+    this.runSteps.forEach((s) => { if (s.status === "running") s.status = "pending"; });
     this.manualCurrent = null;
     this.usbError = false;
+  }
+
+  goFinish() {
+    this.view = "step4";
+  }
+
+  restart() {
+    this.view = "device";
+    this.device = null;
+    this.env = [];
+    this.steps = [];
+    this.groups = [];
+    this.runSteps = [];
+    this.finished = false;
+    this.running = false;
+    this.backupPath = "";
+    this.skipBackup = false;
+    this.cursor = 0;
   }
 
   private complete() {
@@ -254,9 +247,7 @@ export class Wizard {
     this.finished = true;
   }
 
-  get currentIdx(): number {
-    return this.cursor;
-  }
+  get currentIdx(): number { return this.cursor; }
 
   get overall(): number {
     if (!this.runSteps.length) return 0;

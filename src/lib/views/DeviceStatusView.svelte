@@ -31,7 +31,7 @@
   });
 
   function start() {
-    wizard.view = "volte-config";
+    wizard.view = "step1";
   }
 </script>
 
