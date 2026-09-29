@@ -5,8 +5,10 @@ export type TriState = boolean | "unknown";
 
 export interface SimInfo {
   slot: 1 | 2;
-  carrier: string;
-  plmn: string; // 예: 45005 (SKT)
+  type: "physical" | "esim";
+  carrier: string | null; // null = 미삽입
+  volteEnabled: boolean;
+  patchedWith?: string; // 어떤 통신사 프로파일이 적용됐는지
 }
 
 export interface UsbInfo {
@@ -24,7 +26,6 @@ export interface DeviceStatus {
   mode: DeviceMode;
   bootloader: "locked" | "unlocked" | "unknown";
   rooted: TriState;
-  volte: { enabled: boolean; ims: "registered" | "none" | "unknown"; reason?: string };
   sims: SimInfo[];
   usb: UsbInfo;
 }

@@ -99,7 +99,7 @@
               {wizard.device.bootloader === "locked" ? "🔒 잠김" : wizard.device.bootloader === "unlocked" ? "🔓 언락" : "? 언락상태"}
             </Badge>
             <Badge variant="outline" class="text-[10px] px-1.5 py-0">
-              {wizard.device.volte.enabled ? "VoLTE on" : "VoLTE off"}
+              {wizard.device.sims.some((s) => s.volteEnabled) ? "VoLTE 사용 중" : "VoLTE 미사용"}
             </Badge>
           </div>
         {:else}

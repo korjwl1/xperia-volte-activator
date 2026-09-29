@@ -10,14 +10,9 @@ export const mockDeviceStatus: DeviceStatus = {
   mode: "android",
   bootloader: "locked",
   rooted: false,
-  volte: {
-    enabled: false,
-    ims: "none",
-    reason: "해외 펌웨어에 한국 통신사 VoLTE 프로파일 없음",
-  },
   sims: [
-    { slot: 1, carrier: "(비어 있음)", plmn: "-" },
-    { slot: 2, carrier: "SK Telecom", plmn: "450/05" },
+    { slot: 1, type: "physical", carrier: null, volteEnabled: false },
+    { slot: 2, type: "physical", carrier: "SK Telecom", volteEnabled: false },
   ],
   usb: {
     topology: "루트 허브 직결",
