@@ -4,93 +4,113 @@
   import { Badge } from "$lib/components/ui/badge";
   import { Switch } from "$lib/components/ui/switch";
   import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert";
+  import {
+    ShieldCheck, Cpu, RotateCcw, TriangleAlert, OctagonX, Hand, CircleCheck,
+  } from "@lucide/svelte/icons";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { PROFILE_INFO } from "$lib/mock/plan";
-  import type { Profile } from "$lib/types";
+  import type { Profile, PlanStep } from "$lib/types";
 
-  const profiles: Profile[] = ["clean-return", "keep-root", "unroot-only"];
-  const wipeCount = $derived(
-    wizard.steps.filter((s) => s.enabled && s.wipe).length,
-  );
-  const estTotal = $derived(
-    wizard.steps.filter((s) => s.enabled).reduce((a, s) => a + s.estSec, 0),
-  );
+  const profiles: { id: Profile; icon: typeof ShieldCheck }[] = [
+    { id: "clean-return", icon: ShieldCheck },
+    { id: "keep-root", icon: Cpu },
+    { id: "unroot-only", icon: RotateCcw },
+  ];
+
+  const wipeCount = $derived(wizard.steps.filter((s) => s.enabled && s.wipe).length);
+  const estTotal = $derived(wizard.steps.filter((s) => s.enabled).reduce((a, s) => a + s.estSec, 0));
+
+  const dotStyle = (s: PlanStep) =>
+    s.wipe || s.risk === "danger" ? "bg-destructive" : s.risk === "warn" ? "bg-warning" : "bg-primary";
 </script>
 
 <div class="space-y-4">
-  <Card>
-    <CardHeader>
-      <CardTitle class="text-base">프로파일</CardTitle>
-      <CardDescription>§3-3 — 선택 후 개별 토글로 조정할 수 있습니다</CardDescription>
-    </CardHeader>
-    <CardContent class="grid gap-3 md:grid-cols-3">
-      {#each profiles as p (p)}
-        <button
-          class="rounded-lg border p-3 text-left transition-colors hover:bg-accent {wizard.profile === p ? 'border-primary ring-1 ring-primary' : ''}"
-          onclick={() => wizard.applyProfile(p)}
-        >
-          <div class="flex items-center justify-between">
-            <span class="font-medium text-sm">{PROFILE_INFO[p].label}</span>
-            <Badge variant={PROFILE_INFO[p].wipes === 2 ? "destructive" : "secondary"}>
-              초기화 {PROFILE_INFO[p].wipes}회
-            </Badge>
-          </div>
-          <p class="mt-1 text-xs text-muted-foreground leading-snug">{PROFILE_INFO[p].desc}</p>
-        </button>
-      {/each}
-    </CardContent>
-  </Card>
+  <div class="grid gap-3 md:grid-cols-3">
+    {#each profiles as p (p.id)}
+      <button
+        class="rounded-xl border-2 bg-card p-4 text-left transition-all elev-1
+          {wizard.profile === p.id ? 'border-primary ring-2 ring-primary/25' : 'border-transparent hover:border-border'}"
+        onclick={() => wizard.applyProfile(p.id)}
+      >
+        <div class="flex items-center justify-between">
+          <span class="flex h-9 w-9 items-center justify-center rounded-lg {wizard.profile === p.id ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground'}">
+            <p.icon size={18} />
+          </span>
+          {#if wizard.profile === p.id}
+            <CircleCheck size={16} class="text-primary" />
+          {/if}
+        </div>
+        <div class="mt-3 font-medium text-[13px]">{PROFILE_INFO[p.id].label}</div>
+        <div class="mt-0.5 text-[11px] text-muted-foreground leading-snug">{PROFILE_INFO[p.id].desc}</div>
+        <Badge variant={PROFILE_INFO[p.id].wipes === 2 ? "destructive" : "secondary"} class="mt-2 text-[10px]">
+          <TriangleAlert size={11} class="mr-1" />초기화 {PROFILE_INFO[p.id].wipes}회
+        </Badge>
+      </button>
+    {/each}
+  </div>
 
   {#if wizard.lastDepNotice}
-    <Alert>
+    <Alert class="border-warning/40 bg-warning-container/60">
+      <TriangleAlert size={16} class="text-warning" />
       <AlertTitle>의존성 규칙 적용됨</AlertTitle>
       <AlertDescription>{wizard.lastDepNotice}</AlertDescription>
     </Alert>
   {/if}
 
-  <Card>
-    <CardHeader>
+  <Card class="elev-1">
+    <CardHeader class="pb-3">
       <div class="flex items-center justify-between">
         <div>
-          <CardTitle class="text-base">작업 계획 ({wizard.steps.length}단계)</CardTitle>
-          <CardDescription>
-            예상 총 {Math.round(estTotal / 60)}분 · 데이터 초기화 {wipeCount}회
-          </CardDescription>
+          <CardTitle class="text-sm">작업 계획 <span class="text-muted-foreground font-normal">{wizard.steps.length}단계</span></CardTitle>
+          <CardDescription class="text-xs">예상 {Math.round(estTotal / 60)}분 · 데이터 초기화 {wipeCount}회</CardDescription>
         </div>
-        <div class="text-xs text-muted-foreground text-right">
-          파괴 단계 실행은<br />완결 백업 상태에서만 활성됩니다 (§3-3)
+        <div class="text-[11px] text-muted-foreground text-right leading-tight">
+          파괴 단계는 완결 백업 상태에서만<br />활성화됩니다 (§3-3)
         </div>
       </div>
     </CardHeader>
-    <CardContent class="space-y-2">
-      {#each wizard.steps as step, i (step.id)}
-        <div class="flex items-center gap-3 rounded-lg border px-3 py-2 {!step.enabled ? 'opacity-50' : ''}">
-          <div class="w-6 text-center text-sm text-muted-foreground">{i + 1}</div>
-          <div class="min-w-0 flex-1">
-            <div class="flex flex-wrap items-center gap-1.5">
-              <span class="text-sm font-medium">{step.title}</span>
-              {#if step.wipe}
-                <Badge variant="destructive">★ 초기화</Badge>
-              {/if}
-              {#if step.risk === "danger"}
-                <Badge variant="destructive">위험</Badge>
-              {:else if step.risk === "warn"}
-                <Badge variant="secondary">주의</Badge>
-              {/if}
-              {#if step.manual}
-                <Badge variant="outline">수동 개입</Badge>
+    <CardContent>
+      <div class="relative pl-1">
+        <!-- 타임라인 연결선 -->
+        <div class="absolute left-[13px] top-3 bottom-3 w-px bg-border" aria-hidden="true"></div>
+
+        {#each wizard.steps as step, i (step.id)}
+          <div class="relative flex items-start gap-3 py-1.5 {!step.enabled ? 'opacity-45' : ''}">
+            <span class="relative z-10 mt-0.5 flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border-2 border-card {dotStyle(step)}">
+              <span class="text-[10px] font-bold text-white">{i + 1}</span>
+            </span>
+            <div class="flex-1 min-w-0 rounded-lg border bg-background/60 px-3 py-2">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span class="text-[13px] font-medium">{step.title}</span>
+                {#if step.wipe}
+                  <span class="inline-flex items-center gap-1 rounded-full bg-danger-container px-2 py-0.5 text-[10px] font-medium text-destructive">
+                    <OctagonX size={10} />초기화
+                  </span>
+                {/if}
+                {#if step.risk === "danger"}
+                  <Badge variant="destructive" class="text-[10px] px-1.5">위험</Badge>
+                {:else if step.risk === "warn"}
+                  <span class="rounded-full bg-warning-container px-2 py-0.5 text-[10px] font-medium text-warning">주의</span>
+                {/if}
+                {#if step.manual}
+                  <span class="inline-flex items-center gap-1 rounded-full bg-info-container px-2 py-0.5 text-[10px] font-medium text-info">
+                    <Hand size={10} />수동
+                  </span>
+                {/if}
+              </div>
+              <div class="text-[11px] text-muted-foreground leading-snug mt-0.5">{step.desc}</div>
+            </div>
+            <div class="flex shrink-0 items-center gap-2 self-center">
+              <span class="text-[11px] text-muted-foreground w-12 text-right">≈{Math.max(1, Math.round(step.estSec / 60))}분</span>
+              {#if step.optional}
+                <Switch checked={step.enabled} onCheckedChange={(v: boolean) => wizard.toggleStep(step.id, v)} />
+              {:else}
+                <Badge variant="outline" class="text-[10px] px-1.5">필수</Badge>
               {/if}
             </div>
-            <div class="text-xs text-muted-foreground truncate" title={step.desc}>{step.desc}</div>
           </div>
-          <div class="text-xs text-muted-foreground w-14 text-right">≈{Math.max(1, Math.round(step.estSec / 60))}분</div>
-          {#if step.optional}
-            <Switch checked={step.enabled} onCheckedChange={(v: boolean) => wizard.toggleStep(step.id, v)} />
-          {:else}
-            <Badge variant="outline">필수</Badge>
-          {/if}
-        </div>
-      {/each}
+        {/each}
+      </div>
     </CardContent>
   </Card>
 </div>

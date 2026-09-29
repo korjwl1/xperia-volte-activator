@@ -22,3 +22,6 @@ status: implemented (mock)
 
 ## 이탈
 뒤로 갈 곳 없음(첫 화면). 상태는 스토어에 유지.
+
+## 비주얼 (desktop-ui 스킬)
+DeviceHero(gradient 히어로 + 폰 SVG 일러스트 + 반투명 상태 칩) / USB 정보 바(Usb 아이콘·info 컬러) / 환경검사 리스트(의미색 아이콘 배지 + tonal 컨테이너, sticky 헤더).

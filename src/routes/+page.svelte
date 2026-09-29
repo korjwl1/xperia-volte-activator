@@ -2,6 +2,9 @@
   import { onMount } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
+  import {
+    Smartphone, ListChecks, FolderDown, HardDrive, CirclePlay,
+  } from "@lucide/svelte/icons";
   import { wizard, type WizardView } from "$lib/stores/wizard.svelte";
   import DeviceStatusView from "$lib/views/DeviceStatusView.svelte";
   import PlanReviewView from "$lib/views/PlanReviewView.svelte";
@@ -9,12 +12,12 @@
   import BackupTargetView from "$lib/views/BackupTargetView.svelte";
   import RunProgressView from "$lib/views/RunProgressView.svelte";
 
-  const steps: { id: WizardView; label: string }[] = [
-    { id: "device", label: "디바이스" },
-    { id: "plan", label: "계획 확인" },
-    { id: "backup-select", label: "백업 선택" },
-    { id: "backup-target", label: "저장 위치" },
-    { id: "run", label: "실행" },
+  const steps: { id: WizardView; label: string; icon: typeof Smartphone }[] = [
+    { id: "device", label: "디바이스", icon: Smartphone },
+    { id: "plan", label: "계획 확인", icon: ListChecks },
+    { id: "backup-select", label: "백업 선택", icon: FolderDown },
+    { id: "backup-target", label: "저장 위치", icon: HardDrive },
+    { id: "run", label: "실행", icon: CirclePlay },
   ];
 
   const stepIndex = $derived(steps.findIndex((s) => s.id === wizard.view));
@@ -79,6 +82,7 @@
                 {i < stepIndex ? "bg-primary border-primary text-primary-foreground" : i === stepIndex ? "border-current" : "text-muted-foreground"}">
                 {i < stepIndex ? "✓" : i + 1}
               </span>
+              <s.icon size={14} class="shrink-0 opacity-80" />
               {s.label}
             </button>
           {/if}
@@ -105,20 +109,24 @@
     </aside>
 
     <!-- 콘텐츠 -->
-    <main class="flex-1 overflow-y-auto">
-      <div class="p-5 max-w-3xl">
-        {#if wizard.view === "device"}
-          <DeviceStatusView />
-        {:else if wizard.view === "plan"}
-          <PlanReviewView />
-        {:else if wizard.view === "backup-select"}
-          <BackupSelectView />
-        {:else if wizard.view === "backup-target"}
-          <BackupTargetView />
-        {:else}
+    <main class="flex-1 min-w-0 overflow-y-auto">
+      {#if wizard.view === "run"}
+        <div class="h-full p-5">
           <RunProgressView />
-        {/if}
-      </div>
+        </div>
+      {:else}
+        <div class="p-5 max-w-3xl">
+          {#if wizard.view === "device"}
+            <DeviceStatusView />
+          {:else if wizard.view === "plan"}
+            <PlanReviewView />
+          {:else if wizard.view === "backup-select"}
+            <BackupSelectView />
+          {:else}
+            <BackupTargetView />
+          {/if}
+        </div>
+      {/if}
     </main>
   </div>
 

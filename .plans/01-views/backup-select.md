@@ -23,3 +23,6 @@ status: implemented (mock)
 ## 특수 규칙
 - ❌(불가) 항목은 체크박스 비활성 + "수동 재설정 가이드" 툴팁
 - Android/data 그룹은 "MTP로 안 보이는 영역" 안내 문구
+
+## 비주얼 (desktop-ui 스킬)
+그룹 카드(tonal 아이콘 타일 + sticky 헤더 + 전체/해제) / 분류 칩 = success/warning/danger 컨테이너 색 + lucide 아이콘 / 구글백업 최신성 = info 칩.

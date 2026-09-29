@@ -25,3 +25,6 @@ status: implemented (mock 시뮬레이션)
 - 단계 순차 진행, 진행률 상승, 로그 라인append
 - 루팅 단계에서 manual-wait 1회 발생
 - (데모 토글) 전송 중 오류 1회 유발 → USB 복구 배너 시연
+
+## 비주얼 (desktop-ui 스킬)
+**좌우 분할 pane**(좌=단계 타임라인·자체 스크롤 / 우=다크 콘솔·모노·라인 번호·색상 로그·자동 스크롤) / 상단 전체 진행 gradient 바 + 컨트롤 / 모달 = backdrop blur + 번호 스텝 카드.

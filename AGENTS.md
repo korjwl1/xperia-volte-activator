@@ -17,7 +17,7 @@ Xperia VoLTE 활성화 통합 도구. Tauri 2 + SvelteKit 2 + Svelte 5 + TypeScr
    - mock 스키마 변경 → `.plans/03-data/mock-schema.md` 갱신
 2. **모든 백엔드 호출은 `src/lib/api/` facade 경유** — mock/실전 전환이 한 곳에서 되도록. 컴포넌트에서 `@tauri-apps/api`를 직접 import 금지.
 3. UI는 shadcn-svelte(`$lib/components/ui`) 우선. 새 컴포넌트는 `$lib/components/`에.
-4. 스타일: Tailwind v4. **테마는 시스템 설정 따름**(`prefers-color-scheme` 자동 감지, 다크 강제 금지). 앱 셸은 데스크탑 마법사 레이아웃(타이틀 바 + 좌측 단계 사이드바 + 콘텐츠 + 하단 액션 바).
+4. 스타일: Tailwind v4. **테마는 시스템 설정 따름**(`prefers-color-scheme` 자동 감지, 다크 강제 금지). 앱 셸은 데스크탑 마법사 레이아웃(타이틀 바 + 좌측 단계 사이드바 + 콘텐츠 + 하단 액션 바). **UI/UX 전반은 `.opencode/skills/desktop-ui` 스킬 규칙 필수 준수** (pane 스크롤, MD3 톤 토큰, lucide 아이콘, 도구류 UI 관례).
 5. **민감정보 마스킹 원칙**(상위 plan §12.5): mock/로그/UI에서 IMEI·언락 코드는 마스킹해 표기한다. 일련번호는 부분 마스킹(예: `AB1234****`).
 6. **경로 하드코딩 금지**(한글/공백 경로 호환, §12.5) — 표시 경로는 설정/상태에서 온다.
 7. 파괴적 단계(언락/리락/플래시) UI에는 항상 위험 배지 + 확인 게이트가 있다(§3-3 의존성 규칙 준수).
