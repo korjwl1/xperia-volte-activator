@@ -49,7 +49,7 @@ export const mockBackupGroups: BackupGroup[] = [
   {
     id: "apps",
     label: "앱 (설치 목록 + 데이터)",
-    desc: "B_OK 앱은 구글 백업으로 일부 복원 · 아래 목록의 데이터는 개별 채널",
+    desc: "설치된 앱 목록과 데이터",
     items: mockApps.map((a) => ({
       id: `app:${a.pkg}`,
       label: `${a.label} (${a.pkg})`,
@@ -73,7 +73,7 @@ export const mockBackupGroups: BackupGroup[] = [
   {
     id: "hidden",
     label: "숨은 영역 (Android/data)",
-    desc: "MTP로는 보이지 않는 영역 — 카톡 받은 미디어 포함",
+    desc: "PC에서만 볼 수 있는 데이터 (카톡 사진·동영상 포함)",
     items: [
       { id: "kakao-media", label: "카카오톡 받은 미디어 (Android/data/com.kakao.talk)", cls: "full", checked: true, bytes: 2.1 * GB },
       { id: "others", label: "기타 Android/data 선택 항목", cls: "partial", checked: true, bytes: 480 * 1024 ** 2 },

@@ -1,69 +1,46 @@
 <script lang="ts">
-  import { Switch } from "$lib/components/ui/switch";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
-  import { TriangleAlert, FolderOpen, Settings2, LayoutGrid, HardDrive } from "@lucide/svelte/icons";
+  import OptionCard from "$lib/components/OptionCard.svelte";
+  import OptionCategory from "$lib/components/OptionCategory.svelte";
+  import { TriangleAlert, FolderOpen } from "@lucide/svelte/icons";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { mockBackupGroups } from "$lib/mock/apps";
   import type { PlanStep } from "$lib/types";
 
   let activeTab = $state<"backup" | "rooting">("backup");
 
-  // 초기화 단계가 있으면 백업 전부 ON, 없으면 OFF가 기본값이어도 사용자가 고르게
   const hasWipe = wizard.device?.bootloader === "locked";
-  const defaultBackupOn = hasWipe;
+  const defaultOn = hasWipe;
 
   let backupGroups = $state(
-    mockBackupGroups.map((g) => ({ id: g.id, label: g.label, desc: g.desc, checked: defaultBackupOn })),
+    mockBackupGroups.map((g) => ({ id: g.id, label: g.label, desc: g.desc, checked: defaultOn })),
   );
+  let opts = $state({ restore: defaultOn, backup2: defaultOn, unroot: true, relock: true });
 
-  let opts = $state({
-    restore: defaultBackupOn,
-    backup2: defaultBackupOn,
-    unroot: true,
-    relock: true,
-  });
-
-  // 백업 카테고리 정의
   const backupCategories = [
-    {
-      id: "settings",
-      label: "설정",
-      icon: Settings2,
-      groupIds: ["settings"],
-    },
-    {
-      id: "apps",
-      label: "앱",
-      icon: LayoutGrid,
-      groupIds: ["apps"],
-    },
-    {
-      id: "files",
-      label: "파일",
-      icon: HardDrive,
-      groupIds: ["storage", "hidden", "sms"],
-    },
+    { id: "settings", label: "설정", groupIds: ["settings"] },
+    { id: "apps", label: "앱", groupIds: ["apps"] },
+    { id: "files", label: "파일", groupIds: ["storage", "hidden", "sms"] },
   ];
 
-  // 카테고리별 그룹 가져오기
-  function groupsFor(categoryId: string) {
-    const cat = backupCategories.find((c) => c.id === categoryId);
-    if (!cat) return [];
-    return backupGroups.filter((g) => cat.groupIds.includes(g.id));
+  function groupsFor(catId: string) {
+    const cat = backupCategories.find((c) => c.id === catId);
+    return cat ? backupGroups.filter((g) => cat.groupIds.includes(g.id)) : [];
+  }
+  function setCategoryAll(catId: string, on: boolean) {
+    for (const g of groupsFor(catId)) g.checked = on;
+  }
+  function isCategoryAll(catId: string) {
+    return groupsFor(catId).every((g) => g.checked);
+  }
+  function countSelected(catId: string) {
+    return groupsFor(catId).filter((g) => g.checked).length;
+  }
+  function countTotal(catId: string) {
+    return groupsFor(catId).length;
   }
 
-  // 카테고리 전체 온오프
-  function setCategoryAll(categoryId: string, on: boolean) {
-    for (const g of groupsFor(categoryId)) g.checked = on;
-  }
-
-  // 카테고리 전체 선택 여부
-  function isCategoryAll(categoryId: string) {
-    return groupsFor(categoryId).every((g) => g.checked);
-  }
-
-  // 우측 실행 순서 (실시간)
   const planSteps = $derived.by(() => {
     const steps: { title: string; warn?: boolean }[] = [];
     const d = wizard.device;
@@ -71,7 +48,6 @@
     const anyBackup = backupGroups.some((g) => g.checked);
     const needsUnlock = d.bootloader === "locked";
     const effUnroot = opts.unroot || opts.relock;
-
     if (anyBackup) steps.push({ title: "백업" });
     if (needsUnlock) {
       steps.push({ title: "부트로더 언락", warn: true });
@@ -131,7 +107,6 @@
   <div class="flex-1 min-h-0 flex gap-4 p-4 lg:p-6">
     <!-- 좌: 옵션 -->
     <div class="flex-[3] min-w-0 flex flex-col gap-4">
-      <!-- 탭 -->
       <div class="shrink-0 flex gap-1 rounded-lg bg-muted p-1">
         <button
           class="flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors
@@ -149,10 +124,8 @@
         </button>
       </div>
 
-      <!-- 탭 콘텐츠 (스크롤) -->
       <div class="flex-1 min-h-0 overflow-y-auto">
         {#if activeTab === "backup"}
-          <!-- 백업 경로 — 백업 탭 내 상단 sticky -->
           {#if backupGroups.some((g) => g.checked)}
             <div class="sticky top-0 z-10 -mx-1 mb-3 bg-background/95 backdrop-blur border-b pb-3 px-1">
               <div class="flex items-center gap-2.5">
@@ -169,94 +142,74 @@
 
           {#each backupCategories as cat (cat.id)}
             <div class="mb-4">
-              <div class="flex items-center gap-2 mb-2 px-1">
-                <cat.icon size={14} class="text-muted-foreground" />
-                <span class="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{cat.label}</span>
-                <button
-                  class="ml-auto text-[11px] text-muted-foreground hover:text-foreground"
-                  onclick={() => setCategoryAll(cat.id, !isCategoryAll(cat.id))}
-                >
-                  {isCategoryAll(cat.id) ? "전체 해제" : "전체 선택"}
-                </button>
-              </div>
+              <OptionCategory
+                label={cat.label}
+                selected={countSelected(cat.id)}
+                total={countTotal(cat.id)}
+                onToggleAll={() => setCategoryAll(cat.id, !isCategoryAll(cat.id))}
+              />
               <div class="space-y-1.5">
                 {#each groupsFor(cat.id) as group (group.id)}
-                  <div class="flex items-center gap-3 rounded-lg border bg-card px-4 py-2.5">
-                    <Switch checked={group.checked} onCheckedChange={(v: boolean) => (group.checked = v)} id="bg-{group.id}" />
-                    <div class="min-w-0 flex-1">
-                      <div class="text-[13px] font-medium">{group.label}</div>
-                      <div class="text-[11px] text-muted-foreground truncate">{group.desc}</div>
-                    </div>
-                  </div>
+                  <OptionCard
+                    checked={group.checked}
+                    label={group.label}
+                    desc={group.desc}
+                    onToggle={(v) => (group.checked = v)}
+                  />
                 {/each}
               </div>
             </div>
           {/each}
 
-          <div class="h-px bg-border mb-4"></div>
+          <div class="h-px bg-border mb-3"></div>
 
-          <div class="flex items-center gap-3 rounded-lg border bg-card px-4 py-2.5">
-            <Switch checked={opts.restore} onCheckedChange={(v: boolean) => (opts.restore = v)} id="opt-restore" />
-            <div class="flex-1">
-              <div class="text-[13px] font-medium">복구 자동 실행</div>
-              <div class="text-[11px] text-muted-foreground">모든 작업 완료 후 백업한 데이터를 자동으로 복원합니다</div>
-            </div>
-          </div>
-          <div class="mt-1.5 flex items-center gap-3 rounded-lg border bg-card px-4 py-2.5">
-            <Switch checked={opts.backup2} onCheckedChange={(v: boolean) => (opts.backup2 = v)} id="opt-b2" />
-            <div class="flex-1">
-              <div class="text-[13px] font-medium">2차 백업</div>
-              <div class="text-[11px] text-muted-foreground">리락 직전에 언락 이후 생성된 데이터를 백업합니다</div>
-            </div>
+          <div class="space-y-1.5">
+            <OptionCard
+              checked={opts.restore}
+              label="복구 자동 실행"
+              desc="모든 작업 완료 후 백업한 데이터를 자동으로 복원합니다"
+              onToggle={(v) => (opts.restore = v)}
+            />
+            <OptionCard
+              checked={opts.backup2}
+              label="2차 백업"
+              desc="리락 직전에 언락 이후 생성된 데이터를 백업합니다"
+              onToggle={(v) => (opts.backup2 = v)}
+            />
           </div>
 
         {:else}
-          <!-- 루팅 탭 -->
           {#if wizard.device?.bootloader === "locked"}
-            <div class="flex items-center gap-3 rounded-lg border bg-card px-4 py-2.5 mb-3">
-              <TriangleAlert size={16} class="text-warning shrink-0" />
-              <div class="flex-1">
-                <div class="text-[13px] font-medium">부트로더 언락 · 루팅 · VoLTE 적용</div>
-                <div class="text-[11px] text-muted-foreground">부트로더가 잠겨 있어 자동으로 포함됩니다</div>
-              </div>
-              <Badge variant="secondary" class="text-[10px]">필수</Badge>
+            <div class="mb-3 px-1 text-[11px] text-muted-foreground">
+              부트로더 언락 · 루팅 · VoLTE 적용은 자동으로 진행됩니다
             </div>
             <div class="h-px bg-border mb-3"></div>
-            <div class="flex items-center gap-3 rounded-lg border bg-card px-4 py-2.5 mb-1.5">
-              <Switch checked={opts.unroot} onCheckedChange={(v: boolean) => (opts.unroot = v)} id="opt-unroot" />
-              <div class="flex-1">
-                <div class="text-[13px] font-medium">언루팅</div>
-                <div class="text-[11px] text-muted-foreground">시스템을 원래대로 되돌립니다 — 리락하려면 필요합니다</div>
-              </div>
-            </div>
-            <div class="flex items-center gap-3 rounded-lg border bg-card px-4 py-2.5">
-              <Switch checked={opts.relock} onCheckedChange={(v: boolean) => (opts.relock = v)} id="opt-relock" />
-              <div class="flex-1">
-                <div class="text-[13px] font-medium">부트로더 리락</div>
-                <div class="text-[11px] text-muted-foreground">기기가 다시 초기화됩니다</div>
-              </div>
-              {#if opts.relock}<Badge variant="destructive" class="text-[10px]">초기화</Badge>{/if}
+            <div class="space-y-1.5">
+              <OptionCard
+                checked={opts.unroot}
+                label="언루팅"
+                desc="시스템을 원래대로 되돌립니다 — 리락하려면 필요합니다"
+                onToggle={(v) => (opts.unroot = v)}
+              />
+              <OptionCard
+                checked={opts.relock}
+                label="부트로더 리락"
+                desc="기기가 다시 초기화됩니다"
+                onToggle={(v) => (opts.relock = v)}
+                badge={opts.relock ? "초기화" : undefined}
+                badgeVariant="destructive"
+              />
             </div>
             {#if !opts.unroot && opts.relock}
               <div class="mt-2 rounded-lg bg-warning-container/60 px-4 py-2 text-xs text-warning">
                 리락하려면 언루팅이 필요합니다 — 언루팅이 자동으로 포함됩니다
               </div>
             {/if}
-          {:else if wizard.device?.rooted !== true}
-            <div class="flex items-center gap-3 rounded-lg border bg-card px-4 py-2.5">
-              <div class="flex-1">
-                <div class="text-[13px] font-medium">루팅 · VoLTE 적용</div>
-                <div class="text-[11px] text-muted-foreground">VoLTE 적용을 위해 필요합니다</div>
-              </div>
-              <Badge variant="secondary" class="text-[10px]">필수</Badge>
-            </div>
           {:else}
-            <div class="flex items-center gap-3 rounded-lg border bg-card px-4 py-2.5">
-              <div class="flex-1">
-                <div class="text-[13px] font-medium">VoLTE 적용</div>
-                <div class="text-[11px] text-muted-foreground">이미 루팅되어 있어 언락/루팅 단계를 건너뜁니다</div>
-              </div>
-              <Badge variant="secondary" class="text-[10px]">필수</Badge>
+            <div class="px-1 text-[11px] text-muted-foreground">
+              {wizard.device?.rooted === true
+                ? "이미 루팅되어 있어 언락/루팅 단계를 건너뜁니다. VoLTE 적용만 진행됩니다."
+                : "루팅 후 VoLTE 적용이 진행됩니다."}
             </div>
           {/if}
         {/if}
@@ -284,7 +237,6 @@
     </div>
   </div>
 
-  <!-- 하단: 기존 디자인 유지 + 실행 버튼 -->
   <footer class="h-14 shrink-0 border-t bg-muted/40 flex items-center justify-between px-6">
     <Button variant="ghost" size="sm" onclick={() => (wizard.view = "step1")}>← 이전</Button>
     <Button size="sm" onclick={confirm}>실행</Button>
