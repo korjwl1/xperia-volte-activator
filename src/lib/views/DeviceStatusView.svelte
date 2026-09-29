@@ -154,6 +154,16 @@
           VoLTE 작업 시작
           <ArrowRight size={20} />
         </button>
+
+        <!-- 크레딧 -->
+        <div class="flex flex-col items-center gap-1 text-[11px] text-primary-foreground/50">
+          <span>
+            made by <a href="https://github.com/korjwl1" target="_blank" rel="noopener" class="underline hover:text-primary-foreground/80 transition-colors">korjwl1</a>
+          </span>
+          <span>
+            Special thanks to <a href="https://cafe.naver.com/x1smart" target="_blank" rel="noopener" class="underline hover:text-primary-foreground/80 transition-colors">Sony User Group</a>
+          </span>
+        </div>
       </div>
     </div>
 
