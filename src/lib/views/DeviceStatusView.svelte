@@ -89,8 +89,8 @@
             </div>
           </div>
 
-          <!-- 폰 일러스트 — 21:9 비율 Xperia 스타일 -->
-          <svg viewBox="0 0 84 200" class="w-[72px] lg:w-[80px] shrink-0 drop-shadow-xl" aria-hidden="true">
+          <!-- 폰 일러스트 — Xperia 1 V 비율 (71:165) -->
+          <svg viewBox="0 0 71 165" class="w-[60px] lg:w-[68px] shrink-0 drop-shadow-xl" aria-hidden="true">
             <defs>
               <linearGradient id="scr" x1="0" y1="0" x2="1" y2="1">
                 <stop offset="0" stop-color="rgba(255,255,255,0.25)" />
@@ -99,22 +99,21 @@
               </linearGradient>
             </defs>
             <!-- 바디 -->
-            <rect x="1" y="1" width="82" height="198" rx="13" fill="rgba(0,0,0,0.32)" stroke="rgba(255,255,255,0.40)" stroke-width="1" />
+            <rect x="0.5" y="0.5" width="70" height="164" rx="10" fill="rgba(0,0,0,0.32)" stroke="rgba(255,255,255,0.40)" stroke-width="1" />
             <!-- 스크린 -->
-            <rect x="5" y="5" width="74" height="190" rx="10" fill="url(#scr)" />
+            <rect x="4" y="4" width="63" height="157" rx="8" fill="url(#scr)" />
             <!-- 전면 카메라 (상단 좌측 펀치홀) -->
-            <circle cx="16" cy="14" r="3" fill="rgba(0,0,0,0.55)" stroke="rgba(255,255,255,0.25)" stroke-width="0.5" />
-            <!-- 상태바 영역 -->
-            <text x="74" y="16" text-anchor="end" fill="rgba(255,255,255,0.85)" font-size="7" font-weight="700" font-family="Segoe UI, sans-serif">5G</text>
-            <!-- 신호 바 (하단) -->
+            <circle cx="12" cy="11" r="2.5" fill="rgba(0,0,0,0.55)" stroke="rgba(255,255,255,0.25)" stroke-width="0.5" />
+            <!-- 상태바: 신호바 + 5G (상단 우측, 같은 크기로 나란히) -->
             <g fill="rgba(255,255,255,0.80)">
-              <rect x="22" y="178" width="4" height="7" rx="1" />
-              <rect x="29" y="174" width="4" height="11" rx="1" />
-              <rect x="36" y="170" width="4" height="15" rx="1" />
-              <rect x="43" y="165" width="4" height="20" rx="1" />
+              <rect x="48" y="10" width="1.8" height="4" rx="0.5" />
+              <rect x="51.2" y="8.5" width="1.8" height="5.5" rx="0.5" />
+              <rect x="54.4" y="7" width="1.8" height="7" rx="0.5" />
+              <rect x="57.6" y="5.5" width="1.8" height="8.5" rx="0.5" />
             </g>
+            <text x="66" y="13" text-anchor="end" fill="rgba(255,255,255,0.85)" font-size="4.5" font-weight="700" font-family="Segoe UI, sans-serif">5G</text>
             <!-- 홈 인디케이터 -->
-            <rect x="28" y="192" width="28" height="2" rx="1" fill="rgba(255,255,255,0.35)" />
+            <rect x="22" y="157" width="27" height="1.5" rx="0.75" fill="rgba(255,255,255,0.35)" />
           </svg>
         </div>
 
@@ -138,8 +137,8 @@
                   {/if}
                 </div>
               {:else}
-                <div class="text-sm opacity-60">미삽입</div>
-                <div class="text-xs opacity-50">SIM을 꽂으면 자동 인식됩니다</div>
+                <div class="text-base font-semibold opacity-50">미삽입</div>
+                <div class="text-sm opacity-50">SIM을 꽂으면 자동 인식됩니다</div>
               {/if}
             </div>
           {/each}
