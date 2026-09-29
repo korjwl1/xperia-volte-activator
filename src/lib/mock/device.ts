@@ -21,8 +21,4 @@ export const mockDeviceStatus: DeviceStatus = {
   },
 };
 
-export const mockEnvChecks: EnvCheckItem[] = [
-  { id: "webview2", label: "런타임", state: "pass", detail: "정상", fixable: false },
-  { id: "drivers", label: "USB 드라이버", state: "pass", detail: "설치됨", fixable: false },
-  { id: "presets", label: "VoLTE 프로파일", state: "warn", detail: "미지정 — VoLTE 작업 전 설정 필요", fixable: false },
-];
+export const mockEnvChecks: EnvCheckItem[] = [];

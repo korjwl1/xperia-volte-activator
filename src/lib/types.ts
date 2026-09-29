@@ -61,6 +61,22 @@ export interface PlanStep {
   manual?: ManualId;
 }
 
+export type CarrierId = "SKT" | "KT" | "LGU" | "LGU_V";
+export type PresetMode = "balance" | "performance";
+
+export interface VolteConfig {
+  simSlot: 1 | 2;
+  carrier: CarrierId;
+  mode: PresetMode;
+}
+
+export const CARRIER_LABEL: Record<CarrierId, string> = {
+  SKT: "SKT",
+  KT: "KT",
+  LGU: "LG U+",
+  LGU_V: "LG U+ (1 V / 5 V 전용)",
+};
+
 export type BackupClass = "full" | "partial" | "none";
 
 export interface BackupItem {

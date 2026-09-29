@@ -1,10 +1,10 @@
 // 위자드 상태 머신 + 실행 시뮬레이션 러너 (mock)
-import type { BackupGroup, DeviceStatus, EnvCheckItem, PlanStep, Profile, RunStep } from "$lib/types";
+import type { BackupGroup, DeviceStatus, EnvCheckItem, PlanStep, RunStep, VolteConfig } from "$lib/types";
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
 import { mockBackupGroups } from "$lib/mock/apps";
 import { buildPlan } from "$lib/mock/plan";
 
-export type WizardView = "device" | "plan" | "backup-select" | "backup-target" | "run";
+export type WizardView = "device" | "volte-config" | "plan" | "backup-select" | "backup-target" | "run";
 
 const MANUAL_TEXT: Record<string, { title: string; steps: string[] }> = {
   "mode-wait": {
@@ -33,7 +33,7 @@ export class Wizard {
   view = $state<WizardView>("device");
   device: DeviceStatus | null = $state(null);
   env: EnvCheckItem[] = $state([]);
-  profile = $state<Profile>("clean-return");
+  volteConfig = $state<VolteConfig>({ simSlot: 2, carrier: "SKT", mode: "balance" });
   steps: PlanStep[] = $state([]);
   groups: BackupGroup[] = $state([]);
   backupPath = $state("");
@@ -60,13 +60,12 @@ export class Wizard {
   }
 
   goPlan() {
-    this.applyProfile(this.profile);
+    this.applyVolteConfig();
     this.view = "plan";
   }
 
-  applyProfile(p: Profile) {
-    this.profile = p;
-    this.steps = buildPlan(p);
+  applyVolteConfig() {
+    this.steps = buildPlan(this.device, this.volteConfig);
     this.lastDepNotice = "";
   }
 
@@ -75,7 +74,7 @@ export class Wizard {
     for (const s of this.steps) if (s.optional) overrides[s.id] = s.enabled;
     overrides[id] = on;
     const before = this.steps.find((s) => s.id === "relock")?.enabled ?? false;
-    this.steps = buildPlan(this.profile, overrides);
+    this.steps = buildPlan(this.device, this.volteConfig, overrides);
     const after = this.steps.find((s) => s.id === "relock")?.enabled ?? false;
     if (before && !after) {
       this.lastDepNotice = "언루팅을 끄면 리락도 함께 해제됩니다 — 수정된 시스템으로 잠그면 부팅 불능 위험이 있습니다";
