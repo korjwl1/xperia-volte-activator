@@ -5,9 +5,11 @@ Xperia VoLTE 활성화 통합 도구. Tauri 2 + SvelteKit 2 + Svelte 5 + TypeScr
 
 ## 현재 단계 (매우 중요)
 
-- **프론트엔드 우선 개발 중 — `src-tauri/` 백엔드 로직 작성 금지.** 템플릿 boilerplate만 유지한다.
-- 모든 데이터는 `src/lib/mock/`의 mock으로 구동된다. 백엔드 계약은 `.plans/02-contracts/tauri-commands.md`에만 명세한다.
-- 프론트는 `pnpm dev`(Vite 브라우저)로 작업한다. Rust 미설치로 `pnpm tauri dev`는 불가(M2에서 구축).
+- **프론트엔드 작업 위주 단계. 기기·PC에 영향을 줄 수 있는 백엔드(쓰기·설치·삭제·플래시·EFS·백업 실행 등)는 작성 금지** — 실기기 작동 시나리오는 짜지 않는다.
+- **읽기 전용·무해한 명령**(기기 감지, 용량 조회 등)은 프론트와 연동해 실제로 동작하는 것을 눈으로 확인하며 작성해도 된다. 이때 `.plans/02-contracts/tauri-commands.md`에 계약을 추가한다.
+- mock은 백엔드가 없어도 프론트가 동작하도록 유지한다 (연동 실패 시 mock 폴백).
+- Rust 설치 완료 — `pnpm.cmd tauri dev`로 데스크톱 윈도우 테스트 가능하다.
+- 기기 통신은 `adb_client` 크레이트(ADB 프로토콜 순수 Rust) — 실행 중인 adb 서버 재사용 → USB 직접 연결 폴백. adb 바이너리 설치/PATH 탐색 불필요. adb 바이너리를 직접 실행하는 코드는 금지.
 
 ## 필수 작업 규칙
 
@@ -35,5 +37,7 @@ Xperia VoLTE 활성화 통합 도구. Tauri 2 + SvelteKit 2 + Svelte 5 + TypeScr
 pnpm.cmd install
 pnpm.cmd dev        # 브라우저 개발 (http://localhost:1420)
 pnpm.cmd check      # svelte-check 타입 검사
+pnpm.cmd tauri dev  # 데스크톱 윈도우 (Rust 백엔드 연동 — dev 서버가 실행 중이면 먼저 종료)
 ```
 PowerShell에서는 `pnpm.cmd` 사용(실행 정책이 .ps1을 차단함).
+Rust 빌드에는 MSVC 필요 — `src-tauri` 빌드 시 vcvars 환경(또는 Visual Studio Build Tools + C++ 워크로드) 필요.

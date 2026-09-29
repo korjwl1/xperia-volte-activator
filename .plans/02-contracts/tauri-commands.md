@@ -1,16 +1,29 @@
 # 02 — Tauri command 계약 (프론트 ↔ 백엔드)
 
-status: draft (프론트는 mock으로 구현, 계약만 확정. M2+에서 Rust 구현)
+status: 진행 중 — 읽기 전용 일부 구현 (`adb_status`, `device_list`, `storage_sizes`: `src-tauri/src/adb.rs`). 나머지는 mock/계약만.
 
 규칙: 프론트는 `src/lib/api/` facade로만 호출한다. command 이름/인자/반환은 이 문서가 단일 진실 공급원이다.
 이벤트 스트림은 Tauri `emit` → facade의 콜백/스토어로 전달된다.
+**구현 원칙(AGENTS.md 현재 단계)**: 기기·PC에 영향 주는(쓰기·설치·삭제·플래시) 명령은 작성 금지. 읽기 전용만 구현.
+**기기 통신 구현체**: `adb_client` 크레이트(ADB 프로토콜 순수 Rust) — 1순위 실행 중인 adb 서버(5037) 재사용, 2순위 USB 직접 연결. adb 바이너리 설치/경로 탐색 불필요.
 
 ## device (M1)
 
 ```ts
-invoke('device_list') → DeviceInfo[]            // USB VID 0x0FCE 스캔 (모드 포함)
-invoke('device_status', { serial }) → DeviceStatus   // §4 상태 감지 통합 (adb 프롭/프로브)
-// 이벤트: 'device:changed' → { serial, mode }  // WM_DEVICECHANGE/폴링 (§9-3)
+invoke('adb_status') → AdbStatus                   // ✅ 구현: 연결 수단 점검 { available, mode: "adb-server"|"usb-direct"|"none", detail }
+invoke('device_list') → DeviceStatus[]            // ✅ 구현: adb_client 연결 + getprop 덤프 + which su (읽기 전용)
+invoke('device_status', { serial }) → DeviceStatus   // §4 상태 감지 통합 (adb 프롭/프로브) — 미구현
+// 이벤트: 'device:changed' → { serial, mode }  // WM_DEVICECHANGE/폴링 (§9-3) — 미구현
+```
+
+## storage (M3 선제 — 백업 탭 실측 용량)
+
+```ts
+invoke('storage_sizes', { serial? }) → Record<string, number>
+// ✅ 구현: 단일 셸 실행(adb_client) — 폴더별 du 병렬 + 3자 앱 APK 크기(stem) + df 여유 공간
+// 반환 키: dcim/download/pictures/movies/music/documents/recordings/
+//          android-data/sdcard-total/sdcard-free/
+//          apk-total/apk-count/apk-sampled
 ```
 
 ## env (M1 — §12.6)
