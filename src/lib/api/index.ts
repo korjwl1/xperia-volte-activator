@@ -33,6 +33,7 @@ function normalizeDevice(d: DeviceStatus): DeviceStatus {
 export interface Api {
   deviceList(): Promise<DeviceStatus[]>;
   deviceStatus(serial: string): Promise<DeviceStatus | null>;
+  storageSizes(): Promise<Record<string, number>>;
   envCheck(): Promise<EnvCheckItem[]>;
   envFix(id: string): Promise<{ ok: boolean; message: string }>;
 }
@@ -48,6 +49,17 @@ const hybridApi: Api = {
   async deviceStatus(serial) {
     const devices = await this.deviceList();
     return devices.find((d) => d.serialMasked === serial || d.serial === serial) ?? null;
+  },
+
+  async storageSizes(): Promise<Record<string, number>> {
+    try {
+      const res = await fetch("/api/dev/devices?storage", { signal: AbortSignal.timeout(10000) });
+      if (res.ok) {
+        const data = await res.json();
+        if (Object.keys(data).some((k) => data[k] > 0)) return data;
+      }
+    } catch {}
+    return {};
   },
 
   async envCheck() {

@@ -1,10 +1,12 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
   import OptionCard from "$lib/components/OptionCard.svelte";
   import OptionCategory from "$lib/components/OptionCategory.svelte";
   import { TriangleAlert, FolderOpen } from "@lucide/svelte/icons";
   import { wizard } from "$lib/stores/wizard.svelte";
+  import { api } from "$lib/api";
   import { mockBackupGroups, mockDiskFree } from "$lib/mock/apps";
   import type { PlanStep } from "$lib/types";
 
@@ -14,9 +16,66 @@
   const hasWipe = wizard.device?.bootloader === "locked";
   const defaultOn = hasWipe;
 
+  // 실측 용량 조회
+  let realSizes = $state<Record<string, number>>({});
+
+  onMount(async () => {
+    realSizes = await api.storageSizes();
+  });
+
   let backupGroups = $state(
-    mockBackupGroups.map((g) => ({ id: g.id, label: g.label, desc: g.desc, checked: defaultOn, bytes: g.items.reduce((a: number, i) => a + (i.bytes ?? 0), 0) })),
+    mockBackupGroups.map((g) => ({
+      id: g.id,
+      label: g.label,
+      desc: g.desc,
+      checked: defaultOn,
+      bytes: g.items.reduce((a: number, i) => a + (i.bytes ?? 0), 0),
+      items: g.items,
+    })),
   );
+
+  // 실측 용량이 도착하면 업데이트
+  $effect(() => {
+    if (Object.keys(realSizes).length === 0) return;
+    const sizeMap: Record<string, number> = {
+      "dcim": realSizes["dcim"] ?? 0,
+      "download": realSizes["download"] ?? 0,
+      "pictures": realSizes["pictures"] ?? 0,
+      "perfectviewer": realSizes["perfectviewer"] ?? 0,
+      "dxo": realSizes["dxo"] ?? 0,
+      "kakao-media": realSizes["kakao-media"] ?? 0,
+    };
+    // storage 그룹 업데이트
+    const storage = backupGroups.find((g) => g.id === "storage");
+    if (storage) {
+      let total = 0;
+      for (const item of storage.items) {
+        if (sizeMap[item.id] !== undefined) {
+          item.bytes = sizeMap[item.id];
+          total += sizeMap[item.id];
+        } else if (item.bytes) {
+          total += item.bytes;
+        }
+      }
+      storage.bytes = total;
+    }
+    // hidden 그룹 업데이트
+    const hidden = backupGroups.find((g) => g.id === "hidden");
+    if (hidden) {
+      const kakao = realSizes["kakao-media"] ?? 0;
+      const androidData = realSizes["android-data"] ?? 0;
+      const others = Math.max(0, androidData - kakao);
+      hidden.items[0].bytes = kakao;
+      if (hidden.items[1]) hidden.items[1].bytes = others;
+      hidden.bytes = kakao + others;
+    }
+    // 전체 재계산
+    for (const g of backupGroups) {
+      if (g.id !== "storage" && g.id !== "hidden") {
+        g.bytes = g.items.reduce((a: number, i) => a + (i.bytes ?? 0), 0);
+      }
+    }
+  });
   let opts = $state({ restore: defaultOn, unroot: true, relock: true });
 
   const fmtBytes = (b: number) => {
@@ -28,7 +87,7 @@
   };
 
   const selectedBytes = $derived(backupGroups.filter((g) => g.checked).reduce((a, g) => a + g.bytes, 0));
-  const diskFreeGB = mockDiskFree / 1024 ** 3;
+  const diskFreeGB = $derived((realSizes["sdcard-total"] ? realSizes["sdcard-total"] * 1.2 : mockDiskFree) / 1024 ** 3);
   const usageRatio = $derived(selectedBytes / mockDiskFree);
   const diskWarning = $derived(usageRatio > 0.85);
 
@@ -155,16 +214,10 @@
                   {wizard.backupPath || "백업 위치를 지정해 주세요"}
                 </div>
                 <Button size="sm" variant="outline" class="h-7 text-xs shrink-0" onclick={async () => {
-                  const handle = await window.showDirectoryPicker({ mode: "readwrite" }).catch(() => null);
-                  if (handle) {
-                    wizard.backupPath = handle.name;
-                    // 실제 여유 공간 시뮬레이션 (mock)
-                    const estimate = await handle.queryPermission({ mode: "readwrite" });
-                    if (estimate === "granted") {
-                      // 디렉토리 정보에서 여유 공간 읽기 시도 — 브라우저 제한으로 mock 값 사용
-                      wizard.backupPath = handle.name;
-                    }
-                  }
+                  const w = window as unknown as { showDirectoryPicker?: (opts: object) => Promise<FileSystemDirectoryHandle> };
+                  if (!w.showDirectoryPicker) return;
+                  const handle = await w.showDirectoryPicker({ mode: "readwrite" }).catch(() => null);
+                  if (handle) wizard.backupPath = handle.name;
                 }}>
                   폴더 지정
                 </Button>

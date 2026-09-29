@@ -105,7 +105,32 @@ function devDeviceApi() {
       server.middlewares.use("/api/dev/devices", async (req, res) => {
         try {
           const devices = await getConnectedDevices();
-          res.setHeader("Content-Type", "application/json");
+          // 백업 경로별 실제 용량 쿼리
+      if (req.url.includes("/storage")) {
+        const paths = [
+          { id: "dcim", path: "/sdcard/DCIM" },
+          { id: "download", path: "/sdcard/Download" },
+          { id: "pictures", path: "/sdcard/Pictures" },
+          { id: "perfectviewer", path: "/sdcard/PerfectViewer" },
+          { id: "dxo", path: "/sdcard/DxO ONE" },
+          { id: "kakao-media", path: "/sdcard/Android/data/com.kakao.talk" },
+          { id: "android-data", path: "/sdcard/Android/data" },
+          { id: "sdcard-total", path: "/sdcard" },
+        ];
+        const sizes = {};
+        for (const p of paths) {
+          try {
+            const { stdout } = await exec(`adb -s ${devices[0]?.serial ?? ""} shell du -sk "${p.path}"`, { timeout: 5000 });
+            const kb = parseInt(stdout.trim().split("\t")[0]) || 0;
+            sizes[p.id] = kb * 1024;
+          } catch { sizes[p.id] = 0; }
+        }
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(sizes));
+        return;
+      }
+
+      res.setHeader("Content-Type", "application/json");
           res.setHeader("Access-Control-Allow-Origin", "*");
           res.end(JSON.stringify(devices));
         } catch (e) {
