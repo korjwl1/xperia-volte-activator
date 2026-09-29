@@ -90,7 +90,7 @@
           </div>
 
           <!-- 폰 일러스트 — Xperia 1 V 비율 (71:165) -->
-          <svg viewBox="0 0 71 165" class="w-[60px] lg:w-[68px] shrink-0 drop-shadow-xl" aria-hidden="true">
+          <svg viewBox="0 0 71 165" class="w-[80px] lg:w-[100px] shrink-0 drop-shadow-xl" aria-hidden="true">
             <defs>
               <linearGradient id="scr" x1="0" y1="0" x2="1" y2="1">
                 <stop offset="0" stop-color="rgba(255,255,255,0.25)" />
