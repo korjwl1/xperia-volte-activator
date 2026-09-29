@@ -11,8 +11,8 @@
   const allOk = $derived(failed === 0);
 </script>
 
-<div class="flex-1 flex items-center justify-center overflow-y-auto">
-  <div class="w-full max-w-lg p-6 space-y-4">
+<div class="flex-1 overflow-y-auto flex">
+  <div class="m-auto w-full max-w-lg p-6 space-y-4">
     <Card class="elev-2">
       <CardContent class="pt-8 pb-8 text-center space-y-4">
         <div class="flex h-20 w-20 mx-auto items-center justify-center rounded-full {allOk ? 'bg-success-container' : 'bg-danger-container'}">

@@ -15,8 +15,8 @@
     s.wipe || s.risk === "danger" ? "bg-destructive" : s.risk === "warn" ? "bg-warning" : "bg-primary";
 </script>
 
-<div class="flex-1 flex items-center justify-center overflow-y-auto">
-  <div class="w-full max-w-2xl p-6 space-y-4">
+<div class="flex-1 overflow-y-auto flex">
+  <div class="m-auto w-full max-w-2xl p-6 space-y-4">
   {#if wizard.lastDepNotice}
     <Alert class="border-warning/40 bg-warning-container/60">
       <TriangleAlert size={16} class="text-warning" />

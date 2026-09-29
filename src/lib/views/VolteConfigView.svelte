@@ -30,8 +30,8 @@
   const carrierLabel = (id: CarrierId) => (id === "LGU_V" ? "LG U+" : id);
 </script>
 
-<div class="flex-1 flex items-center justify-center overflow-y-auto">
-  <div class="w-full max-w-2xl p-6 space-y-4">
+<div class="flex-1 overflow-y-auto flex">
+  <div class="m-auto w-full max-w-2xl p-6 space-y-4">
   <Card class="elev-1">
     <CardHeader>
       <CardTitle class="text-base">VoLTE 설정</CardTitle>
