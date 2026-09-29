@@ -18,6 +18,7 @@ export interface UsbInfo {
 }
 
 export interface DeviceStatus {
+  serial?: string; // 내부용 (UI에서는 serialMasked만 표시)
   serialMasked: string;
   model: string;
   productName: string;
