@@ -34,6 +34,7 @@
 
   function onPrev() {
     if (wizard.view === "step2") wizard.view = "step1";
+    else if (wizard.view === "step1") wizard.view = "device";
   }
 
   onMount(() => {
