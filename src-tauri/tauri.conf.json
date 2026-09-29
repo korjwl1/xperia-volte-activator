@@ -13,8 +13,9 @@
     "windows": [
       {
         "title": "xperia-volte-activator",
-        "width": 800,
-        "height": 600
+        "width": 921,
+        "height": 555,
+        "resizable": true
       }
     ],
     "security": {
