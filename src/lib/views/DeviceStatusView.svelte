@@ -5,7 +5,7 @@
   import { Badge } from "$lib/components/ui/badge";
   import DeviceHero from "$lib/components/DeviceHero.svelte";
   import {
-    CircleCheck, TriangleAlert, OctagonX, Info, Wrench, Usb, Cable,
+    CircleCheck, TriangleAlert, OctagonX, Info, Wrench,
   } from "@lucide/svelte/icons";
   import { api } from "$lib/api";
   import { wizard } from "$lib/stores/wizard.svelte";
@@ -48,14 +48,6 @@
     <Card class="elev-1"><CardContent class="py-16 text-center text-muted-foreground">디바이스 감지 중… (USB 폴링)</CardContent></Card>
   {:else if device}
     <DeviceHero {device} />
-
-    <!-- USB 정보 -->
-    <div class="flex items-center gap-3 rounded-lg border bg-card px-4 py-2.5 text-xs text-muted-foreground elev-1">
-      <Usb size={15} class="text-info shrink-0" />
-      <span>{device.usb.topology} · {device.usb.controller} · {device.usb.linkSpeed}</span>
-      <Cable size={15} class="ml-auto shrink-0 opacity-60" />
-      <span class="opacity-80">연결 안정성은 작업 시작 전 자동 검사됩니다</span>
-    </div>
 
     <!-- 환경 검사 -->
     <Card class="elev-1">
