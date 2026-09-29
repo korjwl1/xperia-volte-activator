@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { Badge } from "$lib/components/ui/badge";
-  {
-    CircleCheck, TriangleAlert, Usb, Smartphone, ArrowRight;
+  import {
+    CircleCheck, TriangleAlert, Usb, Smartphone, ArrowRight,
   } from "@lucide/svelte/icons";
   import { api } from "$lib/api";
   import { wizard } from "$lib/stores/wizard.svelte";
