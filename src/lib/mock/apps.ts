@@ -48,8 +48,8 @@ export const mockBackupGroups: BackupGroup[] = [
   },
   {
     id: "apps",
-    label: "앱 (설치 목록 + 데이터)",
-    desc: "설치된 앱 목록과 데이터",
+    label: "앱 목록",
+    desc: "복구 시 자동 재설치용 (개별 앱 데이터는 구글 백업으로 복원)",
     items: mockApps.map((a) => ({
       id: `app:${a.pkg}`,
       label: `${a.label} (${a.pkg})`,
