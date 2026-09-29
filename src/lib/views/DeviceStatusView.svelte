@@ -64,9 +64,12 @@
     </div>
 
   {:else if device}
-    <!-- 풀스크린 그라디언트 — 콘텐츠 수평+수직 중앙 -->
-    <div class="flex-1 grad-hero flex items-center justify-center overflow-y-auto">
-      <div class="w-full max-w-3xl px-8 py-10 flex flex-col items-center gap-8">
+    <!-- 풀스크린 그라디언트 — 콘텐츠 중앙 + 크레딧 하단 고정 -->
+    <div class="flex-1 grad-hero flex flex-col overflow-hidden">
+      <div class="flex-1 flex items-center justify-center overflow-y-auto">
+        <div class="w-full max-w-3xl px-8 py-10 flex flex-col items-center gap-8 text-primary-foreground">
+          <!-- 1행: 기기 정보 + 이미지 -->
+          <div class="w-full flex items-center justify-between gap-10">
         <!-- 1행: 기기 정보 + 이미지 -->
         <div class="w-full flex items-center justify-between gap-10">
           <div class="flex-1 min-w-0 space-y-3 text-primary-foreground">
@@ -154,16 +157,17 @@
           VoLTE 작업 시작
           <ArrowRight size={20} />
         </button>
+      </div>
+    </div>
 
-        <!-- 크레딧 -->
-        <div class="flex flex-col items-center gap-1 text-[11px] text-primary-foreground/50">
-          <span>
-            made by <a href="https://github.com/korjwl1" target="_blank" rel="noopener" class="underline hover:text-primary-foreground/80 transition-colors">korjwl1</a>
-          </span>
-          <span>
-            Special thanks to <a href="https://cafe.naver.com/x1smart" target="_blank" rel="noopener" class="underline hover:text-primary-foreground/80 transition-colors">Sony User Group</a>
-          </span>
-        </div>
+      <!-- 크레딧 — 하단 고정 -->
+      <div class="shrink-0 pb-3 flex flex-col items-center gap-0.5 text-[11px] text-primary-foreground/50">
+        <span>
+          made by <a href="https://github.com/korjwl1" target="_blank" rel="noopener" class="underline hover:text-primary-foreground/80 transition-colors">korjwl1</a>
+        </span>
+        <span>
+          Special thanks to <a href="https://cafe.naver.com/x1smart" target="_blank" rel="noopener" class="underline hover:text-primary-foreground/80 transition-colors">Sony User Group</a>
+        </span>
       </div>
     </div>
 
