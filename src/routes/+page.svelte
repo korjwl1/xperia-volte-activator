@@ -1,22 +1,26 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { Button } from "$lib/components/ui/button";
-  import { wizard } from "$lib/stores/wizard.svelte";
+  import { Badge } from "$lib/components/ui/badge";
+  import { wizard, type WizardView } from "$lib/stores/wizard.svelte";
   import DeviceStatusView from "$lib/views/DeviceStatusView.svelte";
   import PlanReviewView from "$lib/views/PlanReviewView.svelte";
   import BackupSelectView from "$lib/views/BackupSelectView.svelte";
   import BackupTargetView from "$lib/views/BackupTargetView.svelte";
   import RunProgressView from "$lib/views/RunProgressView.svelte";
 
-  const steps = [
+  const steps: { id: WizardView; label: string }[] = [
     { id: "device", label: "디바이스" },
-    { id: "plan", label: "계획" },
+    { id: "plan", label: "계획 확인" },
     { id: "backup-select", label: "백업 선택" },
     { id: "backup-target", label: "저장 위치" },
     { id: "run", label: "실행" },
   ];
+
   const stepIndex = $derived(steps.findIndex((s) => s.id === wizard.view));
-  const showBackupSteps = $derived(wizard.view === "backup-select" || wizard.view === "backup-target" || wizard.view === "run");
+  const showBackupSteps = $derived(
+    wizard.view === "backup-select" || wizard.view === "backup-target" || wizard.hasWipeRoute,
+  );
 
   const nextLabel = $derived(
     wizard.view === "device" ? "작업 시작"
@@ -28,7 +32,7 @@
     wizard.view === "device" ? wizard.device !== null
     : wizard.view === "plan" ? true
     : wizard.view === "backup-select" ? wizard.anyChecked
-    : wizard.backupPath.length > 0 && wizard.backupPath.trim().length > 0,
+    : wizard.backupPath.trim().length > 0,
   );
 
   function onNext() {
@@ -40,55 +44,93 @@
     }
   }
 
+  function gotoStep(id: WizardView) {
+    // 사이드바는 현재까지 도달한 단계만 이동 허용 (뒤로가기 + 현재)
+    wizard.view = id;
+  }
+
   onMount(() => {
     wizard.refreshDevice();
   });
 </script>
 
-<div class="min-h-screen flex flex-col">
-  <header class="border-b px-6 py-3 flex items-center justify-between">
-    <div class="flex items-center gap-3">
-      <span class="font-semibold">xperia-volte-activator</span>
-      <span class="text-xs text-muted-foreground">mock 모드 · 프론트 개발 단계</span>
-    </div>
-    <nav class="flex items-center gap-1 text-xs">
-      {#each steps as s, i}
-        {#if s.id !== "backup-select" && s.id !== "backup-target" || showBackupSteps}
-          <span class="px-2 py-1 rounded-md {i === stepIndex ? 'bg-primary text-primary-foreground' : i < stepIndex ? 'text-muted-foreground' : 'text-muted-foreground/50'}">
-            {i + 1}. {s.label}
-          </span>
-        {/if}
-      {/each}
-    </nav>
+<div class="h-screen flex flex-col bg-background text-foreground overflow-hidden">
+  <!-- 타이틀 바 -->
+  <header class="h-10 shrink-0 border-b flex items-center px-3 gap-2 select-none">
+    <span class="text-sm font-semibold tracking-tight">xperia-volte-activator</span>
+    <Badge variant="outline" class="text-[10px] px-1.5 py-0">mock 모드</Badge>
+    <span class="ml-auto text-[11px] text-muted-foreground">v0.1.0 · 프론트 개발 단계 (백엔드 미연결)</span>
   </header>
 
-  <main class="flex-1 px-6 py-5 max-w-4xl w-full mx-auto">
-    {#if wizard.view === "device"}
-      <DeviceStatusView />
-    {:else if wizard.view === "plan"}
-      <PlanReviewView />
-    {:else if wizard.view === "backup-select"}
-      <BackupSelectView />
-    {:else if wizard.view === "backup-target"}
-      <BackupTargetView />
-    {:else}
-      <RunProgressView />
-    {/if}
-  </main>
+  <div class="flex-1 flex min-h-0">
+    <!-- 사이드바 -->
+    <aside class="w-60 shrink-0 border-r bg-muted/40 flex flex-col">
+      <nav class="p-2 space-y-0.5">
+        {#each steps as s, i (s.id)}
+          {#if (s.id !== "backup-select" && s.id !== "backup-target") || showBackupSteps}
+            {@const reachable = i <= stepIndex}
+            <button
+              class="w-full flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors
+                {i === stepIndex ? "bg-primary text-primary-foreground font-medium" : reachable ? "hover:bg-accent" : "opacity-40 cursor-default"}"
+              disabled={!reachable}
+              onclick={() => reachable && gotoStep(s.id)}
+            >
+              <span class="w-[18px] h-[18px] shrink-0 rounded-full border flex items-center justify-center text-[10px]
+                {i < stepIndex ? "bg-primary border-primary text-primary-foreground" : i === stepIndex ? "border-current" : "text-muted-foreground"}">
+                {i < stepIndex ? "✓" : i + 1}
+              </span>
+              {s.label}
+            </button>
+          {/if}
+        {/each}
+      </nav>
 
+      <div class="mt-auto border-t p-3 space-y-1 text-[11px] leading-snug">
+        {#if wizard.device}
+          <div class="font-medium text-[12px] text-foreground">{wizard.device.productName}</div>
+          <div class="font-mono text-muted-foreground">{wizard.device.model} · {wizard.device.serialMasked}</div>
+          <div class="text-muted-foreground">{wizard.device.firmware} · Android {wizard.device.android}</div>
+          <div class="pt-1 flex flex-wrap gap-1">
+            <Badge variant="outline" class="text-[10px] px-1.5 py-0">
+              {wizard.device.bootloader === "locked" ? "🔒 잠김" : wizard.device.bootloader === "unlocked" ? "🔓 언락" : "? 언락상태"}
+            </Badge>
+            <Badge variant="outline" class="text-[10px] px-1.5 py-0">
+              {wizard.device.volte.enabled ? "VoLTE on" : "VoLTE off"}
+            </Badge>
+          </div>
+        {:else}
+          <div class="text-muted-foreground">디바이스 대기 중…</div>
+        {/if}
+      </div>
+    </aside>
+
+    <!-- 콘텐츠 -->
+    <main class="flex-1 overflow-y-auto">
+      <div class="p-5 max-w-3xl">
+        {#if wizard.view === "device"}
+          <DeviceStatusView />
+        {:else if wizard.view === "plan"}
+          <PlanReviewView />
+        {:else if wizard.view === "backup-select"}
+          <BackupSelectView />
+        {:else if wizard.view === "backup-target"}
+          <BackupTargetView />
+        {:else}
+          <RunProgressView />
+        {/if}
+      </div>
+    </main>
+  </div>
+
+  <!-- 액션 바 -->
   {#if wizard.view !== "run"}
-    <footer class="border-t px-6 py-3 flex items-center justify-between">
-      <Button variant="ghost" disabled={wizard.view === "device"} onclick={() => {
+    <footer class="h-12 shrink-0 border-t bg-muted/40 flex items-center justify-between px-4">
+      <Button variant="ghost" size="sm" disabled={wizard.view === "device"} onclick={() => {
         if (wizard.view === "plan") wizard.view = "device";
         else if (wizard.view === "backup-select") wizard.view = "plan";
         else if (wizard.view === "backup-target") wizard.view = "backup-select";
       }}>← 이전</Button>
-      <div class="flex items-center gap-2">
-        {#if wizard.view === "backup-select" && wizard.backupSkippable}
-          <p class="text-xs text-muted-foreground">하단 "백업 건너뛰기…"는 목록 아래에서 확인할 수 있습니다</p>
-        {/if}
-        <Button disabled={!canNext} onclick={onNext}>{nextLabel}</Button>
-      </div>
+      <Button size="sm" disabled={!canNext} onclick={onNext}>{nextLabel}</Button>
     </footer>
   {/if}
 </div>
