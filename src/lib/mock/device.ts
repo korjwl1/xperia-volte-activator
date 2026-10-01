@@ -11,8 +11,8 @@ export const mockDeviceStatus: DeviceStatus = {
   bootloader: "locked",
   rooted: false,
   sims: [
-    { slot: 1, type: "physical", carrier: null, volteEnabled: false },
-    { slot: 2, type: "esim", carrier: "SK Telecom", volteEnabled: false },
+    { slot: 1, type: "physical", carrier: null, volte: "unknown" },
+    { slot: 2, type: "esim", carrier: "SK Telecom", volte: "unknown" },
   ],
   usb: {
     topology: "루트 허브 직결",

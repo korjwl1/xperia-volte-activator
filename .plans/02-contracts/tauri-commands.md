@@ -11,7 +11,11 @@ status: 진행 중 — 읽기 전용 일부 구현 (`adb_status`, `device_list`,
 
 ```ts
 invoke('adb_status') → AdbStatus                   // ✅ 구현: 연결 수단 점검 { available, mode: "adb-server"|"usb-direct"|"none", detail }
-invoke('device_list') → DeviceStatus[]            // ✅ 구현: adb_client 연결 + getprop 덤프 + which su (읽기 전용)
+invoke('device_list') → DeviceStatus[]            // ✅ 구현: adb_client 연결 + getprop 덤프 + which su + dumpsys isub (읽기 전용)
+//   - SIM type: dumpsys isub의 활성 구독 isEmbedded 실측 (구독 없는 슬롯은 1=물리/2=eSIM 가정)
+//   - SIM volte: "on"(persist.dbg.volte_avail_ovr=1) | "unknown" — 리락 후 프롭 소실, IMS 등록은 셸 조회 불가(Android 15 실측)
+//   - USB 직접 연결로 2대 이상 감지 시 셸을 열지 않고 자리표시 항목(serialMasked "USB #n")만 반환 → 다중 기기 경고
+//   - 실패 시 facade는 null 반환(빈 목록과 구분) — 프론트는 연속 2회 실패 시에만 "기기 없음" 처리
 invoke('device_status', { serial }) → DeviceStatus   // §4 상태 감지 통합 (adb 프롭/프로브) — 미구현
 // 이벤트: 'device:changed' → { serial, mode }  // WM_DEVICECHANGE/폴링 (§9-3) — 미구현
 ```
@@ -24,6 +28,15 @@ invoke('storage_sizes', { serial? }) → Record<string, number>
 // 반환 키: dcim/download/pictures/movies/music/documents/recordings/
 //          android-data/sdcard-total/sdcard-free/
 //          apk-total/apk-count/apk-sampled
+```
+
+기기 대상 명령 공통: serial 지정 시 정확히 일치하는 기기만 사용, 미지정 시 기기가 1대일 때만 실행(다른 기기로 폴백 금지).
+
+## host (PC 측, 읽기 전용)
+
+```ts
+invoke('disk_free', { path }) → number   // ✅ 구현(src-tauri/src/host.rs): 경로가 속한 드라이브 여유 바이트, 경로 없음 → 에러
+// 폴더 선택: @tauri-apps/plugin-dialog open({ directory: true }) — capability dialog:allow-open
 ```
 
 ## env (M1 — §12.6)

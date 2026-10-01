@@ -16,13 +16,28 @@
   const multiDevice = $derived(devices.length > 1);
   const showLinkPopup = $derived(linkError !== null && !linkDismissed);
 
+  let inFlight = false; // 이전 조회가 끝나기 전 다음 폴링이 겹치지 않도록
+  let failStreak = 0; // 일시적 조회 실패 1회로 기기 카드가 사라지지 않도록
+
   async function refresh() {
-    const list = await api.deviceList();
-    devices = list;
-    wizard.device = list.length === 1 ? list[0] : null;
-    if (env.length === 0) env = await api.envCheck();
-    const st = await api.adbStatus();
-    linkError = st && !st.available ? (st.detail ?? "기기 연결 기능을 사용할 수 없습니다") : null;
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const list = await api.deviceList();
+      if (list === null) {
+        failStreak++;
+        if (failStreak < 2) return;
+      } else {
+        failStreak = 0;
+      }
+      devices = list ?? [];
+      wizard.device = devices.length === 1 ? devices[0] : null;
+      if (env.length === 0) env = await api.envCheck();
+      const st = await api.adbStatus();
+      linkError = st && !st.available ? (st.detail ?? "기기 연결 기능을 사용할 수 없습니다") : null;
+    } finally {
+      inFlight = false;
+    }
   }
 
   function retryLink() {
@@ -133,11 +148,13 @@
                 </div>
                 {#if sim.carrier}
                   <div class="text-base font-semibold">{sim.carrier}</div>
-                  <div class="flex items-center gap-1.5 text-sm {sim.volteEnabled ? 'text-emerald-300' : 'opacity-70'}">
-                    {#if sim.volteEnabled}
+                  <div class="flex items-center gap-1.5 text-sm {sim.volte === 'on' ? 'text-emerald-300' : 'opacity-70'}">
+                    {#if sim.volte === "on"}
                       <CircleCheck size={14} /> VoLTE 사용 가능
-                    {:else}
+                    {:else if sim.volte === "off"}
                       VoLTE 미적용
+                    {:else}
+                      VoLTE 상태 확인 불가
                     {/if}
                   </div>
                 {:else}

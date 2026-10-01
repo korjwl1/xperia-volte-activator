@@ -61,7 +61,7 @@ export class Wizard {
 
   async refreshDevice() {
     // contract: device_list / env_check (데스크톱=실측, 브라우저 dev=mock 폴백)
-    const list = await api.deviceList();
+    const list = (await api.deviceList()) ?? [];
     this.device = list.length === 1 ? list[0] : null;
     this.env = await api.envCheck();
   }

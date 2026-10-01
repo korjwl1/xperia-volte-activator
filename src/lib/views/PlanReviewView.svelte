@@ -8,7 +8,7 @@
   import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "$lib/components/ui/tooltip";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { api } from "$lib/api";
-  import { mockBackupGroups, mockDiskFree } from "$lib/mock/apps";
+  import { mockBackupGroups } from "$lib/mock/apps";
   import type { PlanStep } from "$lib/types";
 
   let activeTab = $state<"backup" | "rooting">("backup");
@@ -34,7 +34,6 @@
       id: g.id,
       label: g.label,
       desc: g.desc,
-      checked: defaultOn,
       bytes: g.items.reduce((a: number, i) => a + (i.bytes ?? 0), 0),
       items: g.items.map((i) => ({ ...i, checked: defaultOn })),
     })),
@@ -101,10 +100,34 @@
   };
 
   const selectedBytes = $derived(backupGroups.flatMap((g) => g.items).filter((i) => i.checked).reduce((a, i) => a + (i.bytes ?? 0), 0));
-  const freeBytes = $derived(realSizes["sdcard-free"] || mockDiskFree);
-  const diskFreeGB = $derived(freeBytes / 1024 ** 3);
-  const usageRatio = $derived(freeBytes > 0 ? selectedBytes / freeBytes : 0);
-  const diskWarning = $derived(usageRatio > 0.85);
+  const anyBackupChecked = $derived(backupGroups.some((g) => g.items.some((i) => i.checked)));
+
+  // 백업 저장 위치(PC 드라이브)의 여유 공간 — 경로가 바뀔 때마다 조회
+  let freeBytes = $state<number | null>(null);
+  let freeLoading = $state(false);
+  $effect(() => {
+    const path = wizard.backupPath.trim();
+    freeBytes = null;
+    if (!path) return;
+    freeLoading = true;
+    let stale = false;
+    api.diskFree(path).then((v) => {
+      if (stale) return;
+      freeBytes = v;
+      freeLoading = false;
+    });
+    return () => {
+      stale = true;
+    };
+  });
+  const diskFreeGB = $derived((freeBytes ?? 0) / 1024 ** 3);
+  const usageRatio = $derived(freeBytes ? selectedBytes / freeBytes : 0);
+  const diskWarning = $derived(freeBytes !== null && usageRatio > 0.85);
+
+  async function pickBackupFolder() {
+    const path = await api.pickFolder();
+    if (path) wizard.backupPath = path;
+  }
 
   const backupCategories = [
     { id: "settings", label: "설정", groupIds: ["settings"] },
@@ -231,19 +254,14 @@
 
       <div class="flex-1 min-h-0 overflow-y-auto">
         {#if activeTab === "backup"}
-          {#if backupGroups.some((g) => g.checked)}
+          {#if anyBackupChecked}
             <div class="sticky top-0 z-10 mb-3 bg-background/95 backdrop-blur border-b pb-3 space-y-2">
               <div class="flex items-center gap-2.5">
                 <FolderOpen size={16} class="text-primary shrink-0" />
                 <div class="flex-1 min-w-0 rounded-lg border bg-background px-3 py-1.5 font-mono text-[12px] truncate">
                   {wizard.backupPath || "백업 위치를 지정해 주세요"}
                 </div>
-                <Button size="sm" variant="outline" class="h-7 text-xs shrink-0" onclick={async () => {
-                  const w = window as unknown as { showDirectoryPicker?: (opts: object) => Promise<FileSystemDirectoryHandle> };
-                  if (!w.showDirectoryPicker) return;
-                  const handle = await w.showDirectoryPicker({ mode: "readwrite" }).catch(() => null);
-                  if (handle) wizard.backupPath = handle.name;
-                }}>
+                <Button size="sm" variant="outline" class="h-7 text-xs shrink-0" onclick={pickBackupFolder}>
                   폴더 지정
                 </Button>
               </div>
@@ -255,9 +273,9 @@
                   {:else}
                     <b>{fmtBytes(selectedBytes)}</b>
                   {/if}
-                  {#if wizard.backupPath.trim()}
+                  {#if wizard.backupPath.trim() && (freeLoading || freeBytes !== null)}
                     / 여유 공간
-                    {#if sizesLoading}
+                    {#if freeLoading}
                       <b class="inline-block h-3.5 w-10 align-middle bg-muted rounded animate-pulse"></b>
                     {:else}
                       <b class={diskWarning ? "text-destructive" : ""}>{diskFreeGB.toFixed(0)} GB</b>

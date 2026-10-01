@@ -146,21 +146,27 @@ fn with_first_device<T>(
     serial: &Option<String>,
     mut f: impl FnMut(&mut dyn ADBDeviceExt) -> Result<T, String>,
 ) -> Result<T, String> {
-    // 1) adb 서버 모드
+    // 1) adb 서버 모드 — serial 지정 시 정확히 일치하는 기기만, 미지정 시 1대일 때만
     if let Some(mut devs) = server_devices() {
-        let idx = serial
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .and_then(|s| devs.iter().position(|(id, _)| id == s))
-            .unwrap_or(0);
+        let idx = match serial.as_deref().filter(|s| !s.is_empty()) {
+            Some(s) => devs
+                .iter()
+                .position(|(id, _)| id == s)
+                .ok_or("지정한 기기를 찾을 수 없습니다")?,
+            None if devs.len() > 1 => return Err("여러 대의 기기가 연결되어 있습니다".into()),
+            None => 0,
+        };
         let (_, dev) = devs.get_mut(idx).ok_or("연결된 기기가 없습니다")?;
         return f(dev);
     }
 
-    // 2) USB 직접 연결
+    // 2) USB 직접 연결 — 기기 구분 수단이 없으므로 1대일 때만
     let found = find_all_connected_adb_devices().map_err(|e| format!("USB 검색 실패: {e}"))?;
     if found.is_empty() {
         return Err("연결된 기기가 없습니다".into());
+    }
+    if found.len() > 1 {
+        return Err("여러 대의 기기가 연결되어 있습니다".into());
     }
     let mut guard = lock_usb(Duration::from_secs(5))?;
     ensure_usb(&mut guard)?;
@@ -256,6 +262,28 @@ fn parse_getprop(out: &str) -> HashMap<String, String> {
     map
 }
 
+/// `dumpsys isub`의 "simSlotIndex=N portIndex=P isEmbedded=E" 줄에서 슬롯별 eSIM 여부
+fn parse_embedded_slots(out: &str) -> HashMap<u8, bool> {
+    let mut map = HashMap::new();
+    for line in out.lines() {
+        let mut slot: Option<i32> = None;
+        let mut embedded: Option<bool> = None;
+        for tok in line.split_whitespace() {
+            if let Some(v) = tok.strip_prefix("simSlotIndex=") {
+                slot = v.parse().ok();
+            } else if let Some(v) = tok.strip_prefix("isEmbedded=") {
+                embedded = Some(v == "1");
+            }
+        }
+        if let (Some(s), Some(e)) = (slot, embedded) {
+            if s >= 0 {
+                map.insert((s + 1) as u8, e);
+            }
+        }
+    }
+    map
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SimOut {
@@ -263,7 +291,8 @@ pub struct SimOut {
     #[serde(rename = "type")]
     sim_type: &'static str,
     carrier: Option<String>,
-    volte_enabled: bool,
+    /// "on" = 패치 프롭 존재 / "unknown" = 판별 불가 (리락 후 프롭 소실, IMS 등록은 셸에서 조회 불가)
+    volte: &'static str,
     #[serde(rename = "_plmn")]
     plmn: String,
 }
@@ -294,8 +323,14 @@ pub struct DeviceOut {
 
 /// 기기 상태 조회 (getprop + which su — 모두 읽기 전용)
 fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<DeviceOut, String> {
-    let raw = shell(dev, "getprop; echo __SU__; which su || true")?;
-    let (props_raw, su_raw) = raw.split_once("__SU__").unwrap_or((&raw, ""));
+    let raw = shell(
+        dev,
+        "getprop; echo __SU__; which su || true; echo __ISUB__; \
+         dumpsys isub | grep -oE 'simSlotIndex=-?[0-9]+ portIndex=-?[0-9]+ isEmbedded=[01]' || true",
+    )?;
+    let (props_raw, rest) = raw.split_once("__SU__").unwrap_or((&raw, ""));
+    let (su_raw, isub_raw) = rest.split_once("__ISUB__").unwrap_or((rest, ""));
+    let embedded = parse_embedded_slots(isub_raw);
     let p = parse_getprop(props_raw);
     let get = |k: &str| p.get(k).cloned().unwrap_or_default();
 
@@ -327,11 +362,13 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
         .map(|slot| {
             let idx = (slot - 1) as usize;
             let loaded = states.get(idx).map(|s| s.trim()) == Some("LOADED");
+            // 활성 구독이 있으면 실측값, 없으면 슬롯 1=물리 / 2=eSIM (XQ-DQ44 구성) 가정
+            let is_esim = embedded.get(&slot).copied().unwrap_or(slot == 2);
             SimOut {
                 slot,
-                sim_type: if slot == 1 { "physical" } else { "esim" },
+                sim_type: if is_esim { "esim" } else { "physical" },
                 carrier: loaded.then(|| alphas[idx].clone()),
-                volte_enabled: volte_avail && loaded,
+                volte: if volte_avail && loaded { "on" } else { "unknown" },
                 plmn: numerics[idx].clone(),
             }
         })
@@ -358,6 +395,28 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
     })
 }
 
+/// 셸을 열지 않은 USB 기기의 자리표시 항목 — 다중 기기 경고 목록 표시 전용
+fn usb_placeholder(index: usize, description: &str) -> DeviceOut {
+    let name = if description.trim().is_empty() { "알 수 없는 기기" } else { description.trim() };
+    DeviceOut {
+        serial: format!("usb-{index}"),
+        serial_masked: format!("USB #{}", index + 1),
+        model: String::new(),
+        product_name: name.to_string(),
+        firmware: String::new(),
+        android: String::new(),
+        mode: "android".into(),
+        bootloader: "unknown".into(),
+        rooted: false,
+        sims: vec![],
+        usb: UsbOut {
+            topology: String::new(),
+            controller: String::new(),
+            link_speed: String::new(),
+        },
+    }
+}
+
 fn device_list_work() -> Result<Vec<DeviceOut>, String> {
     // 1) adb 서버 모드 — 준비된 기기 전부
     if let Some(devs) = server_devices() {
@@ -380,6 +439,15 @@ fn device_list_work() -> Result<Vec<DeviceOut>, String> {
     if found.is_empty() {
         eprintln!("[rust] device_list(usb) -> 0 device(s)");
         return Ok(vec![]);
+    }
+    if found.len() > 1 {
+        // USB 직접 연결은 기기별 셸을 구분해 열 수 없음 → 식별 정보만 담아 반환 (프론트 다중 기기 경고용)
+        eprintln!("[rust] device_list(usb) -> {} device(s), 다중 연결", found.len());
+        return Ok(found
+            .iter()
+            .enumerate()
+            .map(|(i, info)| usb_placeholder(i, &info.device_description))
+            .collect());
     }
     let mut guard = lock_usb(Duration::from_secs(5))?;
     ensure_usb(&mut guard)?;
@@ -530,6 +598,20 @@ pub async fn storage_sizes(serial: Option<String>) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 실기기(XQ-DQ44) `dumpsys isub` 캡처 — 슬롯 2 eSIM 활성, 비활성 구독은 simSlotIndex=-1
+    #[test]
+    fn parse_embedded_slots_real_sample() {
+        let raw = "\
+simSlotIndex=1 portIndex=0 isEmbedded=1\n\
+simSlotIndex=-1 portIndex=-1 isEmbedded=0\n\
+simSlotIndex=-1 portIndex=-1 isEmbedded=0\n\
+simSlotIndex=1 portIndex=0 isEmbedded=1\n";
+        let m = parse_embedded_slots(raw);
+        assert_eq!(m.get(&2), Some(&true));
+        assert_eq!(m.get(&1), None);
+        assert_eq!(m.len(), 1);
+    }
 
     /// 실기기(XQ-DQ44)에서 캡처한 출력 기반 — 섹션 마커/병렬 du/권한 오류 혼재/df 파싱 검증
     #[test]

@@ -13,7 +13,9 @@ status: implemented
 DeviceMode = 'android'|'bootloader-fastboot'|'fastbootd'|'flashmode'
 DeviceStatus { serialMasked, model:'XQ-DQ44', productName:'Xperia 1 V', firmware, android,
   mode, bootloader:'locked'|'unlocked'|'unknown', rooted:bool|'unknown',
-  volte { enabled, ims:'registered'|'none'|'unknown', reason? }, sims[], usb{topology,controller,speed} }
+  sims: { slot, type:'physical'|'esim', carrier|null, volte:'on'|'off'|'unknown', patchedWith? }[],
+  usb{topology,controller,speed} }
+  // patchedWith는 DIAG 리드백(M5) 전까지 판별 불가 — 표시하지 않음
 EnvCheckItem { id,label,state:'pass'|'warn'|'fail'|'info',detail,fixable:bool }
 Profile = 'clean-return'|'keep-root'|'unroot-only'
 PlanStep { id,kind,title,desc,optional,enabled,risk:'safe'|'warn'|'danger',wipe:bool,manual?:ManualId }

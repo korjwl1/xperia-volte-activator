@@ -21,24 +21,18 @@ async function invokeBackend<T>(cmd: string, args?: Record<string, unknown>): Pr
   }
 }
 
-// ── SIM 타입 정규화 (실기기 _plmn 기반) ──
-function normalizeDevice(d: DeviceStatus): DeviceStatus {
-  return {
-    ...d,
-    sims: d.sims.map((s) => ({
-      ...s,
-      type: s.slot === 1 ? "physical" : "esim", // XQ-DQ44 가정 — devices.json 확장 시 모델별 매핑
-    })),
-  };
-}
-
 export interface Api {
-  deviceList(): Promise<DeviceStatus[]>;
+  /** null = 조회 실패(일시적 오류 포함), [] = 연결된 기기 없음 */
+  deviceList(): Promise<DeviceStatus[] | null>;
   deviceStatus(serial: string): Promise<DeviceStatus | null>;
   storageSizes(): Promise<Record<string, number>>;
   /** null = 백엔드 없음(브라우저 개발). available=false → 프론트에서 연결 재시도 팝업 */
   adbStatus(): Promise<AdbStatus | null>;
   openExternal(url: string): Promise<void>;
+  /** 폴더 선택 다이얼로그 — 전체 경로 반환, 취소 시 null */
+  pickFolder(): Promise<string | null>;
+  /** 경로가 속한 PC 드라이브의 여유 공간(바이트), 조회 불가 시 null */
+  diskFree(path: string): Promise<number | null>;
   envCheck(): Promise<EnvCheckItem[]>;
   envFix(id: string): Promise<{ ok: boolean; message: string }>;
 }
@@ -46,17 +40,38 @@ export interface Api {
 const hybridApi: Api = {
   async deviceList() {
     if (inTauri()) {
-      // 데스크톱: 백엔드 실측이 유일한 소스 — 실패/미연결 시 빈 목록 (mock으로 위장하지 않음)
-      const rust = await invokeBackend<DeviceStatus[]>("device_list");
-      return (rust ?? []).map(normalizeDevice);
+      // 데스크톱: 백엔드 실측이 유일한 소스 — mock으로 위장하지 않음
+      return await invokeBackend<DeviceStatus[]>("device_list");
     }
     // 브라우저 개발(백엔드 없음): mock
     return [mockDeviceStatus];
   },
 
   async deviceStatus(serial) {
-    const devices = await this.deviceList();
+    const devices = (await this.deviceList()) ?? [];
     return devices.find((d) => d.serialMasked === serial || d.serial === serial) ?? null;
+  },
+
+  async pickFolder() {
+    if (inTauri()) {
+      try {
+        const { open } = await import("@tauri-apps/plugin-dialog");
+        const picked = await open({ directory: true, multiple: false, title: "백업 위치 선택" });
+        return typeof picked === "string" ? picked : null;
+      } catch {
+        return null;
+      }
+    }
+    // 브라우저 개발: 전체 경로를 알 수 없으므로 폴더 이름만
+    const w = window as unknown as { showDirectoryPicker?: (opts: object) => Promise<FileSystemDirectoryHandle> };
+    if (!w.showDirectoryPicker) return null;
+    const handle = await w.showDirectoryPicker({ mode: "readwrite" }).catch(() => null);
+    return handle?.name ?? null;
+  },
+
+  async diskFree(path) {
+    if (!path.trim()) return null;
+    return await invokeBackend<number>("disk_free", { path });
   },
 
   async storageSizes(): Promise<Record<string, number>> {

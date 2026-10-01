@@ -7,8 +7,9 @@ export interface SimInfo {
   slot: 1 | 2;
   type: "physical" | "esim";
   carrier: string | null; // null = 미삽입
-  volteEnabled: boolean;
-  patchedWith?: string; // 어떤 통신사 프로파일이 적용됐는지
+  /** on = 패치 프롭 존재 / off = 미적용 확인 / unknown = 판별 불가(리락 후 프롭 소실, IMS 등록은 셸 조회 불가) */
+  volte: "on" | "off" | "unknown";
+  patchedWith?: string; // 어떤 통신사 프로파일이 적용됐는지 — DIAG 리드백(M5) 전까지 미제공
 }
 
 export interface UsbInfo {
