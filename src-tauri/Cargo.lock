@@ -5479,6 +5479,7 @@ version = "0.1.0"
 dependencies = [
  "adb_client",
  "fs2",
+ "rsa",
  "serde",
  "serde_json",
  "tauri",

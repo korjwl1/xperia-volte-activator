@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Checkbox } from "$lib/components/ui/checkbox";
   import { Badge } from "$lib/components/ui/badge";
+  import { LoaderCircle } from "@lucide/svelte/icons";
 
   interface Props {
     checked: boolean;
@@ -35,7 +36,9 @@
     {/if}
   </div>
   {#if loading}
-    <span class="inline-block h-3.5 w-14 shrink-0 rounded bg-muted animate-pulse" aria-label="용량 측정 중"></span>
+    <span class="inline-flex items-center gap-1 text-[11px] text-muted-foreground shrink-0" aria-label="용량 계산 중">
+      <LoaderCircle size={12} class="animate-spin text-primary" />계산 중
+    </span>
   {:else if right}
     <span class="text-[11px] text-muted-foreground font-mono shrink-0">{right}</span>
   {/if}

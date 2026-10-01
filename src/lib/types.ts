@@ -6,8 +6,10 @@ export type TriState = boolean | "unknown";
 export interface SimInfo {
   slot: 1 | 2;
   type: "physical" | "esim";
-  carrier: string | null; // null = 미삽입
-  /** on = 패치 프롭 존재 / off = 미적용 확인 / unknown = 판별 불가(리락 후 프롭 소실, IMS 등록은 셸 조회 불가) */
+  carrier: string | null; // null = SIM 인식 안 됨 (state 참고)
+  /** gsm.sim.state 원값: LOADED / ABSENT / PIN_REQUIRED / PUK_REQUIRED / NETWORK_LOCKED / NOT_READY / CARD_IO_ERROR … */
+  state: string;
+  /** on = IMS 음성(VoLTE) 등록 / off = 미등록 / unknown = 판별 불가 — *#*#4636#*#* IMS 상태와 같은 출처 */
   volte: "on" | "off" | "unknown";
   patchedWith?: string; // 어떤 통신사 프로파일이 적용됐는지 — DIAG 리드백(M5) 전까지 미제공
 }
@@ -19,6 +21,8 @@ export interface UsbInfo {
 }
 
 export interface DeviceStatus {
+  /** adb 연결 상태: device(준비) / unauthorized(USB 디버깅 허용 대기) / offline / usb(다중 USB 자리표시) */
+  state: string;
   serial?: string; // 내부용 (UI에서는 serialMasked만 표시)
   serialMasked: string;
   model: string;
@@ -51,11 +55,20 @@ export interface AdbStatus {
 export type Profile = "clean-return" | "keep-root" | "unroot-only";
 
 export type StepKind =
-  | "backup" | "unlock" | "setup" | "root" | "efs-preflight" | "efs" | "verify"
+  | "backup" | "unlock" | "setup" | "root" | "efs-preflight" | "efs" | "verify" | "volte-props"
   | "unroot" | "relock" | "final-verify" | "restore" | "dexopt";
 
 export type ManualId =
-  | "usb-debug" | "su-grant" | "magisk-patch" | "oem-toggle" | "mode-wait" | "ims-check";
+  | "usb-debug" | "su-grant" | "magisk-patch" | "oem-toggle" | "mode-wait" | "ims-check"
+  | "unlock-code" | "firmware-select" | "backup-notice";
+
+/** 수동 개입 모달 내용 — input이 있으면 입력 완료 전까지 [완료] 비활성 */
+export interface ManualPrompt {
+  id: ManualId;
+  title: string;
+  steps: string[];
+  input?: "unlock-code" | "firmware";
+}
 
 export interface PlanStep {
   id: string;
@@ -67,16 +80,40 @@ export interface PlanStep {
   risk: "safe" | "warn" | "danger";
   wipe: boolean; // 데이터 초기화 발생
   estSec: number;
-  manual?: ManualId;
+  /** 단계 시작 시 순서대로 거치는 수동 개입 */
+  manual?: ManualId[];
 }
 
 export type CarrierId = "SKT" | "KT" | "LGU" | "LGU_V";
-export type PresetMode = "balance" | "performance";
+
+/** SIM 상태 표시 문구 — LOADED가 아닌 경우 */
+export function simStateLabel(state: string): string {
+  switch (state) {
+    case "ABSENT": return "미삽입";
+    case "PIN_REQUIRED": return "PIN 잠김";
+    case "PUK_REQUIRED": return "PUK 잠김";
+    case "NETWORK_LOCKED": return "네트워크 잠김";
+    case "NOT_READY": return "SIM 준비 중";
+    case "CARD_IO_ERROR": case "CARD_RESTRICTED": return "SIM 오류";
+    default: return "SIM 인식 불가";
+  }
+}
+
+/** SIM 슬롯별 패치 대상 — carrier null = 패치 안 함 (원본 CLI의 'N') */
+export interface SimTarget {
+  slot: 1 | 2;
+  carrier: CarrierId | null;
+}
 
 export interface VolteConfig {
-  simSlot: 1 | 2;
-  carrier: CarrierId;
-  mode: PresetMode;
+  /** EFS 프리셋은 단일(원본 CLI의 balance 프리셋) — 모드 선택 없음 */
+  sims: SimTarget[];
+}
+
+/** LG U+ 선택 시 1 V / 5 V(XQ-DQ*, XQ-DE*)는 전용 프리셋(LGU_V)으로 자동 대체 */
+export function resolveCarrier(carrier: CarrierId, model: string): CarrierId {
+  if (carrier === "LGU" && (model.includes("XQ-DQ") || model.includes("XQ-DE"))) return "LGU_V";
+  return carrier;
 }
 
 export const CARRIER_LABEL: Record<CarrierId, string> = {
@@ -94,7 +131,8 @@ export interface BackupItem {
   cls: BackupClass;
   note?: string;
   checked: boolean;
-  bytes?: number;
+  /** 고정 추정치(실측 불가 항목) — 없으면 실측값(storage_sizes)을 사용 */
+  estBytes?: number;
 }
 
 export interface BackupGroup {
@@ -104,11 +142,30 @@ export interface BackupGroup {
   items: BackupItem[];
 }
 
+/** 앱 복구 분류 — data/appRules.ts 규칙 (모든 폰 공통)
+ *  restored = 이 프로그램이 데이터를 복원(외부 데이터 존재) / relogin = 앱만 재설치, 다시 로그인 / lost = 미리 직접 옮기지 않으면 데이터 소실 */
+export type AppRecovery = "restored" | "relogin" | "lost";
+
 export interface AppItem {
   pkg: string;
   label: string;
-  cls: BackupClass;
+  recovery: AppRecovery;
   note: string;
+  /** /sdcard/Android/data/<pkg> 존재 */
+  hasExternalData: boolean;
+  /** ALLOW_BACKUP 플래그 — 구글 백업 자격(실제 백업 여부 아님) */
+  allowBackup: boolean;
+  /** 구글 백업에 실제 백업 기록이 있음 (dumpsys backup) */
+  googleBackedUp: boolean;
+}
+
+/** 설정 백업 개요 — 백엔드 settings_overview */
+export interface SettingsOverview {
+  systemCount: number;
+  secureCount: number;
+  globalCount: number;
+  restoreItems: { namespace: string; key: string; label: string; value: string }[];
+  batteryExemptApps: number;
 }
 
 export type RunStatus =
@@ -120,6 +177,8 @@ export interface RunStep {
   status: RunStatus;
   progress: number; // 0..1
   logs: string[];
+  /** 완료한 수동 개입 수 (PlanStep.manual 기준) */
+  manualDone: number;
 }
 
 export const RISK_LABEL: Record<PlanStep["risk"], string> = {
@@ -128,8 +187,3 @@ export const RISK_LABEL: Record<PlanStep["risk"], string> = {
   danger: "위험",
 };
 
-export const CLS_LABEL: Record<BackupClass, string> = {
-  full: "완전 복구",
-  partial: "불완전 (재로그인 등 필요)",
-  none: "앱 데이터 직접 복구 불가",
-};

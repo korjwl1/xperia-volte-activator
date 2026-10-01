@@ -1,96 +1,41 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { Button } from "$lib/components/ui/button";
-  import { Badge } from "$lib/components/ui/badge";
   import OptionCard from "$lib/components/OptionCard.svelte";
   import OptionCategory from "$lib/components/OptionCategory.svelte";
   import { Checkbox } from "$lib/components/ui/checkbox";
-  import { TriangleAlert, FolderOpen } from "@lucide/svelte/icons";
+  import { TriangleAlert, FolderOpen, LoaderCircle } from "@lucide/svelte/icons";
   import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "$lib/components/ui/tooltip";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { api } from "$lib/api";
-  import { mockBackupGroups } from "$lib/mock/apps";
-  import type { PlanStep } from "$lib/types";
+  import type { BackupItem } from "$lib/types";
+
+  // 선택 상태·실측 결과는 스토어에 보관 — 이전/다음으로 오가도 유지 (기기가 바뀔 때만 초기화)
+  wizard.ensureOptions();
 
   let activeTab = $state<"backup" | "rooting">("backup");
   let showPathAlert = $state(false);
 
-  const hasWipe = wizard.device?.bootloader === "locked";
-  const defaultOn = hasWipe;
+  const bootloaderKnown = $derived(wizard.device?.bootloader === "locked" || wizard.device?.bootloader === "unlocked");
+  const sizesLoading = $derived(wizard.sizesState === "loading");
 
-  // 실측 용량 조회
-  let realSizes = $state<Record<string, number>>({});
-  let sizesLoading = $state(true);
+  // ── 항목별 용량: 실측(storage_sizes) 매핑, 실측 불가 항목은 고정 추정치 ──
+  const FOLDER_IDS = ["dcim", "download", "pictures", "movies", "music", "documents", "recordings"];
+  const SIZE_KEY: Record<string, string> = { apk: "apk-total", "app-data": "android-data" };
 
-  onMount(async () => {
-    try {
-      realSizes = await api.storageSizes();
-    } finally {
-      sizesLoading = false;
+  /** 바이트 — 실측 실패/미도착이면 null */
+  function bytesOf(item: BackupItem): number | null {
+    if (item.estBytes !== undefined) return item.estBytes;
+    const s = wizard.sizes;
+    if (!s) return null;
+    if (item.id === "fs-rest") {
+      // 그 외 = 내부 저장소 전체 − Android/data − 기명 폴더 합계
+      if (!("sdcard-total" in s)) return null;
+      const named = FOLDER_IDS.reduce((a, id) => a + (s[id] ?? 0), 0);
+      return Math.max(0, s["sdcard-total"] - (s["android-data"] ?? 0) - named);
     }
-  });
-
-  let backupGroups = $state(
-    mockBackupGroups.map((g) => ({
-      id: g.id,
-      label: g.label,
-      desc: g.desc,
-      bytes: g.items.reduce((a: number, i) => a + (i.bytes ?? 0), 0),
-      items: g.items.map((i) => ({ ...i, checked: defaultOn })),
-    })),
-  );
-
-  // 실측 용량이 도착하면 업데이트
-  $effect(() => {
-    if (Object.keys(realSizes).length === 0) return;
-
-    // 앱 그룹
-    const apps = backupGroups.find((g) => g.id === "apps");
-    if (apps) {
-      const apkItem = apps.items.find((i) => i.id === "apk");
-      if (apkItem && realSizes["apk-total"]) apkItem.bytes = realSizes["apk-total"];
-      const dataItem = apps.items.find((i) => i.id === "app-data");
-      if (dataItem && realSizes["android-data"]) dataItem.bytes = realSizes["android-data"];
-      apps.bytes = apps.items.reduce((a: number, i) => a + (i.bytes ?? 0), 0);
-    }
-
-    // 파일 그룹
-    const files = backupGroups.find((g) => g.id === "files");
-    if (files) {
-      const sizeMap: Record<string, string> = {
-        dcim: "dcim", download: "download", pictures: "pictures",
-        movies: "movies", music: "music", documents: "documents",
-        recordings: "recordings",
-      };
-      let namedTotal = 0;
-      for (const item of files.items) {
-        if (item.id === "fs-rest") continue;
-        if (sizeMap[item.id] && realSizes[sizeMap[item.id]]) {
-          item.bytes = realSizes[sizeMap[item.id]];
-          namedTotal += realSizes[sizeMap[item.id]];
-        } else if (item.bytes) {
-          namedTotal += item.bytes;
-        }
-      }
-      // 그 외 = sdcard 전체 - Android/data - 기명 항목 합계
-      const fsRest = files.items.find((i) => i.id === "fs-rest");
-      const sdcardTotal = realSizes["sdcard-total"] ?? 0;
-      const androidData = realSizes["android-data"] ?? 0;
-      const nonAppData = sdcardTotal - androidData;
-      if (fsRest) {
-        fsRest.bytes = Math.max(0, nonAppData - namedTotal);
-      }
-      files.bytes = files.items.reduce((a: number, i) => a + (i.bytes ?? 0), 0);
-    }
-
-    // 설정/메시지는 예상치 (실측 불가 — 텍스트 덤프)
-    for (const g of backupGroups) {
-      if (g.id === "settings" || g.id === "sms") {
-        g.bytes = g.items.reduce((a: number, i) => a + (i.bytes ?? 0), 0);
-      }
-    }
-  });
-  let opts = $state({ restore: defaultOn, unroot: true, relock: true });
+    const key = SIZE_KEY[item.id] ?? item.id;
+    return key in s ? s[key] : null;
+  }
 
   const fmtBytes = (b: number) => {
     const gb = b / 1024 ** 3;
@@ -100,8 +45,18 @@
     return `${Math.max(1, Math.round(b / 1024))} KB`;
   };
 
-  const selectedBytes = $derived(backupGroups.flatMap((g) => g.items).filter((i) => i.checked).reduce((a, i) => a + (i.bytes ?? 0), 0));
-  const anyBackupChecked = $derived(backupGroups.some((g) => g.items.some((i) => i.checked)));
+  function rightLabel(item: BackupItem): string | undefined {
+    const b = bytesOf(item);
+    if (item.estBytes !== undefined) return `약 ${fmtBytes(item.estBytes)} (추정)`;
+    if (b !== null) return fmtBytes(b);
+    return wizard.sizesState === "failed" ? "측정 불가" : undefined;
+  }
+  const isLoading = (item: BackupItem) => sizesLoading && item.estBytes === undefined;
+
+  const anyBackupChecked = $derived(wizard.anyBackupChecked);
+  const selectedBytes = $derived(
+    wizard.groups.flatMap((g) => g.items).filter((i) => i.checked).reduce((a, i) => a + (bytesOf(i) ?? 0), 0),
+  );
 
   // 백업 저장 위치(PC 드라이브)의 여유 공간 — 경로가 바뀔 때마다 조회
   let freeBytes = $state<number | null>(null);
@@ -137,10 +92,9 @@
     { id: "sms", label: "통화 및 문자", groupIds: ["sms"] },
   ];
 
-
   function groupsFor(catId: string) {
     const cat = backupCategories.find((c) => c.id === catId);
-    return cat ? backupGroups.filter((g) => cat.groupIds.includes(g.id)) : [];
+    return cat ? wizard.groups.filter((g) => cat.groupIds.includes(g.id)) : [];
   }
   function itemsFor(catId: string) {
     return groupsFor(catId).flatMap((g) => g.items);
@@ -159,31 +113,8 @@
     return itemsFor(catId).length;
   }
 
-  const planSteps = $derived.by(() => {
-    const steps: { title: string; warn?: boolean }[] = [];
-    const d = wizard.device;
-    if (!d) return steps;
-    const hasBackup = backupGroups.flatMap((g) => g.items).some((i) => i.checked);
-    const needsUnlock = d.bootloader === "locked";
-    const effUnroot = opts.unroot || opts.relock;
-    if (hasBackup) steps.push({ title: "백업" });
-    if (needsUnlock) {
-      steps.push({ title: "개발자 옵션 준비" });
-      steps.push({ title: "부트로더 언락", warn: true });
-      steps.push({ title: "기본 설정" });
-    }
-    if (d.rooted !== true) steps.push({ title: "루팅" });
-    steps.push({ title: "연결 안정성 검사" });
-    steps.push({ title: "VoLTE 적용" });
-    steps.push({ title: "적용 확인" });
-    if (needsUnlock) {
-      if (effUnroot) steps.push({ title: "언루팅" });
-      if (opts.relock) steps.push({ title: "부트로더 리락", warn: true });
-      steps.push({ title: "최종 확인" });
-      if (opts.restore && hasBackup) steps.push({ title: "복구" });
-    }
-    return steps;
-  });
+  // 실행 순서 — 실제 실행과 같은 계획(wizard.plan)에서 파생
+  const planSteps = $derived(wizard.plan.map((s) => ({ title: s.title, warn: s.wipe })));
 
   // 실행 전 확인 모달 — 초기화 단계가 포함된 계획에서만 (AGENTS 규칙 7)
   let confirmOpen = $state(false);
@@ -194,7 +125,8 @@
 
   function confirm() {
     // 방어: 백업 선택 + 경로 미지정 or 용량 부족
-    if (anyBackupChecked && (!wizard.backupPath.trim() || diskWarning)) {
+    // 용량 계산 중에는 여유 공간 판단이 불완전하므로 실행 보류
+    if (anyBackupChecked && (!wizard.backupPath.trim() || diskWarning || sizesLoading)) {
       showPathAlert = true;
       setTimeout(() => (showPathAlert = false), 4000);
       return;
@@ -211,44 +143,7 @@
 
   function launch() {
     confirmOpen = false;
-    const anyBackup = anyBackupChecked;
-    const effUnroot = opts.unroot || opts.relock;
-    wizard.groups = mockBackupGroups.map((g) => {
-      const bgGroup = backupGroups.find((bg) => bg.id === g.id);
-      return {
-        ...g,
-        items: g.items.map((i) => {
-          const bgItem = bgGroup?.items.find((bi) => bi.id === i.id);
-          return { ...i, checked: bgItem?.checked ?? false };
-        }),
-      };
-    });
-    const steps: PlanStep[] = [];
-    const d = wizard.device;
-    if (!d) return;
-    const push = (id: string, title: string, risk: PlanStep["risk"] = "safe", wipe = false, manual?: string, estSec = 120) =>
-      steps.push({ id, kind: id as PlanStep["kind"], title, desc: "", optional: false, enabled: true, risk, wipe, estSec, manual: manual as PlanStep["manual"] });
-    const needsUnlock = d.bootloader === "locked";
-    if (anyBackup) push("backup-1", "백업", "warn", false, undefined, 1800);
-    if (needsUnlock) {
-      push("dev-options", "개발자 옵션 준비", "safe", false, "oem-toggle", 120);
-      push("unlock", "부트로더 언락", "danger", true, "mode-wait", 120);
-      push("setup-min", "기본 설정", "safe", false, "usb-debug", 300);
-    }
-    if (d.rooted !== true) push("root", "루팅", "warn", false, "magisk-patch", 600);
-    push("efs-preflight", "연결 안정성 검사", "safe", false, undefined, 60);
-    push("efs", "VoLTE 적용", "danger", false, undefined, 420);
-    push("verify", "적용 확인", "safe", false, undefined, 120);
-    if (needsUnlock) {
-      if (effUnroot) push("unroot", "언루팅", "warn", false, undefined, 180);
-      if (opts.relock) push("relock", "부트로더 리락", "danger", true, "mode-wait", 120);
-      push("final-verify", "최종 확인", "safe", false, "ims-check", 300);
-      if (opts.restore && anyBackup) push("restore", "복구", "safe", false, undefined, 1500);
-    }
-    wizard.steps = steps;
-    wizard.view = "step3";
-    wizard.prepareRun();
-    wizard.begin();
+    wizard.launch();
   }
 </script>
 
@@ -290,14 +185,19 @@
                 <span>
                   예상
                   {#if sizesLoading}
-                    <b class="inline-block h-3.5 w-14 align-middle bg-muted rounded animate-pulse"></b>
+                    <b class="inline-flex items-center gap-1 align-middle text-muted-foreground font-medium">
+                      <LoaderCircle size={12} class="animate-spin text-primary" />휴대폰 용량 계산 중…
+                    </b>
                   {:else}
                     <b>{fmtBytes(selectedBytes)}</b>
+                    {#if wizard.sizesState === "failed"}
+                      <span class="text-muted-foreground">(측정 불가 항목 제외)</span>
+                    {/if}
                   {/if}
                   {#if wizard.backupPath.trim() && (freeLoading || freeBytes !== null)}
                     / 여유 공간
                     {#if freeLoading}
-                      <b class="inline-block h-3.5 w-10 align-middle bg-muted rounded animate-pulse"></b>
+                      <b class="inline-flex items-center align-middle"><LoaderCircle size={12} class="animate-spin text-primary" /></b>
                     {:else}
                       <b class={diskWarning ? "text-destructive" : ""}>{diskFreeGB.toFixed(0)} GB</b>
                     {/if}
@@ -324,8 +224,8 @@
                     checked={item.checked}
                     label={item.label}
                     onToggle={(v) => (item.checked = v)}
-                    right={item.bytes ? fmtBytes(item.bytes) : undefined}
-                    loading={sizesLoading && (cat.id === "apps" || cat.id === "files")}
+                    right={rightLabel(item)}
+                    loading={isLoading(item)}
                   />
                 {/each}
               </div>
@@ -336,45 +236,49 @@
 
           <div class="space-y-1.5">
             <OptionCard
-              checked={opts.restore}
+              checked={wizard.opts.restore}
               label="복구 자동 실행"
               desc="모든 작업 완료 후 백업한 데이터를 자동으로 복원합니다"
-              onToggle={(v) => (opts.restore = v)}
+              onToggle={(v) => (wizard.opts.restore = v)}
             />
           </div>
 
         {:else}
-          {#if wizard.device?.bootloader === "locked"}
+          {#if bootloaderKnown}
             <div class="mb-3 px-1 text-[11px] text-muted-foreground">
-              부트로더 언락 · 루팅 · VoLTE 적용은 자동으로 진행됩니다
+              {#if wizard.device?.bootloader === "locked"}
+                부트로더 언락 · 루팅 · VoLTE 적용은 자동으로 진행됩니다
+              {:else if wizard.device?.rooted === true}
+                이미 언락·루팅되어 있어 VoLTE 적용만 자동으로 진행됩니다
+              {:else}
+                이미 언락되어 있어 루팅 · VoLTE 적용만 자동으로 진행됩니다
+              {/if}
             </div>
             <div class="h-px bg-border mb-3"></div>
             <div class="space-y-1.5">
               <OptionCard
-                checked={opts.unroot}
+                checked={wizard.opts.unroot}
                 label="언루팅"
                 desc="시스템을 원래대로 되돌립니다 — 리락하려면 필요합니다"
-                onToggle={(v) => (opts.unroot = v)}
+                onToggle={(v) => (wizard.opts.unroot = v)}
               />
               <OptionCard
-                checked={opts.relock}
+                checked={wizard.opts.relock}
                 label="부트로더 리락"
                 desc="기기가 다시 초기화됩니다"
-                onToggle={(v) => (opts.relock = v)}
-                badge={opts.relock ? "초기화" : undefined}
+                onToggle={(v) => (wizard.opts.relock = v)}
+                badge={wizard.opts.relock ? "초기화" : undefined}
                 badgeVariant="destructive"
               />
             </div>
-            {#if !opts.unroot && opts.relock}
+            {#if !wizard.opts.unroot && wizard.opts.relock}
               <div class="mt-2 rounded-lg bg-warning-container/60 px-4 py-2 text-xs text-warning">
                 리락하려면 언루팅이 필요합니다 — 언루팅이 자동으로 포함됩니다
               </div>
             {/if}
           {:else}
             <div class="px-1 text-[11px] text-muted-foreground">
-              {wizard.device?.rooted === true
-                ? "이미 루팅되어 있어 언락/루팅 단계를 건너뜁니다. VoLTE 적용만 진행됩니다."
-                : "루팅 후 VoLTE 적용이 진행됩니다."}
+              부트로더 상태를 확인할 수 없어 루팅 · VoLTE 적용만 진행됩니다
             </div>
           {/if}
         {/if}
@@ -424,6 +328,8 @@
     <div class="shrink-0 bg-danger-container px-6 py-2 text-xs text-destructive font-medium">
       {#if !wizard.backupPath.trim()}
         백업 위치를 지정해 주세요
+      {:else if sizesLoading}
+        휴대폰 용량 계산이 끝난 뒤 실행해 주세요
       {:else}
         디스크 여유 공간이 부족합니다 — 백업 항목을 줄이거나 다른 위치를 지정해 주세요
       {/if}

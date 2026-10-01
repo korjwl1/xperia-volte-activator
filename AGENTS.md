@@ -9,6 +9,7 @@ Xperia VoLTE 활성화 통합 도구. Tauri 2 + SvelteKit 2 + Svelte 5 + TypeScr
 - **읽기 전용·무해한 명령**(기기 감지, 용량 조회 등)은 프론트와 연동해 실제로 동작하는 것을 눈으로 확인하며 작성해도 된다. 이때 `.plans/02-contracts/tauri-commands.md`에 계약을 추가한다.
 - mock은 백엔드가 없어도 프론트가 동작하도록 유지한다 (연동 실패 시 mock 폴백).
 - Rust 설치 완료 — `pnpm.cmd tauri dev`로 데스크톱 윈도우 테스트 가능하다.
+- 예외(사용자 승인 2026-10-02): USB 직접 연결용 ADB 인증 키를 앱 데이터 폴더에 1회 생성·저장한다 (표준 ~/.android/adbkey가 있으면 그것을 사용).
 - 기기 통신은 `adb_client` 크레이트(ADB 프로토콜 순수 Rust) — 실행 중인 adb 서버 재사용 → USB 직접 연결 폴백. adb 바이너리 설치/PATH 탐색 불필요. adb 바이너리를 직접 실행하는 코드는 금지.
 
 ## 필수 작업 규칙

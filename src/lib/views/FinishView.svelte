@@ -9,6 +9,9 @@
   const failed = $derived(wizard.runSteps.filter((s) => s.status === "failed").length);
   const skipped = $derived(wizard.runSteps.filter((s) => s.status === "skipped").length);
   const allOk = $derived(failed === 0);
+  // 백업 단계가 실제로 완료된 경우에만 "백업 보관 중" 표시
+  const backedUp = $derived(wizard.runSteps.some((s) => s.id === "backup" && s.status === "done"));
+  let restoreAck = $state(false);
 </script>
 
 <div class="flex-1 overflow-y-auto flex">
@@ -36,15 +39,16 @@
       </CardContent>
     </Card>
 
-    {#if !wizard.skipBackup && wizard.backupPath}
+    {#if backedUp && wizard.backupPath}
       <Card class="elev-1">
         <CardContent class="py-4 flex items-center gap-3">
           <HardDrive size={20} class="text-info shrink-0" />
           <div class="min-w-0 flex-1">
-            <div class="text-sm font-medium">백업 보관 중</div>
+            <div class="text-sm font-medium">{restoreAck ? "복구 완료 승인됨" : "백업 보관 중"}</div>
             <div class="text-xs text-muted-foreground font-mono truncate">{wizard.backupPath}</div>
           </div>
-          <Button size="sm" variant="outline" onclick={() => alert("(mock) 백업 승인")}>복구 완료 승인</Button>
+          <!-- mock: 승인 상태만 표시 (백업 보존 해제 backup_ack는 M3) -->
+          <Button size="sm" variant="outline" disabled={restoreAck} onclick={() => (restoreAck = true)}>복구 완료 승인</Button>
         </CardContent>
       </Card>
     {/if}

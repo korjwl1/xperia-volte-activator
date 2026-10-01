@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import { wizard } from "$lib/stores/wizard.svelte";
@@ -7,16 +6,12 @@
   import VolteConfigView from "$lib/views/VolteConfigView.svelte";
   import WarningView from "$lib/views/WarningView.svelte";
   import PlanReviewView from "$lib/views/PlanReviewView.svelte";
-  import BackupSelectView from "$lib/views/BackupSelectView.svelte";
-  import BackupTargetView from "$lib/views/BackupTargetView.svelte";
   import RunProgressView from "$lib/views/RunProgressView.svelte";
   import FinishView from "$lib/views/FinishView.svelte";
 
-  // 백업 단계 표시 여부 (step2 다음에 백업이 필요한 경우 별도 서브 뷰)
-  let backupSubView = $state<"none" | "select" | "target">("none");
-
   const canNext = $derived(
     wizard.view === "warning" ? wizard.omdAck && wizard.riskAck
+    : wizard.view === "step1" ? wizard.hasPatchTarget
     : true
   );
 
@@ -27,11 +22,7 @@
         wizard.view = "step1";
         break;
       case "step1":
-        wizard.applyVolteConfig();
-        wizard.view = "step2";
-        break;
-      case "step2":
-        wizard.confirmStep2();
+        wizard.view = "step2"; // step2의 [실행]은 뷰 내부 버튼
         break;
     }
   }
@@ -41,10 +32,6 @@
     else if (wizard.view === "step1") wizard.view = "warning";
     else if (wizard.view === "warning") wizard.view = "device";
   }
-
-  onMount(() => {
-    wizard.refreshDevice();
-  });
 </script>
 
 <div class="h-screen flex flex-col bg-background text-foreground overflow-hidden">

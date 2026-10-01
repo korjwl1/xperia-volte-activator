@@ -3,7 +3,10 @@
   import { CircleCheck, TriangleAlert, Usb, Smartphone, ArrowRight } from "@lucide/svelte/icons";
   import { api } from "$lib/api";
   import { wizard } from "$lib/stores/wizard.svelte";
-  import type { DeviceStatus, EnvCheckItem } from "$lib/types";
+  import { simStateLabel, type DeviceStatus, type EnvCheckItem } from "$lib/types";
+
+  const CAFE_URL = "https://cafe.naver.com/x1smart";
+  const GITHUB_URL = "https://github.com/korjwl1";
 
   let devices = $state<DeviceStatus[]>([]);
   let env = $state<EnvCheckItem[]>([]);
@@ -12,7 +15,10 @@
   let linkDismissed = $state(false);
   let pollTimer: ReturnType<typeof setInterval> | undefined;
 
-  const device = $derived(devices.length === 1 ? devices[0] : null);
+  // 준비 완료(device) 1대일 때만 작업 가능 — 미승인/오프라인은 안내 화면
+  const single = $derived(devices.length === 1 ? devices[0] : null);
+  const device = $derived(single?.state === "device" ? single : null);
+  const pending = $derived(single && single.state !== "device" ? single : null);
   const multiDevice = $derived(devices.length > 1);
   const showLinkPopup = $derived(linkError !== null && !linkDismissed);
 
@@ -31,7 +37,7 @@
         failStreak = 0;
       }
       devices = list ?? [];
-      wizard.device = devices.length === 1 ? devices[0] : null;
+      wizard.device = devices.length === 1 && devices[0].state === "device" ? devices[0] : null;
       if (env.length === 0) env = await api.envCheck();
       const st = await api.adbStatus();
       linkError = st && !st.available ? (st.detail ?? "기기 연결 기능을 사용할 수 없습니다") : null;
@@ -106,10 +112,10 @@
               <p class="text-sm opacity-80">{device.firmware} · Android {device.android}</p>
               <div class="flex flex-wrap gap-2 pt-1">
                 <div class="rounded-lg bg-white/15 px-3 py-1.5 text-xs font-medium">
-                  {#if device.bootloader === "locked"}🔒 부트로더 잠김{:else if device.bootloader === "unlocked"}🔓 언락{:else}확인 중{/if}
+                  {#if device.bootloader === "locked"}🔒 부트로더 잠김{:else if device.bootloader === "unlocked"}🔓 언락{:else}부트로더 확인 불가{/if}
                 </div>
                 <div class="rounded-lg bg-white/15 px-3 py-1.5 text-xs font-medium">
-                  {#if device.rooted === true}루팅됨{:else if device.rooted === false}루팅 없음{:else}확인 중{/if}
+                  {#if device.rooted === true}루팅됨{:else if device.rooted === false}루팅 미감지{:else}루팅 확인 불가{/if}
                 </div>
               </div>
             </div>
@@ -150,16 +156,18 @@
                   <div class="text-base font-semibold">{sim.carrier}</div>
                   <div class="flex items-center gap-1.5 text-sm {sim.volte === 'on' ? 'text-emerald-300' : 'opacity-70'}">
                     {#if sim.volte === "on"}
-                      <CircleCheck size={14} /> VoLTE 사용 가능
+                      <CircleCheck size={14} /> VoLTE 활성화
                     {:else if sim.volte === "off"}
-                      VoLTE 미적용
+                      VoLTE 비활성화
                     {:else}
                       VoLTE 상태 확인 불가
                     {/if}
                   </div>
                 {:else}
-                  <div class="text-base font-semibold opacity-50">미삽입</div>
-                  <div class="text-sm opacity-50">SIM을 꽂으면 자동 인식됩니다</div>
+                  <div class="text-base font-semibold opacity-50">{simStateLabel(sim.state)}</div>
+                  <div class="text-sm opacity-50">
+                    {sim.state === "ABSENT" ? "SIM을 꽂으면 자동 인식됩니다" : "폰에서 SIM 상태를 확인해 주세요"}
+                  </div>
                 {/if}
               </div>
             {/each}
@@ -180,12 +188,24 @@
       <!-- 크레딧 — 하단 absolute (공간 차지 안 함) -->
       <div class="absolute bottom-3 left-0 right-0 flex flex-col items-center gap-0.5 text-[11px] text-primary-foreground/50 pointer-events-auto">
         <span>
-          made by <a href="https://github.com/korjwl1" target="_blank" rel="noopener" class="underline hover:text-primary-foreground/80 transition-colors">korjwl1</a>
+          made by <button type="button" onclick={() => api.openExternal(GITHUB_URL)} class="underline hover:text-primary-foreground/80 transition-colors">korjwl1</button>
         </span>
         <span>
-          Special thanks to <a href="https://cafe.naver.com/x1smart" target="_blank" rel="noopener" class="underline hover:text-primary-foreground/80 transition-colors">Sony User Group</a>
+          Special thanks to <button type="button" onclick={() => api.openExternal(CAFE_URL)} class="underline hover:text-primary-foreground/80 transition-colors">Sony User Group</button>
         </span>
       </div>
+    </div>
+
+  {:else if pending}
+    <div class="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center">
+      <Smartphone size={48} class="text-muted-foreground/30" />
+      {#if pending.state === "unauthorized"}
+        <p class="text-muted-foreground text-lg font-medium">USB 디버깅 허용을 기다리는 중입니다</p>
+        <p class="text-sm text-muted-foreground">폰 화면에 뜬 'USB 디버깅을 허용하시겠습니까?'에서 허용을 눌러 주세요</p>
+      {:else}
+        <p class="text-muted-foreground text-lg font-medium">기기와 통신할 수 없습니다</p>
+        <p class="text-sm text-muted-foreground">USB 케이블을 뽑았다가 다시 연결해 주세요</p>
+      {/if}
     </div>
 
   {:else}

@@ -4,8 +4,16 @@
   import { Switch } from "$lib/components/ui/switch";
   import { Label } from "$lib/components/ui/label";
   import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert";
-  import { Play, Pause, Square, Usb, ChevronsRight } from "@lucide/svelte/icons";
+  import { Play, Pause, Square, Usb, ChevronsRight, ExternalLink } from "@lucide/svelte/icons";
   import { wizard } from "$lib/stores/wizard.svelte";
+  import { api } from "$lib/api";
+  import { LINKS } from "$lib/data/links";
+  import BackupNotice from "$lib/components/BackupNotice.svelte";
+
+  async function pickFirmware() {
+    const dir = await api.pickFolder();
+    if (dir) wizard.firmwareDir = dir;
+  }
 
   let consoleEl: HTMLDivElement | undefined = $state();
 
@@ -69,7 +77,7 @@
             {#if wizard.running}
               <Button size="sm" variant="outline" onclick={() => wizard.pause()}><Pause size={13} class="mr-1" />일시정지</Button>
             {:else}
-              <Button size="sm" onclick={() => wizard.begin()}><Play size={13} class="mr-1" />{wizard.runSteps.some((s) => s.status !== "pending") ? "이어서" : "실행"}</Button>
+              <Button size="sm" disabled={wizard.usbError} onclick={() => wizard.begin()}><Play size={13} class="mr-1" />{wizard.runSteps.some((s) => s.status !== "pending") ? "이어서" : "실행"}</Button>
             {/if}
             <Button size="sm" variant="destructive" onclick={() => wizard.abort()}><Square size={12} class="mr-1" />중단</Button>
           {:else}
@@ -107,8 +115,10 @@
   </Card>
 </div>
 
-<!-- 수동 개입 모달 -->
-{#if wizard.manualCurrent}
+<!-- 수동 개입 모달 (백업 직전 안내는 전용 화면) -->
+{#if wizard.manualCurrent?.id === "backup-notice"}
+  <BackupNotice />
+{:else if wizard.manualCurrent}
   <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" role="dialog">
     <Card class="w-full max-w-lg elev-3">
       <CardHeader>
@@ -123,9 +133,40 @@
             </li>
           {/each}
         </ol>
+        {#if wizard.manualCurrent.input === "unlock-code"}
+          <div class="space-y-2">
+            <Button variant="outline" size="sm" onclick={() => api.openExternal(LINKS.unlock)}>
+              <ExternalLink size={13} class="mr-1" />언락 코드 발급 사이트 열기
+            </Button>
+            <input
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              class="w-full rounded-lg border bg-background px-3 py-2 font-mono text-[13px] outline-none focus:ring-1 focus:ring-ring"
+              placeholder="언락 코드 붙여넣기"
+              bind:value={wizard.unlockCode}
+            />
+          </div>
+        {:else if wizard.manualCurrent.input === "firmware"}
+          <p class="text-[11px] text-muted-foreground">
+            {wizard.partition
+              ? `이 기기(${wizard.device?.model})는 ${wizard.partition} 파티션을 사용합니다 — 폴더 안에 ${wizard.partition}_*.sin 파일이 있어야 합니다`
+              : "이 기종의 대상 파티션(init_boot / boot)은 아직 확인되지 않았습니다"}
+          </p>
+          <div class="flex items-center gap-2">
+            <div class="flex-1 min-w-0 rounded-lg border bg-background px-3 py-1.5 font-mono text-[12px] truncate">
+              {wizard.firmwareDir || "펌웨어 폴더를 선택해 주세요"}
+            </div>
+            <Button variant="outline" size="sm" class="shrink-0" onclick={pickFirmware}>폴더 선택</Button>
+          </div>
+        {/if}
         <div class="flex items-center justify-between">
-          <span class="text-[11px] text-muted-foreground">완료하면 자동으로 다음 단계로 진행됩니다</span>
-          <Button onclick={() => wizard.ackManual()}>폰에서 완료했어요</Button>
+          <span class="text-[11px] text-muted-foreground">
+            {wizard.manualCurrent.input ? "입력을 마치면 다음 단계로 진행됩니다" : "완료하면 자동으로 다음 단계로 진행됩니다"}
+          </span>
+          <Button disabled={!wizard.manualInputReady} onclick={() => wizard.ackManual()}>
+            {wizard.manualCurrent.input ? "입력 완료" : "폰에서 완료했어요"}
+          </Button>
         </div>
       </CardContent>
     </Card>
