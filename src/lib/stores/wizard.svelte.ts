@@ -4,7 +4,7 @@ import { api } from "$lib/api";
 import { mockBackupGroups } from "$lib/mock/apps";
 import { buildPlan } from "$lib/mock/plan";
 
-export type WizardView = "device" | "step1" | "step2" | "step3" | "step4";
+export type WizardView = "device" | "warning" | "step1" | "step2" | "step3" | "step4";
 
 export const MACRO_STEPS = [
   { id: 1, view: "step1" as const, label: "SIM 및 통신사 선택" },
@@ -41,6 +41,9 @@ export class Wizard {
   groups: BackupGroup[] = $state([]);
   backupPath = $state("");
   skipBackup = $state(false);
+  // 경고 페이지 동의 (뒤로 왔다 다시 와도 유지, 처음으로 가면 초기화)
+  omdAck = $state(false);
+  riskAck = $state(false);
   lastDepNotice = $state("");
 
   // 실행 상태
@@ -240,6 +243,8 @@ export class Wizard {
     this.running = false;
     this.backupPath = "";
     this.skipBackup = false;
+    this.omdAck = false;
+    this.riskAck = false;
     this.cursor = 0;
   }
 

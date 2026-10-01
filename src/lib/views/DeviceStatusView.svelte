@@ -56,7 +56,7 @@
   });
 
   function start() {
-    wizard.view = "step1";
+    wizard.view = "warning";
   }
 </script>
 

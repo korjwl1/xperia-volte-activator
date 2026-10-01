@@ -28,7 +28,15 @@ status: implemented (프론트(mock) 기준)
 - 백업 2단계(선택/위치)는 초기화 루트가 있는 계획에서만 노출
 - 테마: 시스템 prefers-color-scheme 자동 (강제 없음)
 
-## 위자드 흐름 (plan.md §3-1)
+## 현재 흐름 (사용자 지시 반영 — 아래 구 흐름보다 우선)
+
+```
+device(1페이지, 풀스크린) → warning(OMD 확인·초기화 경고·책임 동의)
+→ step1 SIM 및 통신사 선택 → step2 작업 옵션 선택(백업 및 복구 / 루팅 탭 + 실행 순서)
+→ step3 VoLTE 패치 진행 → step4 점검 및 마무리
+```
+
+## 위자드 흐름 (plan.md §3-1, 구 설계)
 
 ```
 ① DeviceStatus (감지/상태/환경검사)
