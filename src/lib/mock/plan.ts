@@ -30,6 +30,7 @@ export function buildPlan(device: DeviceStatus | null, config: VolteConfig, over
   // 1. 언락이 필요한 경우 백업 먼저
   if (needsUnlock) {
     steps.push({ id: "backup-1", kind: "backup", title: "백업", desc: "사진·앱·설정을 PC에 저장합니다", optional: true, risk: "warn", estSec: 1800 });
+    steps.push({ id: "dev-options", kind: "setup", title: "개발자 옵션 준비", desc: "OEM 잠금 해제와 USB 디버깅 활성화", risk: "safe", estSec: 120, manual: "oem-toggle" });
     steps.push({ id: "unlock", kind: "unlock", title: "부트로더 언락", desc: "기기가 초기화됩니다", risk: "danger", wipe: true, estSec: 120, manual: "mode-wait" });
     steps.push({ id: "setup-min", kind: "setup", title: "기본 설정", desc: "재부팅 후 구글 계정 로그인 및 USB 디버깅 활성화", risk: "safe", estSec: 300, manual: "usb-debug" });
   }

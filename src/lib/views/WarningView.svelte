@@ -3,7 +3,7 @@
   import { Checkbox } from "$lib/components/ui/checkbox";
   import { Signal, TriangleAlert, OctagonX } from "@lucide/svelte/icons";
   import { wizard } from "$lib/stores/wizard.svelte";
-  import { omdInfo } from "$lib/data/omd";
+  import { omdInfo, omdCommonGuide } from "$lib/data/omd";
 </script>
 
 <div class="flex-1 overflow-y-auto flex">
@@ -20,23 +20,25 @@
         </CardDescription>
       </CardHeader>
       <CardContent class="space-y-3">
+        <p class="text-[13px] leading-relaxed">{omdCommonGuide}</p>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {#each omdInfo as o (o.carrier)}
             <div class="rounded-xl border p-4 space-y-2">
               <div class="text-sm font-bold">{o.label}</div>
               <div class="space-y-1">
-                {#each o.codes as c (c.code)}
+                {#each o.codes as c (c.net)}
                   <div class="text-[11px]">
-                    <span class="text-muted-foreground">{c.use}</span>
+                    <span class="text-muted-foreground">{c.net}</span>
                     <div class="font-mono text-[12px] font-medium break-all">{c.code}</div>
                   </div>
                 {/each}
               </div>
-              <div class="text-[11px] text-muted-foreground leading-relaxed">{o.how}</div>
-              {#if o.note}
-                <div class="text-[11px] text-warning leading-relaxed">{o.note}</div>
-              {/if}
             </div>
+          {/each}
+        </div>
+        <div class="space-y-0.5">
+          {#each omdInfo.filter((o) => o.footnote) as o (o.carrier)}
+            <p class="text-[11px] text-muted-foreground leading-relaxed">* {o.footnote}</p>
           {/each}
         </div>
         <label class="flex items-center gap-2.5 rounded-lg border px-4 py-2.5 cursor-pointer {wizard.omdAck ? 'border-primary/30 bg-primary/5' : 'border-border'}">

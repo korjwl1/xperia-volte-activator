@@ -4,6 +4,7 @@
   import { Badge } from "$lib/components/ui/badge";
   import OptionCard from "$lib/components/OptionCard.svelte";
   import OptionCategory from "$lib/components/OptionCategory.svelte";
+  import { Checkbox } from "$lib/components/ui/checkbox";
   import { TriangleAlert, FolderOpen } from "@lucide/svelte/icons";
   import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "$lib/components/ui/tooltip";
   import { wizard } from "$lib/stores/wizard.svelte";
@@ -167,6 +168,7 @@
     const effUnroot = opts.unroot || opts.relock;
     if (hasBackup) steps.push({ title: "백업" });
     if (needsUnlock) {
+      steps.push({ title: "개발자 옵션 준비" });
       steps.push({ title: "부트로더 언락", warn: true });
       steps.push({ title: "기본 설정" });
     }
@@ -183,15 +185,33 @@
     return steps;
   });
 
+  // 실행 전 확인 모달 — 초기화 단계가 포함된 계획에서만 (AGENTS 규칙 7)
+  let confirmOpen = $state(false);
+  let wipeAck = $state(false);
+  let noBackupAck = $state(false);
+  const wipeStepTitles = $derived(planSteps.filter((s) => s.warn).map((s) => s.title));
+  const canLaunch = $derived(wipeAck && (anyBackupChecked || noBackupAck));
+
   function confirm() {
     // 방어: 백업 선택 + 경로 미지정 or 용량 부족
-    const anyBackup = backupGroups.flatMap((g) => g.items).some((i) => i.checked);
-    if (anyBackup && (!wizard.backupPath.trim() || diskWarning)) {
+    if (anyBackupChecked && (!wizard.backupPath.trim() || diskWarning)) {
       showPathAlert = true;
       setTimeout(() => (showPathAlert = false), 4000);
       return;
     }
     showPathAlert = false;
+    if (wipeStepTitles.length > 0) {
+      wipeAck = false;
+      noBackupAck = false;
+      confirmOpen = true;
+      return;
+    }
+    launch();
+  }
+
+  function launch() {
+    confirmOpen = false;
+    const anyBackup = anyBackupChecked;
     const effUnroot = opts.unroot || opts.relock;
     wizard.groups = mockBackupGroups.map((g) => {
       const bgGroup = backupGroups.find((bg) => bg.id === g.id);
@@ -211,6 +231,7 @@
     const needsUnlock = d.bootloader === "locked";
     if (anyBackup) push("backup-1", "백업", "warn", false, undefined, 1800);
     if (needsUnlock) {
+      push("dev-options", "개발자 옵션 준비", "safe", false, "oem-toggle", 120);
       push("unlock", "부트로더 언락", "danger", true, "mode-wait", 120);
       push("setup-min", "기본 설정", "safe", false, "usb-debug", 300);
     }
@@ -414,3 +435,42 @@
     <Button size="sm" onclick={confirm}>실행</Button>
   </footer>
 </div>
+
+<!-- 실행 전 확인 모달 — 초기화 단계 포함 시 (백업 미선택이면 추가 확인) -->
+{#if confirmOpen}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6" role="dialog">
+    <div class="w-full max-w-md rounded-2xl border-2 border-destructive/40 bg-background elev-3 p-6 space-y-4">
+      <div class="flex items-center gap-3">
+        <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-danger-container text-destructive">
+          <TriangleAlert size={20} />
+        </span>
+        <div class="space-y-0.5">
+          <h2 class="text-base font-semibold">핸드폰 데이터가 초기화됩니다</h2>
+          <p class="text-xs text-muted-foreground">실행 순서에 아래 초기화 단계가 포함되어 있습니다</p>
+        </div>
+      </div>
+      <ul class="space-y-1 text-[13px]">
+        {#each wipeStepTitles as t (t)}
+          <li class="flex items-center gap-2 text-destructive"><TriangleAlert size={12} class="shrink-0" />{t}</li>
+        {/each}
+      </ul>
+      <label class="flex items-center gap-2.5 rounded-lg border px-4 py-2.5 cursor-pointer {wipeAck ? 'border-destructive/40 bg-danger-container/40' : 'border-border'}">
+        <Checkbox checked={wipeAck} onCheckedChange={(v: boolean | "indeterminate") => (wipeAck = v === true)} />
+        <span class="text-[13px] font-medium">데이터가 초기화되는 것을 확인했습니다</span>
+      </label>
+      {#if !anyBackupChecked}
+        <div class="rounded-lg bg-danger-container/60 px-4 py-2 text-xs text-destructive">
+          백업 항목이 선택되지 않았습니다. 초기화된 데이터는 복구할 수 없습니다.
+        </div>
+        <label class="flex items-center gap-2.5 rounded-lg border px-4 py-2.5 cursor-pointer {noBackupAck ? 'border-destructive/40 bg-danger-container/40' : 'border-border'}">
+          <Checkbox checked={noBackupAck} onCheckedChange={(v: boolean | "indeterminate") => (noBackupAck = v === true)} />
+          <span class="text-[13px] font-medium">백업 없이 진행합니다</span>
+        </label>
+      {/if}
+      <div class="flex justify-end gap-2">
+        <Button variant="outline" size="sm" onclick={() => (confirmOpen = false)}>취소</Button>
+        <Button variant="destructive" size="sm" disabled={!canLaunch} onclick={launch}>실행</Button>
+      </div>
+    </div>
+  </div>
+{/if}

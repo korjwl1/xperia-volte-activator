@@ -14,6 +14,14 @@ export const MACRO_STEPS = [
 ] as const;
 
 const MANUAL_TEXT: Record<string, { title: string; steps: string[] }> = {
+  "oem-toggle": {
+    title: "개발자 옵션 준비",
+    steps: [
+      "설정 > 휴대전화 정보에서 빌드번호를 개발자 옵션이 활성화될 때까지 연속으로 터치",
+      "설정 > 시스템 > 개발자 옵션에서 OEM 잠금 해제와 USB 디버깅 활성화",
+      "PC 연결 시 폰 화면에서 USB 디버깅 '허용' 선택",
+    ],
+  },
   "mode-wait": {
     title: "부트로더 모드 진입 대기",
     steps: ["폰에서 재부팅 후 파란색 LED(부트로더) 확인", "USB 연결 유지", "자동 감지되면 다음 단계로 진행됩니다"],

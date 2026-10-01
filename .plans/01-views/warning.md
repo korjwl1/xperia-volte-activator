@@ -7,7 +7,8 @@ status: implemented (정적 안내, 백엔드 호출 없음)
 원본 CLI의 시작 동의 화면(agreement)을 계승 + OMD 사전 등록 확인을 추가 (사용자 지시 2026-10-02).
 
 ## 표시 내용
-1. **OMD 등록 확인** — 3사(SKT/KT/LG U+) 카드: OMD 코드, 등록 방법, 주의사항
+1. **OMD 등록 확인** — 상단 공통 안내(114에 OMD 등록 요청) → 3사(SKT/KT/LG U+) 카드: 5G/LTE별 OMD 코드만
+   → 카드 아래 `*` 각주로 통신사 전용 안내(SKT 세컨폰, LG U+ 자동 등록)
    - 데이터: `src/lib/data/omd.ts` (⚠ 임시값, `OMD_VERIFIED=false` — 사용자 검증 후 이 파일만 수정)
    - 체크: "사용할 SIM의 OMD 등록을 완료했습니다" → `wizard.omdAck`
 2. **데이터 초기화 경고** — 언락/리락 시 초기화, 백업해도 복구 안 되는 항목(인증서·OTP 등), 백업 권장
