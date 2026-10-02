@@ -13,7 +13,8 @@ status: implemented (mock 시뮬레이션)
 - 위험 단계 확인 게이트: 언락/리락 실행 전 모달 확인
 
 - 단계별 수동 개입은 배열로 순차 진행 (`PlanStep.manual: ManualId[]`, `RunStep.manualDone`)
-  - 부트로더 언락: [unlock-code → mode-wait] / 루팅: [firmware-select → magisk-patch]
+  - 사전 준비: [oem-toggle(필요 시) → unlock-code(잠김) → firmware-select(루팅 필요 시)] / 부트로더 언락: [mode-wait] / 루팅: [magisk-patch]
+  - oem-toggle 모달: 세 항목 상태(켜짐/꺼짐/확인 불가) + [다시 확인](기기 재조회) — 꺼진 항목이 없어야 완료 가능(확인 불가는 막지 않음)
   - VoLTE 적용: [su-grant] (원본 CLI의 DIAG 포트 개방 시 루트 권한 승인)
 - 원본 CLI 계승 단계: VoLTE 적용 후 "VoLTE 활성화 설정"(persist.dbg ims/volte/vt/wfc 4종 + 재부팅) — mock
 - [중단]: 진행 중·수동 대기 단계를 대기로 되돌리고 해당 단계의 수동 개입은 처음부터 / USB 오류 배너가 떠 있는 동안 [이어서] 비활성

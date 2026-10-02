@@ -437,6 +437,27 @@ pub struct DeviceOut {
     rooted: bool,
     sims: Vec<SimOut>,
     usb: UsbOut,
+    /// 언락 사전 조건 (판별 불가 시 None)
+    prep: PrepOut,
+}
+
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepOut {
+    /// 개발자 옵션 활성화 (settings global development_settings_enabled)
+    developer_options: Option<bool>,
+    /// USB 디버깅 (settings global adb_enabled — ADB로 연결됐다면 사실상 켜짐)
+    usb_debugging: Option<bool>,
+    /// OEM 잠금 해제 허용 (getprop sys.oem_unlock_allowed)
+    oem_unlock_allowed: Option<bool>,
+}
+
+fn flag(v: &str) -> Option<bool> {
+    match v.trim() {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
+    }
 }
 
 /// 기기 상태 조회 (getprop + which su — 모두 읽기 전용)
@@ -447,11 +468,14 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
          dumpsys isub | sed -n '/^Active subscriptions:/,/^All subscriptions:/p' \
            | grep -oE 'simSlotIndex=-?[0-9]+ portIndex=-?[0-9]+ isEmbedded=[01]' || true; echo __IMS__; \
          dumpsys activity service com.android.phone/.TelephonyDebugService \
-           | grep -E 'mPhoneId=|mMmTelCapabilities=' || true",
+           | grep -E 'mPhoneId=|mMmTelCapabilities=' || true; echo __DEV__;          settings get global development_settings_enabled; settings get global adb_enabled",
     )?;
     let (props_raw, rest) = raw.split_once("__SU__").unwrap_or((&raw, ""));
     let (su_raw, rest) = rest.split_once("__ISUB__").unwrap_or((rest, ""));
-    let (isub_raw, ims_raw) = rest.split_once("__IMS__").unwrap_or((rest, ""));
+    let (isub_raw, rest) = rest.split_once("__IMS__").unwrap_or((rest, ""));
+    let (ims_raw, dev_raw) = rest.split_once("__DEV__").unwrap_or((rest, ""));
+    let mut dev_lines = dev_raw.lines().map(|l| l.trim()).filter(|l| !l.is_empty());
+    let (dev_opt, adb_on) = (dev_lines.next().unwrap_or(""), dev_lines.next().unwrap_or(""));
     let embedded = parse_embedded_slots(isub_raw);
     let ims_voice = parse_ims_voice(ims_raw);
     let p = parse_getprop(props_raw);
@@ -531,6 +555,11 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
             controller: String::new(),
             link_speed: String::new(),
         },
+        prep: PrepOut {
+            developer_options: flag(dev_opt),
+            usb_debugging: flag(adb_on),
+            oem_unlock_allowed: flag(&get("sys.oem_unlock_allowed")),
+        },
     })
 }
 
@@ -553,6 +582,7 @@ fn placeholder(state: &str, serial: String, serial_masked: String, name: &str) -
             controller: String::new(),
             link_speed: String::new(),
         },
+        prep: PrepOut::default(),
     }
 }
 

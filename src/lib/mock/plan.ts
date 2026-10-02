@@ -1,6 +1,6 @@
 // 실행 계획 생성 — 단일 공급원. "실행 순서" 미리보기와 실제 실행이 모두 이 결과를 쓴다.
 // 순서/내용은 원본 CLI(cliInterface.py)의 언락 → 루팅 → EFS 업로드 → VoLTE 설정 → 언루팅 → 리락 흐름을 따른다.
-import type { DeviceStatus, PlanStep, VolteConfig } from "$lib/types";
+import type { DeviceStatus, ManualId, PlanStep, VolteConfig } from "$lib/types";
 import { CARRIER_LABEL } from "$lib/types";
 
 export interface PlanOptions {
@@ -11,6 +11,11 @@ export interface PlanOptions {
 
 type Seed = Omit<PlanStep, "optional" | "enabled" | "risk" | "wipe"> &
   Partial<Pick<PlanStep, "risk" | "wipe">>;
+
+/** 언락 사전 조건이 모두 켜져 있는지 (판별 불가는 미충족으로 보고 확인 단계를 둔다) */
+export function prepReady(d: DeviceStatus): boolean {
+  return d.prep.developerOptions === true && d.prep.usbDebugging === true && d.prep.oemUnlockAllowed === true;
+}
 
 export function buildPlan(
   device: DeviceStatus | null,
@@ -27,17 +32,25 @@ export function buildPlan(
   const unroot = bootloaderKnown && (opts.unroot || relock); // 리락 ⟹ 언루팅
   const wipes = needsUnlock || relock;
 
+  // 사전 준비 — 백업(수 분) 전에 사용자 입력·폰 설정을 한 번에 받는다
+  //   개발자 옵션·USB 디버깅·OEM 잠금 해제는 기기에서 읽어 모두 켜져 있으면 생략
+  const prep: ManualId[] = [];
+  if (needsUnlock && !prepReady(device)) prep.push("oem-toggle");
+  if (needsUnlock) prep.push("unlock-code");
+  if (device.rooted !== true) prep.push("firmware-select");
+  if (prep.length > 0) {
+    steps.push({ id: "prep", kind: "setup", title: "사전 준비", desc: "언락 조건 확인 · 언락 코드 · 펌웨어 지정", estSec: 300, manual: prep });
+  }
   if (hasBackup) {
     steps.push({ id: "backup", kind: "backup", title: "백업", desc: "선택한 항목을 PC에 저장합니다", risk: "warn", estSec: 1800, manual: ["backup-notice"] });
   }
   if (needsUnlock) {
-    steps.push({ id: "dev-options", kind: "setup", title: "개발자 옵션 준비", desc: "OEM 잠금 해제와 USB 디버깅 활성화", estSec: 120, manual: ["oem-toggle"] });
-    steps.push({ id: "unlock", kind: "unlock", title: "부트로더 언락", desc: "기기가 초기화됩니다", risk: "danger", wipe: true, estSec: 120, manual: ["unlock-code", "mode-wait"] });
+    steps.push({ id: "unlock", kind: "unlock", title: "부트로더 언락", desc: "기기가 초기화됩니다", risk: "danger", wipe: true, estSec: 120, manual: ["mode-wait"] });
     steps.push({ id: "setup-min", kind: "setup", title: "기본 설정", desc: "재부팅 후 초기 설정 및 USB 디버깅 활성화", estSec: 300, manual: ["usb-debug"] });
   }
   if (device.rooted !== true) {
-    // 펌웨어 지정 → (Magisk 앱 설치·이미지 전송은 자동) → 폰에서 패치 → 플래시
-    steps.push({ id: "root", kind: "root", title: "루팅", desc: "Magisk로 시스템 수정 권한 확보", risk: "warn", estSec: 600, manual: ["firmware-select", "magisk-patch"] });
+    // (펌웨어는 사전 준비에서 지정) Magisk 앱 설치·이미지 전송은 자동 → 폰에서 패치 → 플래시
+    steps.push({ id: "root", kind: "root", title: "루팅", desc: "Magisk로 시스템 수정 권한 확보", risk: "warn", estSec: 600, manual: ["magisk-patch"] });
   }
 
   const targets = config.sims

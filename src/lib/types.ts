@@ -34,6 +34,12 @@ export interface DeviceStatus {
   rooted: TriState;
   sims: SimInfo[];
   usb: UsbInfo;
+  /** 언락 사전 조건 — null = 판별 불가 */
+  prep: {
+    developerOptions: boolean | null;
+    usbDebugging: boolean | null;
+    oemUnlockAllowed: boolean | null;
+  };
 }
 
 export interface EnvCheckItem {

@@ -15,6 +15,7 @@ export const mockDeviceStatus: DeviceStatus = {
     { slot: 1, type: "physical", carrier: null, state: "ABSENT", volte: "unknown" },
     { slot: 2, type: "esim", carrier: "SK Telecom", state: "LOADED", volte: "off" },
   ],
+  prep: { developerOptions: true, usbDebugging: true, oemUnlockAllowed: true },
   usb: {
     topology: "루트 허브 직결",
     controller: "Intel 칩셋 xHCI",

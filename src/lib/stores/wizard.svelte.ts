@@ -47,11 +47,11 @@ const MANUAL_TEXT: Record<ManualId, Omit<ManualPrompt, "id">> = {
     steps: ["폰 화면에 Magisk 루트 권한 요청이 뜨면 '허용' 선택"],
   },
   "oem-toggle": {
-    title: "개발자 옵션 준비",
+    title: "언락 조건 확인",
     steps: [
-      "설정 > 휴대전화 정보에서 빌드번호를 개발자 옵션이 활성화될 때까지 연속으로 터치",
+      "개발자 옵션: 설정 > 휴대전화 정보에서 빌드번호를 개발자 옵션이 활성화될 때까지 연속으로 터치",
       "설정 > 시스템 > 개발자 옵션에서 OEM 잠금 해제와 USB 디버깅 활성화",
-      "PC 연결 시 폰 화면에서 USB 디버깅 '허용' 선택",
+      "켠 뒤 [다시 확인]을 누르면 폰에서 바로 확인합니다",
     ],
   },
   "mode-wait": {
@@ -272,6 +272,31 @@ export class Wizard {
     return this.unlockCode.trim().replace(/^0x/i, "");
   }
 
+  /** 언락 사전 조건 중 꺼져 있는 항목 (false만 — 판별 불가는 막지 않음) */
+  get prepMissing(): string[] {
+    const p = this.device?.prep;
+    if (!p) return [];
+    const out: string[] = [];
+    if (p.developerOptions === false) out.push("개발자 옵션");
+    if (p.usbDebugging === false) out.push("USB 디버깅");
+    if (p.oemUnlockAllowed === false) out.push("OEM 잠금 해제");
+    return out;
+  }
+
+  prepChecking = $state(false);
+
+  /** [다시 확인] — 기기 상태를 다시 읽어 사전 조건 갱신 (같은 기기일 때만) */
+  async recheckPrep() {
+    this.prepChecking = true;
+    try {
+      const list = await api.deviceList();
+      const d = list?.find((x) => x.state === "device" && x.serial === this.device?.serial);
+      if (d) this.device = d;
+    } finally {
+      this.prepChecking = false;
+    }
+  }
+
   /** 백업 직전 안내 동의 */
   backupNoticeAck = $state(false);
 
@@ -279,6 +304,7 @@ export class Wizard {
   get manualInputReady(): boolean {
     const m = this.manualCurrent;
     if (m?.id === "backup-notice") return this.backupNoticeAck;
+    if (m?.id === "oem-toggle") return this.prepMissing.length === 0 && !this.prepChecking;
     if (!m?.input) return true;
     if (m.input === "unlock-code") return this.normalizedUnlockCode.length > 0;
     return this.firmwareDir.trim().length > 0;

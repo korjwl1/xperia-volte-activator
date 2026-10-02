@@ -4,7 +4,7 @@
   import { Switch } from "$lib/components/ui/switch";
   import { Label } from "$lib/components/ui/label";
   import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert";
-  import { Play, Pause, Square, Usb, ChevronsRight, ExternalLink } from "@lucide/svelte/icons";
+  import { Play, Pause, Square, Usb, ChevronsRight, ExternalLink, CircleCheck, OctagonX, CircleHelp, LoaderCircle } from "@lucide/svelte/icons";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { api } from "$lib/api";
   import { LINKS } from "$lib/data/links";
@@ -133,6 +133,29 @@
             </li>
           {/each}
         </ol>
+        {#if wizard.manualCurrent.id === "oem-toggle" && wizard.device}
+          {@const p = wizard.device.prep}
+          <div class="rounded-lg border divide-y">
+            {#each [["개발자 옵션", p.developerOptions], ["USB 디버깅", p.usbDebugging], ["OEM 잠금 해제", p.oemUnlockAllowed]] as [label, on] (label)}
+              <div class="flex items-center gap-2.5 px-3 py-2 text-sm">
+                {#if on === true}
+                  <CircleCheck size={15} class="text-success shrink-0" />
+                {:else if on === false}
+                  <OctagonX size={15} class="text-destructive shrink-0" />
+                {:else}
+                  <CircleHelp size={15} class="text-muted-foreground shrink-0" />
+                {/if}
+                <span class="flex-1">{label}</span>
+                <span class="text-[11px] {on === true ? 'text-success' : on === false ? 'text-destructive' : 'text-muted-foreground'}">
+                  {on === true ? "켜짐" : on === false ? "꺼짐" : "확인 불가 — 폰에서 직접 확인"}
+                </span>
+              </div>
+            {/each}
+          </div>
+          <Button variant="outline" size="sm" disabled={wizard.prepChecking} onclick={() => wizard.recheckPrep()}>
+            {#if wizard.prepChecking}<LoaderCircle size={13} class="mr-1 animate-spin" />{/if}다시 확인
+          </Button>
+        {/if}
         {#if wizard.manualCurrent.input === "unlock-code"}
           <div class="space-y-2">
             <Button variant="outline" size="sm" onclick={() => api.openExternal(LINKS.unlock)}>
