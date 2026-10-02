@@ -35,7 +35,7 @@ export const mockBackupGroups: BackupGroup[] = [
       { id: "music", label: "Music", cls: "full", checked: true },
       { id: "documents", label: "Documents", cls: "full", checked: true },
       { id: "recordings", label: "Recordings", cls: "full", checked: true },
-      { id: "fs-rest", label: "그 외 전체 파일 시스템", cls: "full", checked: false },
+      { id: "fs-rest", label: "그 외 전체 파일 시스템", cls: "full", checked: true },
     ],
   },
   {

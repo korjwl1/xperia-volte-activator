@@ -62,11 +62,12 @@ export type Profile = "clean-return" | "keep-root" | "unroot-only";
 
 export type StepKind =
   | "backup" | "unlock" | "setup" | "root" | "efs-preflight" | "efs" | "verify" | "volte-props"
+  | "fw-download" | "fw-flash" | "fw-verify"
   | "unroot" | "relock" | "final-verify" | "restore" | "dexopt";
 
 export type ManualId =
   | "usb-debug" | "su-grant" | "magisk-patch" | "oem-toggle" | "mode-wait" | "ims-check"
-  | "unlock-code" | "firmware-select" | "backup-notice";
+  | "unlock-code" | "firmware-select" | "backup-notice" | "flash-mode";
 
 /** 수동 개입 모달 내용 — input이 있으면 입력 완료 전까지 [완료] 비활성 */
 export interface ManualPrompt {
@@ -114,6 +115,8 @@ export interface SimTarget {
 export interface VolteConfig {
   /** EFS 프리셋은 단일(원본 CLI의 balance 프리셋) — 모드 선택 없음 */
   sims: SimTarget[];
+  /** 펌웨어 목표 버전 — null 또는 설치된 버전 = 업데이트 안 함 (새 버전만 선택 가능) */
+  firmware: string | null;
 }
 
 /** LG U+ 선택 시 1 V / 5 V(XQ-DQ*, XQ-DE*)는 전용 프리셋(LGU_V)으로 자동 대체 */
@@ -163,6 +166,24 @@ export interface AppItem {
   allowBackup: boolean;
   /** 구글 백업에 실제 백업 기록이 있음 (dumpsys backup) */
   googleBackedUp: boolean;
+}
+
+/** 순정 펌웨어 부트 이미지 자동 다운로드 결과 — 백엔드 firmware_fetch */
+export interface FirmwareResult {
+  partition: string;
+  path: string;
+  version: string;
+  fingerprint: string;
+  imageBytes: number;
+  downloadedBytes: number;
+}
+
+/** 서버 펌웨어 버전 목록 — 백엔드 firmware_versions (설치된 버전 이상만) */
+export interface FirmwareVersions {
+  model: string;
+  installed: string;
+  supported: boolean;
+  versions: { version: string; android: string }[];
 }
 
 /** 설정 백업 개요 — 백엔드 settings_overview */

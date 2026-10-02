@@ -13,6 +13,8 @@ status: 진행 중 — 읽기 전용 구현 (`adb_status`, `device_list`, `stora
 ```ts
 invoke('adb_status') → AdbStatus                   // ✅ 구현: 연결 수단 점검 { available, mode: "adb-server"|"usb-direct"|"none", detail }
 invoke('device_list') → DeviceStatus[]            // ✅ 구현: adb_client 연결 + getprop 덤프 + which su + dumpsys isub + TelephonyDebugService (읽기 전용)
+//   - Xperia 전용(사용자 지시 2026-10-03): ro.product.manufacturer가 Sony가 아닌 기기는 목록에서 제외, USB 직접 연결은 VID 0x0FCE만,
+//     미승인 기기는 PC에 Sony USB 장치가 있을 때만 표시
 //   - state: "device"(준비) / "unauthorized"(USB 디버깅 허용 대기) / "offline" … — 준비 안 된 기기도 상태만 담아 반환
 //   - firmware: ro.build.id (display.id는 " release-keys" 접미어) / productName: ro.semc.product.name 우선, 없으면 모델 표
 //   - bootloader: ro.boot.flash.locked + ro.boot.vbmeta.device_state 일치 시 확정, 불일치·잠김인데 su 존재(위장 가능성)면 "unknown"
@@ -59,6 +61,51 @@ invoke('settings_overview', { serial? }) → { systemCount, secureCount, globalC
 //   relogin 안내 문구는 실제 구글 백업 기록(googleBackedUp) 유무로 구분. 공개 앱 백업 DB는 없음(2026-10 조사)
 // facade api.appClasses(): 큐레이션(mockApps) 우선 병합, 없으면 allowBackup ? 불완전 : 불가 (recovery.md 2-2)
 ```
+
+## unlock / firmware (사전 준비)
+
+```ts
+invoke('read_imei1', { serial? }) → string
+// ✅ 구현: service call iphonesubinfo 4 i32 0 s16 com.android.shell (getDeviceIdForPhone, phoneId 0 = SIM 슬롯 1)
+//   트랜잭션 번호는 Android 버전마다 다르고 공식 문서 없음 → Android 15 / XQ-DQ44 실측 호출만, 15자리+Luhn 통과 시에만 채택
+//   IMEI는 로그 금지, UI는 maskImei(앞 2·뒤 4), 전체 값은 [IMEI 복사] 클립보드에만
+invoke('firmware_versions', { serial? }) → { model, installed, supported, versions: { version, android }[] }
+// ✅ 구현: match/v2의 버전 목록 중 설치된 버전 이상만(최신순). 지원 기종 표에 없으면 supported=false
+invoke('firmware_fetch', { serial?, partition: 'init_boot'|'boot', version?, dest? }) → { partition, path, version, fingerprint, imageBytes, downloadedBytes }
+// dest: 저장 위치(사용자가 고른 폴더, 생략 시 앱 데이터 폴더) — <dest>/<model>_<version>/<partition>.img
+// 받기 전에 여유 공간 확인(.sin 크기 + 16 MiB), 부족하면 "NO_SPACE|<사유>" 오류 → 프론트는 다른 위치 선택 팝업
+// version 생략 = 설치된 버전(지문 완전 일치) / 지정 = 설치된 버전보다 새 버전만(지문 앞부분 기기·지역 일치 + 대상 버전 포함)
+// ✅ 구현(src-tauri/src/firmware.rs): Sony 배포 서버 match/v2 → APP_SW 청크 → ZIP 끝부분 Range로 목록 → update.xml 지문 = ro.build.fingerprint 확인
+//   → <partition>_*.sin만 Range로 받아 inflate·CRC → tar의 .000(ANDROID!) → 앱 데이터 폴더 firmware/<model>_<ver>/<partition>.img
+//   실측(XQ-DQ44 67.2.A.3.178): 받은 용량 1.9 MB, 1.4초, 이미지 8 MB. 지원 기종 표: XQ-DQ44 JP(식별값 조회 API 폐쇄로 직접 관리)
+//   실패(미지원 기종·서버 버전 불일치·지문 불일치·API 변경) 시 오류 문구 반환 → 프론트는 XperiFirm 폴더 직접 지정으로 폴백
+```
+조사 근거: ../tasks/research-unlock-firmware.md (언락 코드 발급은 reCAPTCHA 필수라 자동화하지 않음 — 공식 페이지를 시스템 브라우저로 열기만)
+
+## usb / 폰 화면 (사전 준비·자동 감지)
+
+```ts
+invoke('usb_modes') → { mode: 'android'|'fastboot'|'flashmode'|'other', vendorId, productId }[]
+// ✅ 구현(src-tauri/src/usbmode.rs, rusb): Sony VID 0x0FCE 장치의 디스크립터만 읽음(장치를 열지 않음)
+//   fastboot = 인터페이스 FF/42/03, android = FF/42/01, flashmode = PID 0xADDE(⚠ 실기기 미검증)
+//   실측: 일반 부팅 상태 → android(PID 0x320D)
+invoke('open_settings_screen', { serial?, screen: 'developer'|'about' }) → void
+// ✅ 구현: am start -a APPLICATION_DEVELOPMENT_SETTINGS / DEVICE_INFO_SETTINGS — 화면만 띄움(사용자 승인 2026-10-03)
+```
+
+## root (M4 — 실기기 검증된 절차, 구현은 백엔드 단계)
+
+Magisk 자동 패치 (사용자 조작 없음) — 2026-10-03 XQ-DQ44 / Android 15 / Magisk v30.7로 검증:
+1. GitHub releases API(topjohnwu/Magisk latest)에서 Magisk-v<ver>.apk 다운로드 → 앱 데이터 캐시
+2. APK에서 추출: lib/arm64-v8a/libmagiskboot.so→magiskboot, libmagiskinit.so→magiskinit, libmagisk.so→magisk,
+   libinit-ld.so→init-ld, libbusybox.so→busybox, assets/boot_patch.sh, assets/util_functions.sh, assets/stub.apk
+3. 위 파일 + 순정 `<partition>.img`(firmware_fetch 결과)를 /data/local/tmp/<작업폴더>/ 로 push, chmod 755
+4. `KEEPVERITY=true KEEPFORCEENCRYPT=true PATCHVBMETAFLAG=false RECOVERYMODE=false LEGACYSAR=false
+   ./busybox sh -o standalone ./boot_patch.sh <img>` (셸 권한, 루트 불필요) → new-boot.img
+   실측 로그: "Stock boot image detected → Patching ramdisk → Repack", 종료 코드 0
+5. new-boot.img pull → ANDROID! 매직·크기(8 MB) 확인, 원본과 해시가 달라야 함 → 폰의 작업 폴더 삭제
+6. fastboot로 <partition>_a/_b 기록(원본 CLI fastbootFlash와 동일) → 재부팅 → Magisk APK adb install
+7. 검증: su 권한 요청(사용자 허용) 후 `su -c id` = uid=0
 
 ## host (PC 측, 읽기 전용)
 

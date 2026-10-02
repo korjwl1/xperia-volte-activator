@@ -27,6 +27,12 @@ adb_client = { version = "3.2.3", default-features = false, features = ["usb"] }
 tauri-plugin-dialog = "2"
 fs2 = "0.4"
 rsa = { version = "0.9.10", features = ["pem"] }
+ureq = "2"
+flate2 = "1"
+tar = "0.4"
+crc32fast = "1"
+roxmltree = "0.20"
+rusb = { version = "0.9.4", features = ["vendored"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

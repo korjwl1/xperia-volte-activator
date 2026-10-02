@@ -13,7 +13,14 @@ status: implemented (mock 시뮬레이션)
 - 위험 단계 확인 게이트: 언락/리락 실행 전 모달 확인
 
 - 단계별 수동 개입은 배열로 순차 진행 (`PlanStep.manual: ManualId[]`, `RunStep.manualDone`)
-  - 사전 준비: [oem-toggle(필요 시) → unlock-code(잠김) → firmware-select(루팅 필요 시)] / 부트로더 언락: [mode-wait] / 루팅: [magisk-patch]
+  - 사전 준비: [oem-toggle(필요 시) → unlock-code(잠김) → firmware-select(루팅 필요 시 — 업데이트면 새 버전 이미지)] / 부트로더 언락: [mode-wait] / 루팅: [magisk-patch]
+  - 자동 감지(감지되면 바로 진행, 수동 [완료]도 가능 — 모달에 "자동 감지 중" 표시):
+    - usb-debug: 단계 도달 시 이미 연결이면 모달 없이 진행, 아니면 2초 폴링
+    - mode-wait: usb_modes에 fastboot 감지(1.5초) / flash-mode: flashmode 감지(1.5초)
+    - ims-check: device_list의 패치 대상 슬롯이 모두 VoLTE 활성화(on)면 진행(5초), 모달에 슬롯별 상태 표시
+  - oem-toggle: 모달이 열리면 폰에 개발자 옵션(꺼져 있으면 휴대전화 정보) 화면 자동 오픈 + [폰에서 설정 화면 열기]
+  - 루팅: 수동 Magisk 패치 없음 — 자동 패치(02-contracts "root" 절차), 로그로 진행 표시
+  - 펌웨어 업데이트: [flash-mode] (전원 끄고 볼륨 아래 + USB, 초록 LED) → newflasher 기록(mock) → 업데이트 확인(지문)
   - oem-toggle 모달: 세 항목 상태(켜짐/꺼짐/확인 불가) + [다시 확인](기기 재조회) — 꺼진 항목이 없어야 완료 가능(확인 불가는 막지 않음)
   - VoLTE 적용: [su-grant] (원본 CLI의 DIAG 포트 개방 시 루트 권한 승인)
 - 원본 CLI 계승 단계: VoLTE 적용 후 "VoLTE 활성화 설정"(persist.dbg ims/volte/vt/wfc 4종 + 재부팅) — mock
@@ -27,8 +34,13 @@ status: implemented (mock 시뮬레이션)
     - 앱: **실제로 백업·복구되는 앱만**(restored — 외부 데이터 존재 + 앱 데이터 백업 선택) + 태그(APK, 외부 데이터). 분류 규칙은 `data/appRules.ts`
   - 하단 고지(완전 복구 비보장, 사전 백업 권고, 책임은 사용자) + "필요한 사전 백업을 마쳤으며…" 체크 → [백업 시작] 활성 / [작업 중단]
 - 입력형 모달 (mock — 값은 스토어에만 보관)
-  - unlock-code: [언락 코드 발급 사이트 열기](Sony URL, 원본 Config.json) + 비밀번호형 입력, 원본 CLI IMEI 안내 계승. 로그에는 `0x` + 앞 3자 외 마스킹
-  - firmware-select: [폴더 선택](`api.pickFolder`) → 경로 표시. 언루팅용 순정 이미지도 같은 펌웨어에서 추출(별도 입력 없음)
+  - unlock-code: 모달이 열리면 공식 발급 페이지(opendevices.sony.net)를 시스템 브라우저로 자동 오픈 + IMEI 1 자동 읽기(read_imei1)
+    → IMEI 마스킹 표시 + [IMEI 복사] + [발급 페이지 다시 열기] + 코드 입력(비밀번호형, 16자리 hex 검증). 로그에는 `0x` + 앞 3자 외 마스킹
+  - firmware-select(사용자 지시 2026-10-03): 팝업 없이 firmware_fetch 자동 실행(로그에 진행 표시) → 성공하면 바로 다음 단계.
+    실패했을 때만 팝업 — 원인별:
+    - 저장 공간 부족(Rust 오류 접두어 `NO_SPACE|`, 받기 전에 .sin 크기 + 16 MiB로 확인): [위치 선택]으로 다른 저장 위치 → [이 위치로 다시 받기](성공 시 팝업 닫고 진행)
+    - 다운로드 실패(서버·지문 불일치·미지원 기종 등): 사유 + [다시 시도] + XperiFirm으로 받는 방법(기종·버전) + 받은 폴더 지정
+  - 언루팅용 순정 이미지도 같은 펌웨어에서 추출(별도 입력 없음)
   - 입력 전 [입력 완료] 비활성
 
 ## 인터랙션 → 계약 매핑

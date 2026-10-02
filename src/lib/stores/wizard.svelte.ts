@@ -1,15 +1,15 @@
 // 위자드 상태 머신 + 실행 시뮬레이션 러너 (mock)
-import type { AppItem, SettingsOverview, BackupGroup, DeviceStatus, EnvCheckItem, ManualId, ManualPrompt, PlanStep, RunStep, VolteConfig } from "$lib/types";
+import type { AppItem, FirmwareResult, FirmwareVersions, SettingsOverview, SimInfo, BackupGroup, DeviceStatus, EnvCheckItem, ManualId, ManualPrompt, PlanStep, RunStep, VolteConfig } from "$lib/types";
 import { api } from "$lib/api";
-import { maskSecret } from "$lib/data/links";
+import { LINKS, maskSecret } from "$lib/data/links";
 import { bootPartition } from "$lib/data/devices";
 import { mockBackupGroups } from "$lib/mock/apps";
-import { buildPlan, type PlanOptions } from "$lib/mock/plan";
+import { buildPlan, updateTarget, type PlanOptions } from "$lib/mock/plan";
 
 export type WizardView = "device" | "warning" | "step1" | "step2" | "step3" | "step4";
 
 export const MACRO_STEPS = [
-  { id: 1, view: "step1" as const, label: "SIM 및 통신사 선택" },
+  { id: 1, view: "step1" as const, label: "사전 옵션 선택" },
   { id: 2, view: "step2" as const, label: "작업 옵션 선택" },
   { id: 3, view: "step3" as const, label: "VoLTE 패치 진행" },
   { id: 4, view: "step4" as const, label: "점검 및 마무리" },
@@ -24,23 +24,19 @@ const MANUAL_TEXT: Record<ManualId, Omit<ManualPrompt, "id">> = {
     steps: [],
   },
   "unlock-code": {
-    title: "언락 코드 입력",
+    title: "언락 코드 받기",
     input: "unlock-code",
     steps: [
-      "아래 버튼으로 언락 코드 발급 사이트를 열고, 쿠키 팝업이 뜨면 Accept Optional Cookies 선택",
-      "Select your device에서 기기 모델 선택 (목록에 없는 최신 기종은 다른 최신 기종 아무거나)",
-      "IMEI 입력란에 SIM 슬롯 1번의 IMEI 입력 (설정 > 휴대전화 정보 > IMEI(SIM 슬롯 1) 또는 패키지 박스의 IMEI 1)",
-      "동의 체크 후 Submit → reCAPTCHA 수행 → 표시된 언락 코드를 복사해 아래에 붙여넣기",
+      "브라우저로 열린 Sony 언락 코드 발급 페이지에서 기기 모델을 선택합니다 (쿠키 팝업은 Accept)",
+      "IMEI 칸에 아래 [IMEI 복사]로 복사한 IMEI 1을 붙여넣습니다",
+      "동의 체크 2개 → Submit → 보안 확인(캡차) → 화면에 표시된 언락 코드를 복사해 아래에 붙여넣습니다",
     ],
   },
+  // 자동 다운로드가 실패했을 때만 표시 — 원인(공간 부족/다운로드 실패)별 안내는 화면에서 구성
   "firmware-select": {
-    title: "펌웨어 폴더 선택",
+    title: "순정 펌웨어 준비",
     input: "firmware",
-    steps: [
-      "XperiFirm 등으로 현재 기기와 같은 버전의 펌웨어를 내려받습니다",
-      "펌웨어 폴더(init_boot / boot .sin 파일이 있는 폴더)를 아래에서 선택합니다",
-      "언루팅 시 사용할 순정 이미지도 같은 펌웨어에서 추출합니다",
-    ],
+    steps: [],
   },
   "su-grant": {
     title: "루트 권한 승인",
@@ -54,13 +50,21 @@ const MANUAL_TEXT: Record<ManualId, Omit<ManualPrompt, "id">> = {
       "켠 뒤 [다시 확인]을 누르면 폰에서 바로 확인합니다",
     ],
   },
+  "flash-mode": {
+    title: "플래시 모드 진입",
+    steps: [
+      "폰 전원을 완전히 끕니다 (USB 연결 해제)",
+      "볼륨 아래 버튼을 누른 채 USB 케이블을 연결합니다 — 알림 LED가 초록색이면 플래시 모드입니다",
+      "자동 감지되면 펌웨어 기록이 시작됩니다 (사용자 데이터는 유지됩니다)",
+    ],
+  },
   "mode-wait": {
     title: "부트로더 모드 진입 대기",
-    steps: ["폰에서 재부팅 후 파란색 LED(부트로더) 확인", "USB 연결 유지", "자동 감지되면 다음 단계로 진행됩니다"],
+    steps: ["앱이 폰을 부트로더 모드로 재부팅합니다 (파란색 LED)", "USB 연결을 유지해 주세요", "부트로더 모드가 감지되면 자동으로 다음 단계로 진행됩니다"],
   },
   "usb-debug": {
     title: "USB 디버깅 승인 대기",
-    steps: ["재부팅 후 개발자 옵션 활성화", "USB 디버깅 켜기", "PC 연결 시 폰 화면에서 '허용' 선택"],
+    steps: ["재부팅 후 초기 설정을 마치고 개발자 옵션 활성화", "USB 디버깅 켜기", "PC 연결 시 폰 화면에서 '허용' 선택 — 연결이 확인되면 자동으로 진행됩니다"],
   },
   "magisk-patch": {
     title: "Magisk 부트 패치 (폰 조작)",
@@ -71,8 +75,12 @@ const MANUAL_TEXT: Record<ManualId, Omit<ManualPrompt, "id">> = {
     ],
   },
   "ims-check": {
-    title: "최종 IMS 등록 확인",
-    steps: ["폰이 완전히 부팅될 때까지 대기 (2~3분)", "전화 앱 → *#*#4636#*#* → 휴대전화 정보 → IMS 서비스 상태", "VoLTE 사용 가능으로 표시되는지 확인"],
+    title: "최종 VoLTE 확인",
+    steps: [
+      "폰이 완전히 부팅되고 통신사 신호를 잡을 때까지 기다립니다 (2~3분)",
+      "앱이 IMS(VoLTE) 등록 상태를 자동으로 확인합니다 — 등록되면 바로 다음 단계로 진행됩니다",
+      "직접 확인하려면: 전화 앱 → *#*#4636#*#* → 휴대전화 정보 → IMS 서비스 상태",
+    ],
   },
 };
 
@@ -81,6 +89,7 @@ const defaultVolteConfig = (): VolteConfig => ({
     { slot: 1, carrier: null },
     { slot: 2, carrier: null },
   ],
+  firmware: null,
 });
 
 export class Wizard {
@@ -89,9 +98,39 @@ export class Wizard {
   env: EnvCheckItem[] = $state([]);
   volteConfig = $state<VolteConfig>(defaultVolteConfig());
 
-  /** 패치할 슬롯이 하나라도 있는지 (1단계 [다음] 활성 조건) */
+  /** 패치할 슬롯이 하나라도 있는지 */
   get hasPatchTarget(): boolean {
     return this.volteConfig.sims.some((s) => s.carrier !== null);
+  }
+
+  /** 펌웨어 업데이트 대상 버전 (없으면 null) */
+  get updateVersion(): string | null {
+    return updateTarget(this.device, this.volteConfig);
+  }
+
+  /** 1단계 [다음] 활성 조건 — VoLTE 패치 또는 펌웨어 업데이트 중 하나 이상 */
+  get hasAnyTask(): boolean {
+    return this.hasPatchTarget || this.updateVersion !== null;
+  }
+
+  // ── 펌웨어 버전 (1단계 사전 옵션) ──
+  fwVersions: FirmwareVersions | null = $state(null);
+  fwVersionsState = $state<LoadState>("idle");
+  private fwVersionsFor: string | null = null;
+
+  /** 1단계 진입 시 기기당 1회 서버 버전 조회 */
+  ensureFirmwareVersions() {
+    const d = this.device;
+    if (!d) return;
+    const key = d.serial ?? d.serialMasked;
+    if (this.fwVersionsFor === key) return;
+    this.fwVersionsFor = key;
+    this.fwVersionsState = "loading";
+    void api.firmwareVersions(d.serial).then((v) => {
+      if (this.fwVersionsFor !== key) return;
+      this.fwVersions = v;
+      this.fwVersionsState = v ? "done" : "failed";
+    });
   }
 
   // 경고 페이지 동의 (뒤로 왔다 다시 와도 유지, 처음으로 가면 초기화)
@@ -100,7 +139,7 @@ export class Wizard {
 
   // ── 2단계(작업 옵션 선택) — 이전/다음 이동 시 유지, 다른 기기거나 처음으로 가면 초기화 ──
   groups: BackupGroup[] = $state([]); // 백업 항목 (항목 단위 checked)
-  opts = $state<PlanOptions>({ unroot: true, relock: true, restore: true });
+  opts = $state<PlanOptions>({ unroot: false, relock: false, restore: true });
   backupPath = $state("");
   sizes: Record<string, number> | null = $state(null); // storage_sizes 실측
   sizesState = $state<LoadState>("idle");
@@ -126,13 +165,13 @@ export class Wizard {
     const key = d.serial ?? d.serialMasked;
     if (this.optionsFor === key) return;
     this.optionsFor = key;
-    // 초기화 경로(잠긴 기기의 언락, 또는 기본 ON인 리락)가 있으면 백업 기본 전체 선택
-    const defaultOn = d.bootloader === "locked" || d.bootloader === "unlocked";
+    // 초기화 경로(VoLTE 패치를 위한 잠긴 기기의 언락)가 있으면 백업 기본 전체 선택 — 리락은 기본 해제
+    const defaultOn = this.hasPatchTarget && d.bootloader === "locked";
     this.groups = mockBackupGroups.map((g) => ({
       ...g,
-      items: g.items.map((i) => ({ ...i, checked: defaultOn && i.checked })),
+      items: g.items.map((i) => ({ ...i, checked: defaultOn })),
     }));
-    this.opts = { unroot: true, relock: true, restore: defaultOn };
+    this.opts = { unroot: false, relock: false, restore: defaultOn };
     void this.loadMeasurements(key, d.serial);
   }
 
@@ -171,7 +210,15 @@ export class Wizard {
   manualCurrent: ManualPrompt | null = $state(null);
   // 실행 중 입력값 — 언락 코드는 UI/로그에 마스킹해서만 표시
   unlockCode = $state("");
-  firmwareDir = $state("");
+  firmwareDir = $state(""); // 수동 지정(폴백)
+  imei1: string | null = $state(null); // 메모리에만 — UI는 마스킹, 로그에 남기지 않음
+  imeiState = $state<LoadState>("idle");
+  firmware: FirmwareResult | null = $state(null);
+  firmwareState = $state<LoadState>("idle");
+  firmwareError = $state("");
+  /** 자동 다운로드 실패 원인 — space: 저장 공간 부족(다른 위치 선택) / download: 받기 실패(XperiFirm 폴더 지정) */
+  firmwareFail = $state<"space" | "download" | null>(null);
+  firmwareDest = $state(""); // 공간 부족 시 사용자가 고른 저장 위치
   usbError = $state(false);
   usbErrorCount = $state(0);
   simulateUsbError = $state(false);
@@ -234,9 +281,8 @@ export class Wizard {
     if (cur.manualDone < manuals.length) {
       const id = manuals[cur.manualDone];
       cur.status = "manual-wait";
-      this.manualCurrent = { id, ...MANUAL_TEXT[id] };
       this.pause();
-      cur.logs.push(`[대기] 수동 개입: ${this.manualCurrent.title}`);
+      void this.openManual(cur, id);
       return;
     }
     cur.progress = Math.min(1, cur.progress + 0.04 + Math.random() * 0.05);
@@ -254,10 +300,13 @@ export class Wizard {
     switch (id) {
       case "backup": return `파일 복사 중… ${pct}%`;
       case "unlock": return `잠금 해제 중… ${pct}%`;
-      case "root": return `시스템 패치 중… ${pct}%`;
+      case "root": return ["Magisk 최신 버전 받는 중…", "부트 이미지·패치 도구 전송", "Magisk 패치 실행(boot_patch.sh)", "패치 결과 확인(ANDROID!·크기)", "fastboot로 패치 이미지 기록", "Magisk 앱 설치"][Math.floor(p * 6) % 6];
       case "efs-preflight": return ["USB 연결 확인", "드라이버 확인", "전원 관리 일시 해제", "연결 안정성 테스트 통과"][Math.floor(p * 4) % 4];
       case "efs": return `프로파일 적용 중… (${Math.floor(p * 46)}/46 파일)`;
       case "verify": return `무결성 검증 중… ${pct}%`;
+      case "fw-download": return `펌웨어 다운로드 중… ${pct}%`;
+      case "fw-flash": return `펌웨어 기록 중… ${pct}%`;
+      case "fw-verify": return ["재부팅 대기 중…", "버전 확인", "지문 일치 확인"][Math.floor(p * 3) % 3];
       case "volte-props": return ["VoLTE 설정 적용", "영상통화 설정 적용", "Wi-Fi 통화 설정 적용", "재부팅 중…"][Math.floor(p * 4) % 4];
       case "unroot": return `시스템 복원 중… ${pct}%`;
       case "relock": return `잠금 중… ${pct}%`;
@@ -265,6 +314,160 @@ export class Wizard {
       case "restore": return `데이터 복원 중… ${pct}%`;
       default: return `진행 ${pct}%`;
     }
+  }
+
+  /** USB 디버깅 연결·허용 상태 — 같은 기기가 adb "device" 상태로 보이면 충족 */
+  private async usbDebugReady(): Promise<boolean> {
+    const list = await api.deviceList();
+    return !!list?.some((d) => d.state === "device" && d.serial === this.device?.serial);
+  }
+
+  /** USB 모드 감지 (fastboot / flashmode) — 장치 디스크립터만 읽음 */
+  private async usbModeIs(mode: string): Promise<boolean> {
+    return (await api.usbModes())?.some((m) => m.mode === mode) ?? false;
+  }
+
+  /** VoLTE 패치 대상 슬롯이 모두 IMS 음성 등록(on)인지 — 최종 확인 자동 판정 */
+  private async imsReady(): Promise<boolean> {
+    const list = await api.deviceList();
+    const d = list?.find((x) => x.state === "device" && x.serial === this.device?.serial);
+    if (!d) return false;
+    this.imsSims = d.sims;
+    const targets = this.volteConfig.sims.filter((s) => s.carrier !== null).map((s) => s.slot);
+    const slots = targets.length > 0 ? targets : d.sims.filter((s) => s.carrier).map((s) => s.slot);
+    return slots.length > 0 && slots.every((slot) => d.sims.find((s) => s.slot === slot)?.volte === "on");
+  }
+
+  /** 최종 확인 중 표시할 슬롯별 VoLTE 상태 */
+  imsSims: SimInfo[] = $state([]);
+
+  /** 자동 감지 중인 항목 설명 (모달에 표시) */
+  manualWatching = $state("");
+  private watchTimer: ReturnType<typeof setInterval> | undefined;
+
+  /** 자동 감지: 조건이 충족될 때까지 주기적으로 확인 → 충족되면 자동 진행 (수동 [완료]도 가능) */
+  private watchManual(cur: RunStep, id: ManualId, label: string, check: () => Promise<boolean>, everyMs: number) {
+    this.manualWatching = label;
+    let busy = false;
+    this.watchTimer = setInterval(async () => {
+      if (this.manualCurrent?.id !== id) return this.stopWatch();
+      if (busy) return;
+      busy = true;
+      try {
+        if (await check()) {
+          this.stopWatch();
+          cur.logs.push(`[감지] ${label} — 자동으로 진행합니다`);
+          this.ackManual();
+        }
+      } finally {
+        busy = false;
+      }
+    }, everyMs);
+  }
+
+  private stopWatch() {
+    if (this.watchTimer) clearInterval(this.watchTimer);
+    this.watchTimer = undefined;
+    this.manualWatching = "";
+  }
+
+  /** 수동 개입 시작 — 이미 충족이면 안내 없이 진행, 자동 감지 가능한 항목은 감지되면 자동 진행 */
+  private async openManual(cur: RunStep, id: ManualId) {
+    if (id === "usb-debug" && (await this.usbDebugReady())) {
+      cur.logs.push("[확인] USB 디버깅 연결 확인됨 — 자동으로 진행합니다");
+      cur.manualDone++;
+      cur.status = "running";
+      this.begin();
+      return;
+    }
+    if (id === "firmware-select") {
+      if (!this.firmware) {
+        cur.status = "running";
+        cur.logs.push(`[자동] Sony 서버에서 순정 펌웨어의 ${this.partition ?? "부트"} 이미지 받는 중`);
+        await this.fetchFirmware();
+      }
+      if (this.firmware) {
+        this.logFirmware(cur);
+        cur.manualDone++;
+        this.begin();
+        return;
+      }
+      cur.status = "manual-wait";
+      cur.logs.push(`[실패] 순정 펌웨어 자동 다운로드: ${this.firmwareError}`);
+    }
+    this.manualCurrent = { id, ...MANUAL_TEXT[id] };
+    this.onManualOpen(id);
+    cur.logs.push(`[대기] 수동 개입: ${this.manualCurrent.title}`);
+    if (id === "usb-debug") this.watchManual(cur, id, "USB 디버깅 연결 확인", () => this.usbDebugReady(), 2000);
+    if (id === "mode-wait") this.watchManual(cur, id, "부트로더(fastboot) 모드 진입 확인", () => this.usbModeIs("fastboot"), 1500);
+    if (id === "flash-mode") this.watchManual(cur, id, "플래시 모드 진입 확인", () => this.usbModeIs("flashmode"), 1500);
+    if (id === "ims-check") this.watchManual(cur, id, "VoLTE(IMS) 등록 확인", () => this.imsReady(), 5000);
+  }
+
+  /** 수동 개입이 열릴 때 자동 동작 — 언락: 발급 페이지 열기 + IMEI 읽기 / 펌웨어: 자동 다운로드 */
+  private onManualOpen(id: ManualId) {
+    if (id === "unlock-code") {
+      void api.openExternal(LINKS.unlock);
+      void this.loadImei();
+    } else if (id === "oem-toggle") {
+      // 폰에 해당 설정 화면을 바로 띄움 (개발자 옵션이 꺼져 있으면 휴대전화 정보 — 빌드번호 연타)
+      void this.openPhoneSettings();
+    }
+  }
+
+  async openPhoneSettings() {
+    const screen = this.device?.prep.developerOptions === false ? "about" : "developer";
+    await api.openSettingsScreen(this.device?.serial, screen);
+  }
+
+  async loadImei() {
+    this.imeiState = "loading";
+    this.imei1 = await api.readImei1(this.device?.serial);
+    this.imeiState = this.imei1 ? "done" : "failed";
+  }
+
+  async fetchFirmware() {
+    const partition = this.partition;
+    this.firmwareError = "";
+    if (!partition) {
+      this.firmwareState = "failed";
+      this.firmwareFail = "download";
+      this.firmwareError = "이 기종의 대상 파티션이 확인되지 않아 자동으로 받을 수 없습니다";
+      return;
+    }
+    this.firmwareState = "loading";
+    // 업데이트를 고른 경우 루팅용 이미지는 새 버전 것
+    const r = await api.firmwareFetch(this.device?.serial, partition, this.updateVersion ?? undefined, this.firmwareDest || undefined);
+    if (r.ok) {
+      this.firmware = r.value;
+      this.firmwareState = "done";
+      this.firmwareFail = null;
+    } else {
+      this.firmwareState = "failed";
+      const space = r.error.startsWith("NO_SPACE|");
+      this.firmwareFail = space ? "space" : "download";
+      this.firmwareError = space ? r.error.slice("NO_SPACE|".length) : r.error;
+    }
+  }
+
+  /** 실패 팝업에서 다시 받기 — 성공하면 팝업을 닫고 바로 진행 */
+  async retryFirmware() {
+    await this.fetchFirmware();
+    if (this.firmware) this.ackManual();
+  }
+
+  private logFirmware(cur: RunStep) {
+    const fw = this.firmware;
+    cur.logs.push(
+      fw
+        ? `[준비] 순정 펌웨어 ${fw.version} — ${fw.partition} 자동 다운로드(${(fw.downloadedBytes / 1024 ** 2).toFixed(1)} MB 받음), 기기 지문 일치`
+        : `[입력] 펌웨어 폴더: ${this.firmwareDir}`,
+    );
+  }
+
+  /** 언락 코드 형식 — 16자리 16진수 (Sony 발급 코드) */
+  get unlockCodeValid(): boolean {
+    return /^[0-9a-f]{16}$/i.test(this.normalizedUnlockCode);
   }
 
   /** 언락 코드 정규화 — 사용자가 붙여넣은 0x 접두어 제거 (명령 조립 시 0x 중복 방지) */
@@ -306,8 +509,8 @@ export class Wizard {
     if (m?.id === "backup-notice") return this.backupNoticeAck;
     if (m?.id === "oem-toggle") return this.prepMissing.length === 0 && !this.prepChecking;
     if (!m?.input) return true;
-    if (m.input === "unlock-code") return this.normalizedUnlockCode.length > 0;
-    return this.firmwareDir.trim().length > 0;
+    if (m.input === "unlock-code") return this.unlockCodeValid;
+    return this.firmware !== null || this.firmwareDir.trim().length > 0;
   }
 
   ackManual() {
@@ -316,7 +519,7 @@ export class Wizard {
     const m = this.manualCurrent;
     if (cur) {
       if (m?.input === "unlock-code") cur.logs.push(`[입력] 언락 코드: 0x${maskSecret(this.normalizedUnlockCode)}`);
-      if (m?.input === "firmware") cur.logs.push(`[입력] 펌웨어 폴더: ${this.firmwareDir}`);
+      if (m?.input === "firmware") this.logFirmware(cur);
       cur.status = "running";
       cur.manualDone++;
     }
@@ -333,6 +536,7 @@ export class Wizard {
 
   abort() {
     this.pause();
+    this.stopWatch();
     // 진행 중·수동 대기 단계 모두 대기 상태로 (사이드바 스피너가 남지 않도록), 수동 개입은 처음부터 다시
     this.runSteps.forEach((s) => {
       if (s.status === "running" || s.status === "manual-wait") {
@@ -352,6 +556,7 @@ export class Wizard {
   /** [처음으로] — 모든 선택·입력·실행 상태 초기화 */
   restart() {
     this.pause();
+    this.stopWatch();
     this.view = "device";
     this.device = null;
     this.env = [];
@@ -359,7 +564,7 @@ export class Wizard {
     this.omdAck = false;
     this.riskAck = false;
     this.groups = [];
-    this.opts = { unroot: true, relock: true, restore: true };
+    this.opts = { unroot: false, relock: false, restore: true };
     this.backupPath = "";
     this.sizes = null;
     this.sizesState = "idle";
@@ -369,12 +574,22 @@ export class Wizard {
     this.settingsInfoState = "idle";
     this.backupNoticeAck = false;
     this.optionsFor = null;
+    this.fwVersions = null;
+    this.fwVersionsState = "idle";
+    this.fwVersionsFor = null;
     this.steps = [];
     this.runSteps = [];
     this.finished = false;
     this.manualCurrent = null;
     this.unlockCode = "";
     this.firmwareDir = "";
+    this.imei1 = null;
+    this.imeiState = "idle";
+    this.firmware = null;
+    this.firmwareState = "idle";
+    this.firmwareError = "";
+    this.firmwareFail = null;
+    this.firmwareDest = "";
     this.usbError = false;
     this.usbErrorCount = 0;
     this.simulateUsbError = false;

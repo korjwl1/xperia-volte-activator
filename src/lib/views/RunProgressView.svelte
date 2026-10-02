@@ -7,12 +7,26 @@
   import { Play, Pause, Square, Usb, ChevronsRight, ExternalLink, CircleCheck, OctagonX, CircleHelp, LoaderCircle } from "@lucide/svelte/icons";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { api } from "$lib/api";
-  import { LINKS } from "$lib/data/links";
+  import { LINKS, maskImei } from "$lib/data/links";
+
+  let imeiCopied = $state(false);
+  async function copyImei() {
+    if (!wizard.imei1) return;
+    imeiCopied = await api.copyText(wizard.imei1);
+    if (imeiCopied) setTimeout(() => (imeiCopied = false), 2500);
+  }
+  const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1)} MB`;
   import BackupNotice from "$lib/components/BackupNotice.svelte";
+  import GuideSlides from "$lib/components/GuideSlides.svelte";
+  import { GUIDES } from "$lib/data/guides";
 
   async function pickFirmware() {
     const dir = await api.pickFolder();
     if (dir) wizard.firmwareDir = dir;
+  }
+  async function pickFirmwareDest() {
+    const dir = await api.pickFolder();
+    if (dir) wizard.firmwareDest = dir;
   }
 
   let consoleEl: HTMLDivElement | undefined = $state();
@@ -119,20 +133,26 @@
 {#if wizard.manualCurrent?.id === "backup-notice"}
   <BackupNotice />
 {:else if wizard.manualCurrent}
+  {@const guide = GUIDES[wizard.manualCurrent.id]}
   <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" role="dialog">
-    <Card class="w-full max-w-lg elev-3">
-      <CardHeader>
+    <Card class="w-full max-w-lg elev-3 max-h-[calc(100vh-2rem)] flex flex-col">
+      <CardHeader class="shrink-0">
         <CardTitle class="text-base">✋ {wizard.manualCurrent.title}</CardTitle>
       </CardHeader>
-      <CardContent class="space-y-4">
-        <ol class="space-y-2.5">
-          {#each wizard.manualCurrent.steps as s, i (i)}
-            <li class="flex items-start gap-3 rounded-lg bg-muted/60 px-3 py-2.5 text-sm">
-              <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-[11px] font-bold">{i + 1}</span>
-              {s}
-            </li>
-          {/each}
-        </ol>
+      <CardContent class="space-y-4 overflow-y-auto min-h-0">
+        {#if guide}
+          <!-- 순서대로 따라 하는 조작: 그림 카드 넘김 -->
+          {#key wizard.manualCurrent.id}<GuideSlides slides={guide} />{/key}
+        {:else if wizard.manualCurrent.steps.length > 0}
+          <ol class="space-y-2.5">
+            {#each wizard.manualCurrent.steps as s, i (i)}
+              <li class="flex items-start gap-3 rounded-lg bg-muted/60 px-3 py-2.5 text-sm">
+                <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-[11px] font-bold">{i + 1}</span>
+                {s}
+              </li>
+            {/each}
+          </ol>
+        {/if}
         {#if wizard.manualCurrent.id === "oem-toggle" && wizard.device}
           {@const p = wizard.device.prep}
           <div class="rounded-lg border divide-y">
@@ -152,14 +172,33 @@
               </div>
             {/each}
           </div>
-          <Button variant="outline" size="sm" disabled={wizard.prepChecking} onclick={() => wizard.recheckPrep()}>
-            {#if wizard.prepChecking}<LoaderCircle size={13} class="mr-1 animate-spin" />{/if}다시 확인
-          </Button>
+          <div class="flex gap-2">
+            <Button variant="outline" size="sm" onclick={() => wizard.openPhoneSettings()}>폰에서 설정 화면 열기</Button>
+            <Button variant="outline" size="sm" disabled={wizard.prepChecking} onclick={() => wizard.recheckPrep()}>
+              {#if wizard.prepChecking}<LoaderCircle size={13} class="mr-1 animate-spin" />{/if}다시 확인
+            </Button>
+          </div>
         {/if}
         {#if wizard.manualCurrent.input === "unlock-code"}
           <div class="space-y-2">
-            <Button variant="outline" size="sm" onclick={() => api.openExternal(LINKS.unlock)}>
-              <ExternalLink size={13} class="mr-1" />언락 코드 발급 사이트 열기
+            <!-- IMEI 1: 기기에서 읽어 마스킹 표시, 복사 버튼으로만 전체 값 사용 -->
+            <div class="flex items-center gap-2 rounded-lg border px-3 py-2">
+              <span class="text-[12px] text-muted-foreground shrink-0">IMEI 1</span>
+              <span class="flex-1 font-mono text-[13px]">
+                {#if wizard.imeiState === "loading"}
+                  <LoaderCircle size={13} class="inline animate-spin text-primary" />
+                {:else if wizard.imei1}
+                  {maskImei(wizard.imei1)}
+                {:else}
+                  <span class="text-[11px] text-muted-foreground">읽을 수 없습니다 — 설정 &gt; 휴대전화 정보 &gt; IMEI(SIM 슬롯 1)에서 확인해 주세요</span>
+                {/if}
+              </span>
+              <Button variant="outline" size="sm" class="h-7 shrink-0" disabled={!wizard.imei1} onclick={copyImei}>
+                {imeiCopied ? "복사됨" : "IMEI 복사"}
+              </Button>
+            </div>
+            <Button variant="ghost" size="sm" class="h-7 px-2 text-[12px]" onclick={() => api.openExternal(LINKS.unlock)}>
+              <ExternalLink size={13} class="mr-1" />발급 페이지 다시 열기
             </Button>
             <input
               type="password"
@@ -169,23 +208,82 @@
               placeholder="언락 코드 붙여넣기"
               bind:value={wizard.unlockCode}
             />
+            {#if wizard.unlockCode.trim() && !wizard.unlockCodeValid}
+              <p class="text-[11px] text-destructive">언락 코드는 16자리 영문·숫자(0-9, A-F)입니다</p>
+            {/if}
           </div>
         {:else if wizard.manualCurrent.input === "firmware"}
-          <p class="text-[11px] text-muted-foreground">
-            {wizard.partition
-              ? `이 기기(${wizard.device?.model})는 ${wizard.partition} 파티션을 사용합니다 — 폴더 안에 ${wizard.partition}_*.sin 파일이 있어야 합니다`
-              : "이 기종의 대상 파티션(init_boot / boot)은 아직 확인되지 않았습니다"}
-          </p>
-          <div class="flex items-center gap-2">
-            <div class="flex-1 min-w-0 rounded-lg border bg-background px-3 py-1.5 font-mono text-[12px] truncate">
-              {wizard.firmwareDir || "펌웨어 폴더를 선택해 주세요"}
+          <!-- 자동 다운로드가 실패했을 때만 열림 — 원인별 안내 -->
+          {@const fwVersion = wizard.updateVersion ?? wizard.device?.firmware ?? ""}
+          {#if wizard.firmwareFail === "space"}
+            <div class="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2.5 text-[12.5px]">
+              <OctagonX size={14} class="text-destructive shrink-0 mt-0.5" />
+              <div class="min-w-0 space-y-0.5">
+                <div class="font-medium">저장 공간이 부족해 순정 펌웨어를 받지 못했습니다</div>
+                <div class="text-[11px] text-muted-foreground break-all">{wizard.firmwareError}</div>
+              </div>
             </div>
-            <Button variant="outline" size="sm" class="shrink-0" onclick={pickFirmware}>폴더 선택</Button>
+            <p class="text-[12px] text-muted-foreground">여유 공간이 있는 다른 저장 위치를 고르면 그곳에 다시 받습니다.</p>
+            <div class="flex items-center gap-2">
+              <div class="flex-1 min-w-0 rounded-lg border bg-background px-3 py-1.5 font-mono text-[12px] truncate">
+                {wizard.firmwareDest || "저장 위치를 선택해 주세요"}
+              </div>
+              <Button variant="outline" size="sm" class="shrink-0" onclick={pickFirmwareDest}>위치 선택</Button>
+            </div>
+            <Button size="sm" class="w-full" disabled={!wizard.firmwareDest || wizard.firmwareState === "loading"} onclick={() => wizard.retryFirmware()}>
+              {#if wizard.firmwareState === "loading"}<LoaderCircle size={13} class="mr-1 animate-spin" />받는 중…{:else}이 위치로 다시 받기{/if}
+            </Button>
+          {:else}
+            <div class="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2.5 text-[12.5px]">
+              <OctagonX size={14} class="text-destructive shrink-0 mt-0.5" />
+              <div class="min-w-0 flex-1 space-y-0.5">
+                <div class="font-medium">Sony 서버에서 순정 펌웨어를 자동으로 받지 못했습니다</div>
+                <div class="text-[11px] text-muted-foreground break-all">{wizard.firmwareError}</div>
+              </div>
+              <Button variant="outline" size="sm" class="h-7 shrink-0" disabled={wizard.firmwareState === "loading"} onclick={() => wizard.retryFirmware()}>
+                {#if wizard.firmwareState === "loading"}<LoaderCircle size={13} class="mr-1 animate-spin" />{/if}다시 시도
+              </Button>
+            </div>
+            <ol class="space-y-2.5">
+              {#each [
+                `XperiFirm에서 ${wizard.device?.model ?? "기종"} → 지역/통신사 → ${fwVersion ? `버전 ${fwVersion}` : "설치된 버전과 같은 버전"}을 받습니다`,
+                `받은 펌웨어 폴더를 아래에서 지정합니다${wizard.partition ? ` — 폴더 안에 ${wizard.partition}_*.sin 파일이 있어야 합니다` : ""}`,
+              ] as t, n (n)}
+                <li class="flex items-start gap-3 rounded-lg bg-muted/60 px-3 py-2.5 text-sm">
+                  <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-[11px] font-bold">{n + 1}</span>
+                  {t}
+                </li>
+              {/each}
+            </ol>
+            <div class="flex items-center gap-2">
+              <div class="flex-1 min-w-0 rounded-lg border bg-background px-3 py-1.5 font-mono text-[12px] truncate">
+                {wizard.firmwareDir || "펌웨어 폴더를 선택해 주세요"}
+              </div>
+              <Button variant="outline" size="sm" class="shrink-0" onclick={pickFirmware}>폴더 선택</Button>
+            </div>
+          {/if}
+        {/if}
+        {#if wizard.manualCurrent.id === "ims-check" && wizard.imsSims.length > 0}
+          <div class="rounded-lg border divide-y">
+            {#each wizard.imsSims.filter((s) => s.carrier) as sim (sim.slot)}
+              <div class="flex items-center gap-2.5 px-3 py-2 text-sm">
+                {#if sim.volte === "on"}<CircleCheck size={15} class="text-success shrink-0" />{:else}<LoaderCircle size={15} class="animate-spin text-muted-foreground shrink-0" />{/if}
+                <span class="flex-1">SIM{sim.slot} · {sim.carrier}</span>
+                <span class="text-[11px] {sim.volte === 'on' ? 'text-success' : 'text-muted-foreground'}">
+                  {sim.volte === "on" ? "VoLTE 활성화" : sim.volte === "off" ? "VoLTE 비활성화" : "확인 불가"}
+                </span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+        {#if wizard.manualWatching}
+          <div class="flex items-center gap-2 rounded-lg bg-primary/5 px-3 py-2 text-[12px] text-primary">
+            <LoaderCircle size={13} class="animate-spin shrink-0" />{wizard.manualWatching} 자동 감지 중 — 감지되면 바로 다음 단계로 진행합니다
           </div>
         {/if}
         <div class="flex items-center justify-between">
           <span class="text-[11px] text-muted-foreground">
-            {wizard.manualCurrent.input ? "입력을 마치면 다음 단계로 진행됩니다" : "완료하면 자동으로 다음 단계로 진행됩니다"}
+            {wizard.manualCurrent.input ? "입력을 마치면 다음 단계로 진행됩니다" : wizard.manualWatching ? "직접 확인했다면 눌러서 진행할 수 있습니다" : "완료하면 자동으로 다음 단계로 진행됩니다"}
           </span>
           <Button disabled={!wizard.manualInputReady} onclick={() => wizard.ackManual()}>
             {wizard.manualCurrent.input ? "입력 완료" : "폰에서 완료했어요"}

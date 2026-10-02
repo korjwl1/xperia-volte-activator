@@ -76,6 +76,11 @@ pub fn set_key_dir(dir: PathBuf) {
     let _ = APP_KEY_DIR.set(dir);
 }
 
+/// 앱 데이터 폴더 (펌웨어 캐시 등)
+pub(crate) fn app_data_dir() -> Option<PathBuf> {
+    APP_KEY_DIR.get().cloned()
+}
+
 fn standard_adb_key() -> Option<PathBuf> {
     let base = std::env::var_os("ANDROID_USER_HOME")
         .map(|h| PathBuf::from(h).join("android"))
@@ -102,9 +107,19 @@ fn adb_key_path() -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Xperia만 다룬다 — USB 직접 연결 시 Sony(VID 0x0FCE) ADB 기기만 (사용자 지시 2026-10-03)
+const SONY_VID: u16 = 0x0FCE;
+
+fn sony_usb_adb_devices() -> Result<Vec<adb_client::usb::ADBDeviceInfo>, String> {
+    Ok(find_all_connected_adb_devices()
+        .map_err(|e| format!("USB 기기 검색 실패: {e}"))?
+        .into_iter()
+        .filter(|d| d.vendor_id == SONY_VID)
+        .collect())
+}
+
 fn open_usb() -> Result<ADBUSBDevice, String> {
-    let devices =
-        find_all_connected_adb_devices().map_err(|e| format!("USB 기기 검색 실패: {e}"))?;
+    let devices = sony_usb_adb_devices()?;
     if devices.is_empty() {
         return Err("연결된 기기 없음".into());
     }
@@ -150,7 +165,7 @@ fn server_devices() -> Option<Vec<ServerEntry>> {
 
 /// `work`를 별도 스레드에서 실행하고 `limit` 안에 끝나지 않으면 시간 초과로 반환.
 /// (기기 응답이 멈춰도 UI/IPC가 죽지 않도록)
-async fn guarded<T: Send + 'static>(
+pub(crate) async fn guarded<T: Send + 'static>(
     limit: Duration,
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
@@ -171,7 +186,7 @@ async fn guarded<T: Send + 'static>(
 
 // ── 셸 실행 ──
 
-fn shell(dev: &mut dyn ADBDeviceExt, cmd: &str) -> Result<String, String> {
+pub(crate) fn shell(dev: &mut dyn ADBDeviceExt, cmd: &str) -> Result<String, String> {
     let mut out = Vec::new();
     let mut err = Vec::new();
     dev.shell_command(&cmd, Some(&mut out), Some(&mut err))
@@ -187,7 +202,7 @@ fn shell(dev: &mut dyn ADBDeviceExt, cmd: &str) -> Result<String, String> {
 }
 
 /// 서버 모드 우선, 없으면 USB 직접 연결로 `f` 실행 (오류 시 연결 재수립 1회)
-fn with_first_device<T>(
+pub(crate) fn with_first_device<T>(
     serial: &Option<String>,
     mut f: impl FnMut(&mut dyn ADBDeviceExt) -> Result<T, String>,
 ) -> Result<T, String> {
@@ -205,7 +220,7 @@ fn with_first_device<T>(
     }
 
     // 2) USB 직접 연결 — 기기 구분 수단이 없으므로 1대일 때만, serial 지정 시 연결 후 일치 확인
-    let found = find_all_connected_adb_devices().map_err(|e| format!("USB 검색 실패: {e}"))?;
+    let found = sony_usb_adb_devices()?;
     if found.is_empty() {
         return Err("연결된 기기가 없습니다".into());
     }
@@ -329,7 +344,7 @@ fn bootloader_state(flash_locked: &str, vbmeta_state: &str, rooted: bool) -> &'s
 }
 
 /// `getprop` 덤프를 key→value 맵으로
-fn parse_getprop(out: &str) -> HashMap<String, String> {
+pub(crate) fn parse_getprop(out: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for line in out.lines() {
         // 형식: [key]: [value]
@@ -439,6 +454,9 @@ pub struct DeviceOut {
     usb: UsbOut,
     /// 언락 사전 조건 (판별 불가 시 None)
     prep: PrepOut,
+    /// ro.product.manufacturer가 Sony인지 — Xperia가 아니면 목록에서 제외
+    #[serde(skip)]
+    sony: bool,
 }
 
 #[derive(Serialize, Default)]
@@ -539,6 +557,7 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
         firmware = get("ro.build.display.id").trim_end_matches(" release-keys").to_string();
     }
     Ok(DeviceOut {
+        sony: get("ro.product.manufacturer").eq_ignore_ascii_case("sony"),
         state: "device".into(),
         serial,
         serial_masked,
@@ -583,6 +602,7 @@ fn placeholder(state: &str, serial: String, serial_masked: String, name: &str) -
             link_speed: String::new(),
         },
         prep: PrepOut::default(),
+        sony: true,
     }
 }
 
@@ -590,13 +610,18 @@ fn device_list_work() -> Result<Vec<DeviceOut>, String> {
     // 1) adb 서버 모드 — 준비된 기기는 상태 조회, 미승인/오프라인 기기는 상태만
     if let Some(devs) = server_devices() {
         let mut out = Vec::with_capacity(devs.len());
+        // 미승인 기기는 제조사를 알 수 없음 → PC에 Sony USB 장치가 있을 때만 안내 대상으로
+        let sony_usb = crate::usbmode::sony_usb_present();
         for entry in &devs {
             if !entry.ready() {
-                out.push(placeholder(&entry.state, entry.serial.clone(), mask_serial(&entry.serial), "Android 기기"));
+                if sony_usb {
+                    out.push(placeholder(&entry.state, entry.serial.clone(), mask_serial(&entry.serial), "Xperia"));
+                }
                 continue;
             }
             match device_status(&mut entry.handle(), &entry.serial) {
-                Ok(d) => out.push(d),
+                Ok(d) if d.sony => out.push(d),
+                Ok(_) => eprintln!("[rust] Xperia가 아닌 기기 제외({})", mask_serial(&entry.serial)),
                 Err(e) => eprintln!(
                     "[rust] 기기 정보 읽기 실패({}): {e}",
                     mask_serial(&entry.serial)
@@ -608,7 +633,7 @@ fn device_list_work() -> Result<Vec<DeviceOut>, String> {
     }
 
     // 2) USB 직접 연결 — 기기 감지부터
-    let found = find_all_connected_adb_devices().map_err(|e| format!("USB 검색 실패: {e}"))?;
+    let found = sony_usb_adb_devices()?;
     if found.is_empty() {
         eprintln!("[rust] device_list(usb) -> 0 device(s)");
         return Ok(vec![]);
@@ -634,7 +659,7 @@ fn device_list_work() -> Result<Vec<DeviceOut>, String> {
     ensure_usb(&mut guard)?;
     let first = device_status(guard.as_mut().expect("연결 보장됨"), "");
     let result = match first {
-        Ok(d) => Ok(vec![d]),
+        Ok(d) => Ok(if d.sony { vec![d] } else { vec![] }),
         Err(e) => {
             // 커넥션 오류 가능성 → 재연결 후 1회 재시도
             eprintln!("[rust] USB 기기 상태 읽기 실패, 재연결 시도: {e}");
@@ -866,6 +891,85 @@ pub async fn app_flags(serial: Option<String>) -> Result<Vec<AppFlagOut>, String
         let list = parse_app_flags(&raw);
         eprintln!("[rust] app_flags -> {} pkgs", list.len());
         Ok(list)
+    })
+    .await
+}
+
+// ── 폰 설정 화면 열기 (언락 조건 안내 보조) ──
+// 폰 화면에 설정 화면만 띄운다 (설정 값은 바꾸지 않음 — 사용자 승인 2026-10-03)
+
+/// screen: "developer" = 개발자 옵션 / "about" = 휴대전화 정보(빌드번호 연타로 개발자 옵션 활성화)
+#[tauri::command]
+pub async fn open_settings_screen(serial: Option<String>, screen: String) -> Result<(), String> {
+    let action = match screen.as_str() {
+        "developer" => "android.settings.APPLICATION_DEVELOPMENT_SETTINGS",
+        "about" => "android.settings.DEVICE_INFO_SETTINGS",
+        _ => return Err("알 수 없는 설정 화면입니다".into()),
+    };
+    guarded(Duration::from_secs(15), move || {
+        with_first_device(&serial, |dev| shell(dev, &format!("am start -a {action}")).map(|_| ()))
+    })
+    .await
+}
+
+// ── IMEI 1 (언락 코드 발급용) ──
+// Sony 언락 페이지는 듀얼 SIM이면 IMEI 1(SIM 슬롯 1)을 요구한다.
+// iphonesubinfo의 트랜잭션 번호는 Android 버전마다 다르고 공식 문서가 없다 → 실측 확인된 호출만 쓰고,
+// 결과가 15자리 + Luhn 검증을 통과할 때만 채택 (엉뚱한 값을 IMEI로 쓰지 않도록). IMEI는 로그에 남기지 않는다.
+
+/// (호출, 확인 환경) — getDeviceIdForPhone(phoneId=0 → 슬롯 1)
+const IMEI1_CALLS: [(&str, &str); 1] =
+    [("service call iphonesubinfo 4 i32 0 s16 com.android.shell", "Android 15 / XQ-DQ44 실측")];
+
+/// `service call` Parcel 출력에서 문자열 부분(따옴표 안)의 숫자만
+fn parcel_digits(out: &str) -> String {
+    let mut s = String::new();
+    for line in out.lines() {
+        if let (Some(a), Some(b)) = (line.find('\''), line.rfind('\'')) {
+            if b > a {
+                s.extend(line[a + 1..b].chars().filter(|c| c.is_ascii_digit()));
+            }
+        }
+    }
+    s
+}
+
+fn luhn_ok(n: &str) -> bool {
+    if n.len() != 15 || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    let sum: u32 = n
+        .bytes()
+        .rev()
+        .enumerate()
+        .map(|(i, b)| {
+            let d = (b - b'0') as u32;
+            if i % 2 == 1 {
+                let x = d * 2;
+                if x > 9 { x - 9 } else { x }
+            } else {
+                d
+            }
+        })
+        .sum();
+    sum % 10 == 0
+}
+
+/// IMEI 1 (전체 값 — 프론트는 마스킹 표시, 복사 버튼에만 사용)
+#[tauri::command]
+pub async fn read_imei1(serial: Option<String>) -> Result<String, String> {
+    guarded(Duration::from_secs(15), move || {
+        with_first_device(&serial, |dev| {
+            for (call, _) in IMEI1_CALLS.iter() {
+                if let Ok(out) = shell(dev, call) {
+                    let d = parcel_digits(&out);
+                    if luhn_ok(&d) {
+                        return Ok(d);
+                    }
+                }
+            }
+            Err("IMEI를 읽을 수 없습니다 — 설정 > 휴대전화 정보 > IMEI(SIM 슬롯 1)에서 확인해 주세요".into())
+        })
     })
     .await
 }
@@ -1121,6 +1225,21 @@ Filesystem     1K-blocks      Used Available Use% Mounted on\n\
         let pem = key.to_pkcs8_pem(LineEnding::LF).unwrap();
         let back = rsa::RsaPrivateKey::from_pkcs8_pem(&pem).unwrap();
         assert_eq!(key, back);
+    }
+
+    /// service call 출력 형식 (값은 Luhn을 만족하는 테스트용 번호)
+    #[test]
+    fn parcel_digits_and_luhn() {
+        let out = concat!(
+            "Result: Parcel(\n",
+            "  0x00000000: 00000000 0000000f 00390034 00310030 '........4.9.0.1.'\n",
+            "  0x00000010: 00340035 00300032 00320033 00370033 '5.4.2.0.3.2.3.7.'\n",
+            "  0x00000020: 00310035 00000038                   '5.1.8.....      ')\n",
+        );
+        assert_eq!(parcel_digits(out), "490154203237518");
+        assert!(luhn_ok("490154203237518")); // 표준 Luhn 예시 IMEI
+        assert!(!luhn_ok("490154203237519"));
+        assert!(!luhn_ok("12345"));
     }
 
     #[test]

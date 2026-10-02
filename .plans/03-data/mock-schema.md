@@ -32,7 +32,7 @@ DeviceStatus += state:'device'|'unauthorized'|'offline'|'usb'…,  SimInfo += st
 - device.ts 시드: 잠김/비루팅/VoLTE off/SIM2=SKT eSIM — "신규 상태"(매트릭스 1행)
 - apps.ts: 백업 그룹 4카테고리(설정/앱/파일/통화 및 문자, 항목 단위 checked). 통화 및 문자 = 통화 기록/문자/연락처 3항목.
   파일은 표준 폴더 7(DCIM/Download/Pictures/Movies/Music/Documents/Recordings) +
-  "그 외 전체 파일 시스템"(미체크 기본) — Audiobooks/Podcasts/Ringtones/Alarms 등 기기 특화 폴더는 그 외에 포함.
+  "그 외 전체 파일 시스템"(다른 항목과 같은 기본값) — Audiobooks/Podcasts/Ringtones/Alarms 등 기기 특화 폴더는 그 외에 포함.
   표준 폴더/APK/Android/data 용량은 `storage_sizes` 실측만 사용(mock 용량 없음). 설정·통화·문자·연락처만 estBytes(추정).
   mockApps = 앱별 복구 가능성 큐레이션(실기기 app_flags와 병합)
 - device.ts: 브라우저 dev 전용 (데스크톱은 실측만, mock으로 위장하지 않음). env 체크는 빈 목록

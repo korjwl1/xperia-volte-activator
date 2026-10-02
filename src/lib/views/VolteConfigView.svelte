@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "$lib/components/ui/card";
   import { Badge } from "$lib/components/ui/badge";
+  import { LoaderCircle } from "@lucide/svelte/icons";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { resolveCarrier, simStateLabel, type CarrierId, type SimTarget } from "$lib/types";
 
@@ -19,6 +20,19 @@
     if (!t) return;
     t.carrier = id === null ? null : resolveCarrier(id, wizard.device?.model ?? "");
   }
+
+  // 펌웨어 버전 — 서버 조회는 기기당 1회 (읽기 전용)
+  wizard.ensureFirmwareVersions();
+  const installed = $derived(wizard.device?.firmware ?? "");
+  const versionRows = $derived.by(() => {
+    const list = wizard.fwVersions?.versions ?? [];
+    // 서버 목록에 설치된 버전이 없더라도 "현재 설치된 버전"은 항상 첫 줄
+    return list.some((v) => v.version === installed)
+      ? list
+      : [{ version: installed, android: wizard.device?.android ?? "" }, ...list];
+  });
+  const selectedVersion = $derived(wizard.volteConfig.firmware ?? installed);
+  const pickVersion = (v: string) => (wizard.volteConfig.firmware = v === installed ? null : v);
 
   // 표시 기준: LGU_V도 "LG U+" 버튼이 선택된 것으로
   const isPicked = (slot: 1 | 2, id: CarrierId | null) => {
@@ -69,6 +83,42 @@
           {/each}
         </div>
       </div>
+    </CardContent>
+  </Card>
+
+  <Card class="elev-1">
+    <CardHeader>
+      <CardTitle class="text-base">펌웨어 설정</CardTitle>
+      <CardDescription>설치할 펌웨어 버전을 선택합니다 — 새 버전을 고르면 사용자 데이터를 유지한 채 업데이트합니다</CardDescription>
+    </CardHeader>
+    <CardContent class="space-y-2">
+      {#each versionRows as v (v.version)}
+        {@const picked = selectedVersion === v.version}
+        <button
+          class="w-full flex items-center gap-3 rounded-xl border-2 px-4 py-3 text-left transition-all
+            {picked ? 'border-primary ring-2 ring-primary/25 bg-primary/5' : 'border-border hover:border-primary/40'}"
+          onclick={() => pickVersion(v.version)}
+        >
+          <span class="font-mono text-sm font-semibold">{v.version}</span>
+          {#if v.android}<span class="text-xs text-muted-foreground">Android {v.android}</span>{/if}
+          {#if v.version === installed}
+            <Badge variant="outline" class="ml-auto text-[10px]">현재 설치된 버전</Badge>
+          {:else}
+            <Badge class="ml-auto text-[10px]">새 버전</Badge>
+          {/if}
+        </button>
+      {/each}
+      {#if wizard.fwVersionsState === "loading"}
+        <div class="flex items-center gap-2 px-1 text-[11px] text-muted-foreground">
+          <LoaderCircle size={12} class="animate-spin text-primary" />서버에서 새 버전 확인 중…
+        </div>
+      {:else if wizard.fwVersionsState === "failed"}
+        <p class="px-1 text-[11px] text-muted-foreground">서버에서 새 버전을 확인할 수 없습니다</p>
+      {:else if wizard.fwVersions && !wizard.fwVersions.supported}
+        <p class="px-1 text-[11px] text-muted-foreground">이 기종은 아직 새 버전 확인을 지원하지 않습니다</p>
+      {:else if versionRows.length === 1}
+        <p class="px-1 text-[11px] text-muted-foreground">현재 설치된 버전이 서버의 최신 버전입니다</p>
+      {/if}
     </CardContent>
   </Card>
   </div>

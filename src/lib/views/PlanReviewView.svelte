@@ -114,14 +114,20 @@
   }
 
   // 실행 순서 — 실제 실행과 같은 계획(wizard.plan)에서 파생
-  const planSteps = $derived(wizard.plan.map((s) => ({ title: s.title, warn: s.wipe })));
+  // warn: 초기화(언락/리락) 또는 펌웨어 기록 — 툴팁·확인 모달 대상
+  const planSteps = $derived(
+    wizard.plan.map((s) => ({ title: s.title, wipe: s.wipe, flash: s.kind === "fw-flash", warn: s.wipe || s.kind === "fw-flash" })),
+  );
+  const patching = $derived(wizard.hasPatchTarget);
 
-  // 실행 전 확인 모달 — 초기화 단계가 포함된 계획에서만 (AGENTS 규칙 7)
+  // 실행 전 확인 모달 — 초기화 또는 펌웨어 기록 단계가 포함된 계획에서만 (AGENTS 규칙 7)
   let confirmOpen = $state(false);
   let wipeAck = $state(false);
   let noBackupAck = $state(false);
-  const wipeStepTitles = $derived(planSteps.filter((s) => s.warn).map((s) => s.title));
-  const canLaunch = $derived(wipeAck && (anyBackupChecked || noBackupAck));
+  const riskySteps = $derived(planSteps.filter((s) => s.warn));
+  const hasWipe = $derived(planSteps.some((s) => s.wipe));
+  // 백업 미선택 이중 확인은 초기화가 있을 때만
+  const canLaunch = $derived(wipeAck && (anyBackupChecked || !hasWipe || noBackupAck));
 
   function confirm() {
     // 방어: 백업 선택 + 경로 미지정 or 용량 부족
@@ -132,7 +138,7 @@
       return;
     }
     showPathAlert = false;
-    if (wipeStepTitles.length > 0) {
+    if (riskySteps.length > 0) {
       wipeAck = false;
       noBackupAck = false;
       confirmOpen = true;
@@ -244,7 +250,13 @@
           </div>
 
         {:else}
-          {#if bootloaderKnown}
+          {#if !patching}
+            <div class="px-1 text-[11px] text-muted-foreground">
+              {wizard.device?.rooted === true
+                ? "VoLTE 패치를 선택하지 않았습니다 — 펌웨어 업데이트 후 풀리는 루팅만 새 버전으로 다시 적용합니다"
+                : "VoLTE 패치를 선택하지 않아 언락 · 루팅 관련 옵션이 없습니다"}
+            </div>
+          {:else if bootloaderKnown}
             <div class="mb-3 px-1 text-[11px] text-muted-foreground">
               {#if wizard.device?.bootloader === "locked"}
                 부트로더 언락 · 루팅 · VoLTE 적용은 자동으로 진행됩니다
@@ -307,7 +319,9 @@
                 <TriangleAlert size={12} class="shrink-0 text-destructive/70" />
               </TooltipTrigger>
               <TooltipContent>
-                부트로더 언락/리락 단계는 핸드폰 데이터가 초기화될 수 있습니다. 백업을 권장합니다.
+                {step.flash
+                  ? "펌웨어를 기록합니다 — 사용자 데이터는 유지되지만, 중간에 연결이 끊기지 않도록 주의해 주세요."
+                  : "부트로더 언락/리락 단계는 핸드폰 데이터가 초기화될 수 있습니다. 백업을 권장합니다."}
               </TooltipContent>
             </Tooltip>
           {:else}
@@ -351,20 +365,23 @@
           <TriangleAlert size={20} />
         </span>
         <div class="space-y-0.5">
-          <h2 class="text-base font-semibold">핸드폰 데이터가 초기화됩니다</h2>
-          <p class="text-xs text-muted-foreground">실행 순서에 아래 초기화 단계가 포함되어 있습니다</p>
+          <h2 class="text-base font-semibold">{hasWipe ? "핸드폰 데이터가 초기화됩니다" : "펌웨어를 기록합니다"}</h2>
+          <p class="text-xs text-muted-foreground">실행 순서에 아래 되돌리기 어려운 단계가 포함되어 있습니다</p>
         </div>
       </div>
       <ul class="space-y-1 text-[13px]">
-        {#each wipeStepTitles as t (t)}
-          <li class="flex items-center gap-2 text-destructive"><TriangleAlert size={12} class="shrink-0" />{t}</li>
+        {#each riskySteps as st (st.title)}
+          <li class="flex items-center gap-2 text-destructive">
+            <TriangleAlert size={12} class="shrink-0" />{st.title}
+            <span class="text-[11px] text-muted-foreground">{st.wipe ? "— 데이터 초기화" : "— 사용자 데이터 유지"}</span>
+          </li>
         {/each}
       </ul>
       <label class="flex items-center gap-2.5 rounded-lg border px-4 py-2.5 cursor-pointer {wipeAck ? 'border-destructive/40 bg-danger-container/40' : 'border-border'}">
         <Checkbox checked={wipeAck} onCheckedChange={(v: boolean | "indeterminate") => (wipeAck = v === true)} />
-        <span class="text-[13px] font-medium">데이터가 초기화되는 것을 확인했습니다</span>
+        <span class="text-[13px] font-medium">{hasWipe ? "데이터가 초기화되는 것을 확인했습니다" : "위 작업이 진행되는 것을 확인했습니다"}</span>
       </label>
-      {#if !anyBackupChecked}
+      {#if hasWipe && !anyBackupChecked}
         <div class="rounded-lg bg-danger-container/60 px-4 py-2 text-xs text-destructive">
           백업 항목이 선택되지 않았습니다. 초기화된 데이터는 복구할 수 없습니다.
         </div>

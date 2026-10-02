@@ -1,6 +1,8 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod adb;
+mod firmware;
 mod host;
+mod usbmode;
 
 use tauri::Manager;
 
@@ -22,7 +24,12 @@ pub fn run() {
             adb::storage_sizes,
             adb::app_flags,
             adb::settings_overview,
-            host::disk_free
+            adb::read_imei1,
+            adb::open_settings_screen,
+            usbmode::usb_modes,
+            host::disk_free,
+            firmware::firmware_fetch,
+            firmware::firmware_versions
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

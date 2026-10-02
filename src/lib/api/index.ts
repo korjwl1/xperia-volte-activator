@@ -3,7 +3,7 @@
 // 실쓰기(백업/플래싱/EFS)는 항상 mock — 실기기에는 영향 없음
 // 컴포넌트에서 @tauri-apps/api 직접 import 금지.
 
-import type { AdbStatus, AppItem, DeviceStatus, EnvCheckItem, SettingsOverview } from "$lib/types";
+import type { AdbStatus, AppItem, DeviceStatus, EnvCheckItem, FirmwareResult, FirmwareVersions, SettingsOverview } from "$lib/types";
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
 import { classifyApp, SAMPLE_FLAGS, type AppFlag } from "$lib/data/appRules";
 
@@ -20,6 +20,17 @@ async function invokeBackend<T>(cmd: string, args?: Record<string, unknown>): Pr
   }
 }
 
+/** 실패 메시지가 필요한 명령용 — 백엔드 오류 문구를 그대로 전달 */
+async function invokeResult<T>(cmd: string, args?: Record<string, unknown>): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+  if (!inTauri()) return { ok: false, error: "데스크톱 앱에서만 사용할 수 있습니다" };
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return { ok: true, value: await invoke<T>(cmd, args ?? {}) };
+  } catch (e) {
+    return { ok: false, error: typeof e === "string" ? e : String(e) };
+  }
+}
+
 export interface Api {
   /** null = 조회 실패(일시적 오류 포함), [] = 연결된 기기 없음 */
   deviceList(): Promise<DeviceStatus[] | null>;
@@ -28,6 +39,18 @@ export interface Api {
   storageSizes(serial?: string): Promise<Record<string, number> | null>;
   /** 설치된 3자 앱별 복구 가능성 (완전/불완전/불가), 조회 실패 시 null */
   appClasses(serial?: string): Promise<AppItem[] | null>;
+  /** IMEI 1 (전체 값 — UI에는 마스킹, 복사 버튼에만 사용), 실패 시 null */
+  readImei1(serial?: string): Promise<string | null>;
+  /** 기기와 같은 순정 펌웨어에서 부트 이미지만 받아 저장 (기본 앱 데이터 폴더, dest 지정 시 그 폴더). 공간 부족 오류는 "NO_SPACE|" 접두어 */
+  firmwareFetch(serial: string | undefined, partition: string, version?: string, dest?: string): Promise<{ ok: true; value: FirmwareResult } | { ok: false; error: string }>;
+  /** 서버 펌웨어 버전 목록(설치된 버전 이상), 실패 시 null */
+  firmwareVersions(serial?: string): Promise<FirmwareVersions | null>;
+  /** 연결된 Sony 기기의 USB 모드 (android / fastboot / flashmode / other), 실패 시 null */
+  usbModes(): Promise<{ mode: string; vendorId: number; productId: number }[] | null>;
+  /** 폰에 설정 화면 띄우기 — developer: 개발자 옵션 / about: 휴대전화 정보 */
+  openSettingsScreen(serial: string | undefined, screen: "developer" | "about"): Promise<boolean>;
+  /** 클립보드 복사 */
+  copyText(text: string): Promise<boolean>;
   /** 설정 백업 개요(키 개수·자동 복원 대상 현재 값), 조회 실패 시 null */
   settingsOverview(serial?: string): Promise<SettingsOverview | null>;
   /** null = 백엔드 없음(브라우저 개발). available=false → 프론트에서 연결 재시도 팝업 */
@@ -87,6 +110,35 @@ const hybridApi: Api = {
     if (!inTauri()) return SAMPLE_FLAGS.map(classifyApp); // 브라우저 개발: 샘플
     const flags = await invokeBackend<AppFlag[]>("app_flags", { serial: serial ?? null });
     return flags ? flags.map(classifyApp) : null;
+  },
+
+  async readImei1(serial) {
+    return await invokeBackend<string>("read_imei1", { serial: serial ?? null });
+  },
+
+  async firmwareFetch(serial, partition, version, dest) {
+    return await invokeResult<FirmwareResult>("firmware_fetch", { serial: serial ?? null, partition, version: version ?? null, dest: dest || null });
+  },
+
+  async firmwareVersions(serial) {
+    return await invokeBackend<FirmwareVersions>("firmware_versions", { serial: serial ?? null });
+  },
+
+  async usbModes() {
+    return await invokeBackend<{ mode: string; vendorId: number; productId: number }[]>("usb_modes");
+  },
+
+  async openSettingsScreen(serial, screen) {
+    return (await invokeResult<null>("open_settings_screen", { serial: serial ?? null, screen })).ok;
+  },
+
+  async copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      return false;
+    }
   },
 
   async settingsOverview(serial) {

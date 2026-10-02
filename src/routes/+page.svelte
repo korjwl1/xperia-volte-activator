@@ -11,7 +11,7 @@
 
   const canNext = $derived(
     wizard.view === "warning" ? wizard.omdAck && wizard.riskAck
-    : wizard.view === "step1" ? wizard.hasPatchTarget
+    : wizard.view === "step1" ? wizard.hasAnyTask
     : true
   );
 
