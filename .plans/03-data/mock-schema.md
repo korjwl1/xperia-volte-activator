@@ -17,7 +17,7 @@ DeviceStatus { serialMasked, model:'XQ-DQ44', productName:'Xperia 1 V', firmware
   usb{topology,controller,speed} }
   // patchedWith는 DIAG 리드백(M5) 전까지 판별 불가 — 표시하지 않음
 EnvCheckItem { id,label,state:'pass'|'warn'|'fail'|'info',detail,fixable:bool }
-VolteConfig { sims: { slot:1|2, carrier: CarrierId|null }[], mode }   // null = 패치 안 함, LGU→LGU_V 자동(resolveCarrier)
+VolteConfig { sims: { slot:1|2, carrier: CarrierId|null }[], firmware: string|null, bootloaderAction: "unlock"|"relock"|null }   // null = 패치 안 함, LGU→LGU_V 자동(resolveCarrier), bootloaderAction = 부트로더만 작업(패치·업데이트 없을 때만 유효)
 ManualId += 'unlock-code'|'firmware-select', PlanStep.manual: ManualId[], RunStep.manualDone
 Profile = 'clean-return'|'keep-root'|'unroot-only'
 PlanStep { id,kind,title,desc,optional,enabled,risk:'safe'|'warn'|'danger',wipe:bool,manual?:ManualId[] }   // kind += 'volte-props'

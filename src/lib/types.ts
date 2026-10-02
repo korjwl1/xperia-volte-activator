@@ -117,6 +117,8 @@ export interface VolteConfig {
   sims: SimTarget[];
   /** 펌웨어 목표 버전 — null 또는 설치된 버전 = 업데이트 안 함 (새 버전만 선택 가능) */
   firmware: string | null;
+  /** 부트로더만 작업 — 모든 슬롯이 패치 안 함 + 업데이트 없음일 때만 (사용자 지시 2026-10-03) */
+  bootloaderAction: "unlock" | "relock" | null;
 }
 
 /** LG U+ 선택 시 1 V / 5 V(XQ-DQ*, XQ-DE*)는 전용 프리셋(LGU_V)으로 자동 대체 */

@@ -4,7 +4,7 @@ import { api } from "$lib/api";
 import { LINKS, maskSecret } from "$lib/data/links";
 import { bootPartition } from "$lib/data/devices";
 import { mockBackupGroups } from "$lib/mock/apps";
-import { buildPlan, updateTarget, type PlanOptions } from "$lib/mock/plan";
+import { bootloaderOnly, buildPlan, updateTarget, type PlanOptions } from "$lib/mock/plan";
 
 export type WizardView = "device" | "warning" | "step1" | "step2" | "step3" | "step4";
 
@@ -90,6 +90,7 @@ const defaultVolteConfig = (): VolteConfig => ({
     { slot: 2, carrier: null },
   ],
   firmware: null,
+  bootloaderAction: null,
 });
 
 export class Wizard {
@@ -108,9 +109,14 @@ export class Wizard {
     return updateTarget(this.device, this.volteConfig);
   }
 
-  /** 1단계 [다음] 활성 조건 — VoLTE 패치 또는 펌웨어 업데이트 중 하나 이상 */
+  /** 부트로더만 작업(언락만/리락만) — 유효할 때만 값 */
+  get bootloaderOnly(): "unlock" | "relock" | null {
+    return bootloaderOnly(this.device, this.volteConfig);
+  }
+
+  /** 1단계 [다음] 활성 조건 — VoLTE 패치, 펌웨어 업데이트, 부트로더만 작업 중 하나 이상 */
   get hasAnyTask(): boolean {
-    return this.hasPatchTarget || this.updateVersion !== null;
+    return this.hasPatchTarget || this.updateVersion !== null || this.bootloaderOnly !== null;
   }
 
   // ── 펌웨어 버전 (1단계 사전 옵션) ──
@@ -162,11 +168,12 @@ export class Wizard {
   ensureOptions() {
     const d = this.device;
     if (!d) return;
-    const key = d.serial ?? d.serialMasked;
+    // 작업 종류(부트로더만 작업 여부)가 바뀌면 기본 선택을 다시 만든다
+    const key = `${d.serial ?? d.serialMasked}|${this.bootloaderOnly ?? ""}`;
     if (this.optionsFor === key) return;
     this.optionsFor = key;
-    // 초기화 경로(VoLTE 패치를 위한 잠긴 기기의 언락)가 있으면 백업 기본 전체 선택 — 리락은 기본 해제
-    const defaultOn = this.hasPatchTarget && d.bootloader === "locked";
+    // 초기화 경로(잠긴 기기의 언락, 부트로더만 언락/리락)가 있으면 백업 기본 전체 선택 — 패치 흐름의 리락은 기본 해제
+    const defaultOn = (this.hasPatchTarget && d.bootloader === "locked") || this.bootloaderOnly !== null;
     this.groups = mockBackupGroups.map((g) => ({
       ...g,
       items: g.items.map((i) => ({ ...i, checked: defaultOn })),

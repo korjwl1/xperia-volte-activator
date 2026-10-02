@@ -18,6 +18,14 @@ export function prepReady(d: DeviceStatus): boolean {
   return d.prep.developerOptions === true && d.prep.usbDebugging === true && d.prep.oemUnlockAllowed === true;
 }
 
+/** 부트로더만 작업 — VoLTE 패치·업데이트가 없고 기기 상태가 맞을 때만 유효 */
+export function bootloaderOnly(device: DeviceStatus | null, config: VolteConfig): "unlock" | "relock" | null {
+  if (!device || config.sims.some((s) => s.carrier !== null) || updateTarget(device, config)) return null;
+  if (config.bootloaderAction === "unlock" && device.bootloader === "locked") return "unlock";
+  if (config.bootloaderAction === "relock" && device.bootloader === "unlocked") return "relock";
+  return null;
+}
+
 /** 펌웨어 업데이트 대상 버전 (설치된 버전과 다를 때만) */
 export function updateTarget(device: DeviceStatus | null, config: VolteConfig): string | null {
   return device && config.firmware && config.firmware !== device.firmware ? config.firmware : null;
@@ -30,6 +38,8 @@ export function buildPlan(
   hasBackup: boolean,
 ): PlanStep[] {
   if (!device) return [];
+  const only = bootloaderOnly(device, config);
+  if (only) return finalize(bootloaderOnlyPlan(device, only, opts, hasBackup));
   const steps: Seed[] = [];
   const patch = config.sims.some((s) => s.carrier !== null); // VoLTE 패치 대상 슬롯이 있는지
   const update = updateTarget(device, config);
@@ -103,6 +113,8 @@ export function buildPlan(
   }
   if (relock) {
     steps.push({ id: "relock", kind: "relock", title: "부트로더 리락", desc: "기기가 초기화됩니다", risk: "danger", wipe: true, estSec: 120, manual: ["mode-wait"] });
+    // 초기화 후 최종 확인·복구에 adb 연결이 필요
+    steps.push(setupAfterWipe("setup-relock"));
   }
   if (patch ? bootloaderKnown : update !== null) {
     steps.push({ id: "final-verify", kind: "final-verify", title: "최종 확인", desc: "재부팅 후 VoLTE 작동 여부 확인", estSec: 300, manual: ["ims-check"] });
@@ -112,5 +124,51 @@ export function buildPlan(
     steps.push({ id: "restore", kind: "restore", title: "복구", desc: "백업한 데이터를 기기로 복원", estSec: 1500 });
   }
 
+  return finalize(steps);
+}
+
+function finalize(steps: Seed[]): PlanStep[] {
   return steps.map((s) => ({ ...s, optional: false, enabled: true, risk: s.risk ?? "safe", wipe: s.wipe ?? false }));
+}
+
+function setupAfterWipe(id: string): Seed {
+  return { id, kind: "setup", title: "기본 설정", desc: "재부팅 후 초기 설정 및 USB 디버깅 활성화", estSec: 300, manual: ["usb-debug"] };
+}
+
+/** 부트로더 언락만 / 리락만 — VoLTE 패치·펌웨어 업데이트 없음 */
+function bootloaderOnlyPlan(device: DeviceStatus, only: "unlock" | "relock", opts: PlanOptions, hasBackup: boolean): Seed[] {
+  const steps: Seed[] = [];
+  // 리락 전 순정 이미지 복원 — 루팅 여부를 모르면 안전하게 포함 (수정된 부트 이미지로 리락하면 부팅 불가)
+  const unroot = only === "relock" && device.rooted !== false;
+  const prep: ManualId[] = [];
+  if (only === "unlock" && !prepReady(device)) prep.push("oem-toggle");
+  if (only === "unlock") prep.push("unlock-code");
+  if (unroot) prep.push("firmware-select");
+  if (prep.length > 0) {
+    steps.push({
+      id: "prep",
+      kind: "setup",
+      title: "사전 준비",
+      desc: only === "unlock" ? "언락 조건 확인 · 언락 코드" : "언루팅용 순정 펌웨어 준비",
+      estSec: 300,
+      manual: prep,
+    });
+  }
+  if (hasBackup) {
+    steps.push({ id: "backup", kind: "backup", title: "백업", desc: "선택한 항목을 PC에 저장합니다", risk: "warn", estSec: 1800, manual: ["backup-notice"] });
+  }
+  if (only === "unlock") {
+    steps.push({ id: "unlock", kind: "unlock", title: "부트로더 언락", desc: "기기가 초기화됩니다", risk: "danger", wipe: true, estSec: 120, manual: ["mode-wait"] });
+    steps.push(setupAfterWipe("setup-min"));
+  } else {
+    if (unroot) {
+      steps.push({ id: "unroot", kind: "unroot", title: "언루팅", desc: "순정 이미지로 복원합니다 — 리락 전 필수", risk: "warn", estSec: 180 });
+    }
+    steps.push({ id: "relock", kind: "relock", title: "부트로더 리락", desc: "기기가 초기화됩니다 — VoLTE 패치는 유지됩니다", risk: "danger", wipe: true, estSec: 120, manual: ["mode-wait"] });
+    steps.push(setupAfterWipe("setup-relock"));
+  }
+  if (opts.restore && hasBackup) {
+    steps.push({ id: "restore", kind: "restore", title: "복구", desc: "백업한 데이터를 기기로 복원", estSec: 1500 });
+  }
+  return steps;
 }

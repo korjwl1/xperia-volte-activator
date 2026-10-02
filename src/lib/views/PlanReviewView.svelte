@@ -250,7 +250,17 @@
           </div>
 
         {:else}
-          {#if !patching}
+          {#if wizard.bootloaderOnly === "unlock"}
+            <div class="px-1 text-[11px] text-muted-foreground">
+              부트로더 언락만 진행합니다 — 루팅 · VoLTE 적용은 하지 않습니다
+            </div>
+          {:else if wizard.bootloaderOnly === "relock"}
+            <div class="px-1 text-[11px] text-muted-foreground">
+              {wizard.device?.rooted === false
+                ? "부트로더 리락만 진행합니다 — VoLTE 패치는 유지됩니다"
+                : "리락 전에 언루팅(순정 이미지 복원)을 자동으로 진행합니다 — VoLTE 패치는 유지됩니다"}
+            </div>
+          {:else if !patching}
             <div class="px-1 text-[11px] text-muted-foreground">
               {wizard.device?.rooted === true
                 ? "VoLTE 패치를 선택하지 않았습니다 — 펌웨어 업데이트 후 풀리는 루팅만 새 버전으로 다시 적용합니다"
