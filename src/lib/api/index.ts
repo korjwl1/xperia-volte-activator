@@ -3,7 +3,7 @@
 // 실쓰기(백업/플래싱/EFS)는 항상 mock — 실기기에는 영향 없음
 // 컴포넌트에서 @tauri-apps/api 직접 import 금지.
 
-import type { AdbStatus, AppItem, DeviceStatus, EnvCheckItem, FirmwareResult, FirmwareVersions, SettingsOverview } from "$lib/types";
+import type { AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FirmwareResult, FirmwareVersions, SettingsOverview, SmsIeOutcome } from "$lib/types";
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
 import { classifyApp, SAMPLE_FLAGS, type AppFlag } from "$lib/data/appRules";
 
@@ -74,6 +74,18 @@ export interface Api {
   firmwareDirCheck(dir: string, partition: string): Promise<{ ok: true; value: { file: string; imageBytes: number } } | { ok: false; error: string }>;
   /** 작업 중 PC 보호 — 절전 방지 + Windows 종료 방지 (작업 중에만 켬) */
   runGuard(active: boolean, reason?: string): Promise<boolean>;
+  /** 백업 실행(자동 항목) — 진행은 onBackupProgress로. 실패 시 error 문구 */
+  backupRun(serial: string | undefined, items: string[], dest: string, resumeDir?: string): Promise<{ ok: true; value: BackupSummary } | { ok: false; error: string }>;
+  /** 진행 중 백업 취소 요청 */
+  backupCancel(): Promise<void>;
+  /** 기존 백업 폴더 완결 검사(파괴 단계 게이트용) — 폴더가 없으면 null */
+  backupManifestCheck(dir: string): Promise<BackupSummary | null>;
+  /** SMS Import/Export 설치·권한·임시 폴더 준비 — 로그 문구 목록 반환 */
+  smsiePrepare(serial: string | undefined, download: boolean): Promise<{ ok: true; value: string[] } | { ok: false; error: string }>;
+  /** SMS Import/Export 산출물 수집 — ready=false면 앱에서 아직 내보내지 않음 */
+  smsieCollect(serial: string | undefined, backupDir: string): Promise<SmsIeOutcome | null>;
+  /** 백엔드 이벤트 구독 — unlisten 반환 (데스크톱 전용, 브라우저 dev은 즉시 no-op) */
+  onBackupProgress(cb: (p: BackupProgress) => void): Promise<() => void>;
 }
 
 const hybridApi: Api = {
@@ -183,6 +195,37 @@ const hybridApi: Api = {
 
   async runGuard(active, reason) {
     return (await invokeResult<null>("run_guard", { active, reason: reason ?? null })).ok;
+  },
+
+  async backupRun(serial, items, dest, resumeDir) {
+    return await invokeResult<BackupSummary>("backup_run", { serial: serial ?? null, items, dest, resumeDir: resumeDir || null });
+  },
+
+  async backupCancel() {
+    await invokeBackend<null>("backup_cancel");
+  },
+
+  async backupManifestCheck(dir) {
+    return await invokeBackend<BackupSummary>("backup_manifest_check", { dir });
+  },
+
+  async smsiePrepare(serial, download) {
+    return await invokeResult<string[]>("smsie_prepare", { serial: serial ?? null, download });
+  },
+
+  async smsieCollect(serial, backupDir) {
+    return await invokeBackend<SmsIeOutcome>("smsie_collect", { serial: serial ?? null, backupDir });
+  },
+
+  async onBackupProgress(cb) {
+    if (!inTauri()) return () => {};
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      const un = await listen<BackupProgress>("backup:progress", (e) => cb(e.payload));
+      return un;
+    } catch {
+      return () => {};
+    }
   },
 
   async openExternal(url) {

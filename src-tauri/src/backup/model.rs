@@ -2,7 +2,6 @@
 //! 원천 정책: tasks/plan.md §6, 설계: .plans/04-engine/backup-engine.md
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 /// manifest.json 버전 — 구조가 바뀌면 올리고 복구 쪽에서 마이그레이션한다
 pub const MANIFEST_VERSION: u32 = 1;

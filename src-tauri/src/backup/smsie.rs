@@ -8,7 +8,7 @@
 use crate::backup::model::{FileEntry, ItemKind, ItemRecord, ItemStatus};
 use crate::backup::quarantine::HashingWriter;
 use adb_client::ADBDeviceExt;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub const SMSIE_PKG: &str = "com.github.tmo1.sms_ie";

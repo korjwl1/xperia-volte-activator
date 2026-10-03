@@ -56,7 +56,7 @@ impl Quarantine {
         size: u64,
         mtime: u32,
         tmp: &Path,
-        sha256: &str,
+        _sha256: &str,
     ) -> Result<(), String> {
         // 세그먼트 크기 관리 — 이 파일을 넣어 한도를 넘으면 먼저 닫고 다음 세그먼트
         if self.written + size > SEGMENT_LIMIT {

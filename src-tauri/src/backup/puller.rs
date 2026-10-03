@@ -10,6 +10,19 @@ use adb_client::ADBDeviceExt;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// 풀 대상 파일 — tag는 항목별 부가 키(apk의 패키지명 등). local_for가 로컬 경로를 정한다.
+#[derive(Debug, Clone)]
+pub struct PullFile {
+    pub entry: WalkedEntry,
+    pub tag: String,
+}
+
+impl PullFile {
+    pub fn plain(entry: WalkedEntry) -> Self {
+        Self { entry, tag: String::new() }
+    }
+}
+
 /// 진행 보고 — mod.rs에서 이벤트로 변환(쓰로틀 포함)
 pub struct PullProgress<'a> {
     pub item_id: &'a str,
@@ -27,6 +40,10 @@ impl CancelFlag {
     pub fn new() -> Self {
         Self(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)))
     }
+    /// 전역(static) 취소 플래그와 연결 — backup_cancel 명령이 같은 플래그를 건드린다
+    pub fn from_shared(arc: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        Self(arc)
+    }
     pub fn set(&self) {
         self.0.store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -41,16 +58,16 @@ impl Default for CancelFlag {
     }
 }
 
-/// 파일 항목 백업 — `local_for`가 기기 경로 → 백업 루트 상대 로컬 경로를 정한다.
+/// 파일 항목 백업 — `local_for`가 풀 대상 → 백업 루트 상대 로컬 경로를 정한다.
 /// 대소문자 충돌 판정용 `seen`은 백업 전체에서 공유한다(서로 다른 항목끼리도 겹치지 않게).
 #[allow(clippy::too_many_arguments)]
 pub fn pull_item_files(
     dev: &mut dyn ADBDeviceExt,
     item_id: &str,
     kind: ItemKind,
-    files: &[WalkedEntry],
+    files: &[PullFile],
     backup_root: &Path,
-    local_for: &dyn Fn(&str) -> PathBuf,
+    local_for: &dyn Fn(&PullFile) -> PathBuf,
     seen: &mut HashMap<String, PathBuf>,
     quarantine: &mut Quarantine,
     cancel: &CancelFlag,
@@ -66,16 +83,17 @@ pub fn pull_item_files(
         artifacts: vec![],
         errors: vec![],
     };
-    let total_bytes: u64 = files.iter().map(|f| f.size).sum();
+    let total_bytes: u64 = files.iter().map(|f| f.entry.size).sum();
     let mut bytes_done = 0u64;
     let mut nonce = 0u64;
-    for (i, f) in files.iter().enumerate() {
+    for (i, pf) in files.iter().enumerate() {
         if cancel.cancelled() {
             rec.errors.push("사용자가 작업을 취소했습니다".into());
             rec.status = ItemStatus::Partial;
             return rec;
         }
-        let rel = local_for(&f.remote);
+        let f = &pf.entry;
+        let rel = local_for(pf);
         let rel_str = rel.to_string_lossy().replace('\\', "/");
         let issue = winname::check_relative_path(&rel_str, seen);
         let entry = match issue {
@@ -240,8 +258,12 @@ mod tests {
         (d, tmp, q, HashMap::new(), CancelFlag::new())
     }
 
-    fn walk_files(d: &mut FakeADBDevice) -> Vec<WalkedEntry> {
-        crate::backup::walker::walk(d, "/sdcard/DCIM", &|_| false).files
+    fn walk_files(d: &mut FakeADBDevice) -> Vec<PullFile> {
+        crate::backup::walker::walk(d, "/sdcard/DCIM", &|_| false)
+            .files
+            .into_iter()
+            .map(PullFile::plain)
+            .collect()
     }
 
     #[test]
@@ -255,7 +277,7 @@ mod tests {
             ItemKind::Files,
             &files,
             tmp.path(),
-            &|r| PathBuf::from(format!("sdcard/{}", r.trim_start_matches("/sdcard/"))),
+            &|pf| PathBuf::from(format!("sdcard/{}", pf.entry.remote.trim_start_matches("/sdcard/"))),
             &mut seen,
             &mut q,
             &cancel,
@@ -292,7 +314,7 @@ mod tests {
             ItemKind::Files,
             &files,
             tmp.path(),
-            &|r| PathBuf::from(r.trim_start_matches('/')),
+            &|pf| PathBuf::from(pf.entry.remote.trim_start_matches('/')),
             &mut seen,
             &mut q,
             &cancel,
@@ -311,7 +333,11 @@ mod tests {
         d.list_size_override.insert("/sdcard/DCIM/wrap.bin".into(), 50); // list는 50B라고 보고
         let tmp = tempfile::tempdir().unwrap();
         let mut q = Quarantine::new(tmp.path()).unwrap();
-        let files = crate::backup::walker::walk(&mut d, "/sdcard/DCIM", &|_| false).files;
+        let files: Vec<PullFile> = crate::backup::walker::walk(&mut d, "/sdcard/DCIM", &|_| false)
+            .files
+            .into_iter()
+            .map(PullFile::plain)
+            .collect();
         let rec = pull_item_files(
             &mut d,
             "dcim",

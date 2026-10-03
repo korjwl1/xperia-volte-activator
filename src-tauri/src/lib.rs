@@ -40,7 +40,12 @@ pub fn run() {
             journal::journal_save,
             journal::journal_load,
             journal::journal_archive,
-            guard::run_guard
+            guard::run_guard,
+            backup::backup_run,
+            backup::backup_cancel,
+            backup::backup_manifest_check,
+            backup::smsie_prepare,
+            backup::smsie_collect
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

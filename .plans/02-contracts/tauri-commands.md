@@ -131,6 +131,8 @@ invoke('fastboot_getvar', { serial }) → Record<string,string>              // 
 
 ## backup (M3 — 설계 `.plans/04-engine/backup-engine.md`, 사용자 승인 2026-10-03)
 
+**구현 상태**: `backup_run`·`backup_cancel`·`backup_manifest_check`·`smsie_prepare`·`smsie_collect` ✅ 구현(src-tauri/src/backup/ — FakeADBDevice 단위 테스트로 검증, 실기기 미검증). `restore_run` 진행 중.
+
 ```ts
 invoke('backup_scan_items', { serial, items: string[] }) → { items: { id, files, bytes, ok }[] }
 // 사전 점검·재개 판정 — 항목별 파일 수·바이트 (완결 게이트 표시용)

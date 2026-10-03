@@ -5,8 +5,9 @@ import { LINKS, maskSecret } from "$lib/data/links";
 import { bootPartition } from "$lib/data/devices";
 import { mockBackupGroups } from "$lib/mock/apps";
 import { bootloaderOnly, buildPlan, updateTarget, type PlanOptions } from "$lib/mock/plan";
-import { SIMULATED_RUN } from "$lib/data/runMode";
+import { SIMULATED_RUN, REAL_STEPS } from "$lib/data/runMode";
 import { EFS_PRESET_MODE, EFS_PRESET_VERSION, efsPreset } from "$lib/data/efsPresets";
+import type { BackupSummary } from "$lib/types";
 
 export type WizardView = "device" | "warning" | "step1" | "step2" | "step3" | "step4";
 
@@ -92,6 +93,23 @@ const MANUAL_TEXT: Record<ManualId, Omit<ManualPrompt, "id">> = {
       "직접 확인하려면: 전화 앱 → *#*#4636#*#* → 휴대전화 정보 → IMS 서비스 상태",
     ],
   },
+  "smsie-export": {
+    title: "문자·통화 기록 내보내기 (폰 조작)",
+    steps: [
+      "SMS Import/Export 앱 설치·권한은 자동으로 진행됩니다",
+      "폰의 SMS Import/Export 앱 → 'Export messages'와 'Export call logs'를 각각 누릅니다",
+      "저장 위치 선택 화면에서 xvolte-smsie 폴더(자동 생성됨)를 고릅니다",
+      "내보내기가 끝나면 자동으로 감지됩니다",
+    ],
+  },
+  "smsie-import": {
+    title: "문자·통화 기록 복원 (폰 조작)",
+    steps: [
+      "먼저 폰을 비행기 모드로 전환해 주세요 (기본 문자 앱이 바뀌는 동안 수신 문자가 유실되지 않게)",
+      "SMS Import/Export 앱 → 'Import messages' / 'Import call logs' → xvolte-smsie 폴더의 파일 선택",
+      "가져오기가 끝나면 [확인하고 진행]을 누릅니다 — 앱이 기본 문자 앱에서 원래대로 돌아갑니다",
+    ],
+  },
 };
 
 const defaultVolteConfig = (): VolteConfig => ({
@@ -102,6 +120,24 @@ const defaultVolteConfig = (): VolteConfig => ({
   firmware: null,
   bootloaderAction: null,
 });
+
+/** 백업 항목 id → 화면 라벨 (mock/apps.ts 정의와 동일 — 로그·체크포인트 표기용) */
+const BACKUP_ITEM_LABEL: Record<string, string> = {
+  "settings-all": "전체 설정 백업",
+  apk: "APK 파일",
+  "app-data": "앱 데이터",
+  dcim: "사진·영상 (DCIM)",
+  download: "다운로드",
+  pictures: "Pictures",
+  movies: "Movies",
+  music: "Music",
+  documents: "Documents",
+  recordings: "Recordings",
+  "fs-rest": "그 외 전체 파일 시스템",
+  calllog: "통화 기록",
+  sms: "문자",
+  contacts: "연락처",
+};
 
 export class Wizard {
   view = $state<WizardView>("device");
@@ -254,6 +290,10 @@ export class Wizard {
   running = $state(false);
   finished = $state(false);
   manualCurrent: ManualPrompt | null = $state(null);
+  /** 실전 백업 결과(완결 게이트·복구에 사용) — REAL_STEPS.backup 전환 시에만 채워짐 */
+  backupSummary: BackupSummary | null = $state(null);
+  /** 실전 백업이 만든 폴더(manifest 위치) — 재시도 이어받기·복구·journal에 저장 */
+  backupDir = $state("");
   // 실행 중 입력값 — 언락 코드는 UI/로그에 마스킹해서만 표시
   unlockCode = $state("");
   firmwareDir = $state(""); // 수동 지정(폴백)
@@ -271,6 +311,9 @@ export class Wizard {
   private erroredOnce = false;
   /** 실행 세대 — 중단·처음으로·새 실행·재개 때 증가. 비동기 완료 시 같은 세대인지 확인 */
   private runGen = 0;
+  /** 이번 세대에 실전 백업/복구 러너를 시작했는지(재시도·재개 시 다시 돌도록 -1로 리셋) */
+  private backupRanGen = -1;
+  private restoreRanGen = -1;
   private timer: ReturnType<typeof setInterval> | undefined;
   private cursor = 0;
 
@@ -353,6 +396,8 @@ export class Wizard {
     for (const g of this.groups) for (const i of g.items) i.checked = j.backupItems.includes(i.id);
     this.opts = { ...j.opts };
     this.backupPath = j.backupPath;
+    this.backupDir = j.backupDir ?? "";
+    this.backupSummary = null; // 이어서 진행 시 백업 결과는 단계 재검증으로 다시 채운다
     this.firmware = j.firmware;
     this.firmwareState = j.firmware ? "done" : "idle";
     this.firmwareDir = j.firmwareDir;
@@ -432,6 +477,7 @@ export class Wizard {
       config: $state.snapshot(this.volteConfig),
       opts: { ...this.opts },
       backupPath: this.backupPath,
+      backupDir: this.backupDir || undefined,
       backupItems: this.groups.flatMap((g) => g.items.filter((i) => i.checked).map((i) => i.id)),
       steps: $state.snapshot(this.steps),
       runSteps: this.runSteps.map((st) => ({ ...$state.snapshot(st), logs: st.logs.slice(-300) })),
@@ -580,6 +626,29 @@ export class Wizard {
       cur.status = "manual-wait";
       this.pause();
       void this.openManual(cur, id);
+      return;
+    }
+    // 실전 백업 단계 — 시뮬레이션 대신 백엔드 엔진이 상태를 바꾼다 (REAL_STEPS 전환 시)
+    if (cur.id === "backup" && REAL_STEPS.backup) {
+      if (cur.status === "running") {
+        if (this.backupRanGen !== this.runGen) {
+          this.backupRanGen = this.runGen;
+          this.pause();
+          void this.runRealBackup(cur);
+        } else {
+          // 문자·통화 기록(smsie) 수동 완료 후 재진입 — 완결 판정으로 마무리
+          this.pause();
+          this.finishRealBackup(cur);
+        }
+      }
+      return;
+    }
+    if (cur.id === "restore" && REAL_STEPS.restore) {
+      if (cur.status === "running" && this.restoreRanGen !== this.runGen) {
+        this.restoreRanGen = this.runGen;
+        this.pause();
+        void this.runRealRestore(cur);
+      }
       return;
     }
     cur.progress = Math.min(1, cur.progress + 0.04 + Math.random() * 0.05);
@@ -749,9 +818,24 @@ export class Wizard {
     if (id === "mode-wait") this.watchManual(cur, id, "부트로더(fastboot) 모드 진입 확인", () => this.usbModeIs("fastboot"), 1500);
     if (id === "flash-mode") this.watchManual(cur, id, "플래시 모드 진입 확인", () => this.usbModeIs("flashmode"), 1500);
     if (id === "ims-check") this.watchManual(cur, id, "VoLTE(IMS) 등록 확인", () => this.imsReady(), 5000);
+    if (id === "smsie-export")
+      this.watchManual(
+        cur,
+        id,
+        "내보내기 파일 감지",
+        async () => {
+          const outcome = await api.smsieCollect(this.device?.serial, this.backupDir);
+          if (outcome?.ready && outcome.summary) {
+            this.backupSummary = outcome.summary;
+            return true;
+          }
+          return false;
+        },
+        5000,
+      );
   }
 
-  /** 수동 개입이 열릴 때 자동 동작 — 언락: 발급 페이지 열기 + IMEI 읽기 / 펌웨어: 자동 다운로드 */
+  /** 수동 개입이 열릴 때 자동 동작 — 언락: 발급 페이지 열기 + IMEI 읽기 / 펌웨어: 자동 다운로드 / smsie: 앱 준비 */
   private onManualOpen(id: ManualId) {
     if (id === "unlock-code") {
       void api.openExternal(LINKS.unlock);
@@ -761,7 +845,22 @@ export class Wizard {
     } else if (id === "oem-toggle") {
       // 폰에 해당 설정 화면을 바로 띄움 (개발자 옵션이 꺼져 있으면 휴대전화 정보 — 빌드번호 연타)
       void this.openPhoneSettings();
+    } else if (id === "smsie-export") {
+      // 앱 설치·권한·임시 폴더를 백그라운드로 준비 (사용자는 폰에서 내보내기만)
+      void this.smsiePrepare();
     }
+  }
+
+  /** SMS Import/Export 앱 준비 — 설치(필요 시 GitHub 다운로드)·권한·임시 폴더 */
+  async smsiePrepare() {
+    const cur = this.runSteps[this.cursor];
+    const r = await api.smsiePrepare(this.device?.serial, true);
+    if (r.ok) {
+      cur?.logs.push(`[준비] SMS Import/Export — ${r.value.join(" · ")}`);
+    } else {
+      cur?.logs.push(`[실패] SMS Import/Export 준비: ${r.error}`);
+    }
+    void this.persist(true);
   }
 
   async openPhoneSettings() {
@@ -883,7 +982,7 @@ export class Wizard {
   /** 실제 확인이 필요한 수동 단계인지 (동의·입력형 제외) */
   get manualVerifiable(): boolean {
     const id = this.manualCurrent?.id;
-    return !!id && ["oem-toggle", "usb-debug", "mode-wait", "flash-mode", "su-grant", "ims-check", "ims-precheck"].includes(id);
+    return !!id && ["oem-toggle", "usb-debug", "mode-wait", "flash-mode", "su-grant", "ims-check", "ims-precheck", "smsie-export"].includes(id);
   }
 
   /** 목업 실행에서만 — 폰이 실제로 재부팅되지 않아 확인할 수 없는 단계 건너뛰기 */
@@ -949,6 +1048,18 @@ export class Wizard {
         return (await this.imsReady())
           ? null
           : "VoLTE 등록이 아직 확인되지 않았습니다 — 재부팅 후 통신사 신호가 잡힐 때까지 잠시 기다려 주세요";
+      case "smsie-export": {
+        // 산출물 수신 확인 — 수집이 합쳐지면 완결 여부도 갱신
+        const outcome = await api.smsieCollect(this.device?.serial, this.backupDir);
+        if (outcome?.ready && outcome.summary) {
+          this.backupSummary = outcome.summary;
+          return null;
+        }
+        if (outcome === null && !SIMULATED_RUN) {
+          return "산출 파일 확인에 실패했습니다 — 폰 연결과 폴더 선택(xvolte-smsie)을 확인해 주세요";
+        }
+        return "아직 내보내기 파일이 감지되지 않았습니다 — 앱에서 내보내기를 마치고 저장 위치에 xvolte-smsie 폴더를 골랐는지 확인해 주세요";
+      }
       default:
         return null;
     }
@@ -1023,6 +1134,104 @@ export class Wizard {
     void this.persist(true);
   }
 
+  // ── 실전 백업·복구 (REAL_STEPS 전환 시) ───────────────────
+  // 계약: .plans/02-contracts/tauri-commands.md backup 절. 백엔드 이벤트로 progress·로그·체크포인트를 올린다.
+
+  /** 이번 실행에서 선택한 백업 항목 id (mock 그룹에서 checked만) */
+  private checkedBackupItems(): string[] {
+    return this.groups.flatMap((g) => g.items.filter((i) => i.checked).map((i) => i.id));
+  }
+
+  private async runRealBackup(cur: RunStep) {
+    const gen = this.runGen;
+    const items = this.checkedBackupItems();
+    const dest = this.backupPath;
+    if (!dest.trim()) {
+      this.failStep("백업 저장 위치가 지정되지 않았습니다");
+      return;
+    }
+    cur.logs.push(`[실전] 백업 시작 — 항목 ${items.length}개 → ${dest}`);
+    // 진행 이벤트 구독 → progress·sub 체크포인트 반영
+    const itemOrder = items.slice();
+    const markItemDone = (itemId: string) => {
+      if (!cur.sub) return;
+      const idx = itemOrder.indexOf(itemId);
+      if (idx >= 0 && cur.sub.done < idx + 1) {
+        for (let k = cur.sub.done; k <= idx; k++) cur.logs.push(`[체크포인트] ${BACKUP_ITEM_LABEL[itemOrder[k]] ?? itemOrder[k]} 완료`);
+        cur.sub.done = idx + 1;
+        void this.persist(true);
+      }
+    };
+    let logGate = 0;
+    const un = await api.onBackupProgress((p) => {
+      if (gen !== this.runGen) return;
+      const ratio = p.bytesTotal > 0 ? p.bytesDone / p.bytesTotal : p.filesTotal > 0 ? p.filesDone / p.filesTotal : 0;
+      const idx = Math.max(0, itemOrder.indexOf(p.itemId));
+      cur.progress = Math.min(0.99, (idx + ratio) / Math.max(1, itemOrder.length));
+      if (p.filesDone >= p.filesTotal && p.filesTotal > 0) markItemDone(p.itemId);
+      else if (p.file && logGate++ % 25 === 0) {
+        cur.logs.push(`[백업] ${BACKUP_ITEM_LABEL[p.itemId] ?? p.itemId} — ${p.file}`);
+      }
+      void this.persist();
+    });
+    const r = await api.backupRun(this.device?.serial, items, dest, this.backupDir || undefined);
+    un();
+    if (gen !== this.runGen) return; // 중단·처음으로
+    if (!r.ok) {
+      this.failStep(`백업 실패: ${r.error}`);
+      return;
+    }
+    this.backupDir = r.value.dir;
+    this.backupSummary = r.value;
+    cur.logs.push(`[백업] ${r.value.dir} — 파일 ${r.value.files.toLocaleString()}개, ${(r.value.bytes / 1024 ** 3).toFixed(2)} GiB`);
+    if (!this.needSmsie(items)) return this.finishRealBackup(cur);
+    // 문자·통화 기록(smsie) — 앱 설치·권한은 자동, 내보내기 2탭은 수동 개입
+    const stepDef = this.steps.find((s) => s.id === "backup");
+    if (stepDef && !stepDef.manual?.includes("smsie-export")) stepDef.manual = [...(stepDef.manual ?? []), "smsie-export"];
+    cur.manualDone = 0;
+    cur.status = "manual-wait";
+    this.pause();
+    void this.openManual(cur, "smsie-export");
+  }
+
+  private needSmsie(items: string[]): boolean {
+    return items.includes("sms") || items.includes("calllog");
+  }
+
+  /** 완결 판정으로 백업 단계 마무리 — 파괴 단계(언락/리락) 게이트의 입력이 된다 */
+  private finishRealBackup(cur: RunStep) {
+    const s = this.backupSummary;
+    if (!s) return this.failStep("백업 결과가 없습니다");
+    if (s.complete) {
+      cur.progress = 1;
+      cur.logs.push("[완결] 전수 열거 완료 · 오류 0 — 파괴 단계 진행 가능");
+      this.stepDone(cur);
+    } else {
+      const detail = s.errors.slice(0, 3).join(" / ");
+      this.failStep(`백업 미완결(완결 게이트 실패)${detail ? ` — ${detail}` : ""} — 로그를 확인하고 [이 단계 다시 시도]로 재시도할 수 있습니다`);
+    }
+  }
+
+  /** 단계 완료 공통 처리 — 시뮬레이션 tick의 완료 블록과 같은 규칙 */
+  private stepDone(cur: RunStep) {
+    cur.status = "done";
+    cur.logs.push("[완료]");
+    this.cursor++;
+    void this.persist(true);
+    if (this.cursor >= this.runSteps.length) this.complete();
+    else this.begin();
+  }
+
+  /** 실전 복구 러너 — restore 엔진 연동은 restore 커밋에서 채운다 (플래그 기본 꺼짐) */
+  private async runRealRestore(_cur: RunStep) {
+    if (!this.backupDir) {
+      this.failStep("복구할 백업 폴더가 없습니다");
+      return;
+    }
+    // TODO(restore): restore_run 이벤트 구독·연결 — 복구 엔진 커밋에서 구현
+    this.failStep("복구 엔진이 아직 연결되지 않았습니다");
+  }
+
   // ── 단계 실패 — 실패 상태를 유지하고 다음 단계(리락 포함)로 넘어가지 않는다. 다시 시도 또는 중단만 허용
   stepError = $state("");
   simulateEfsFail = $state(false);
@@ -1087,6 +1296,8 @@ export class Wizard {
     this.stepError = "";
     this.pause();
     this.stopWatch();
+    // 진행 중인 실전 백업이 있으면 백엔드에도 취소 전달
+    void api.backupCancel();
     // 진행 중·수동 대기 단계 모두 대기 상태로 (사이드바 스피너가 남지 않도록), 수동 개입은 처음부터 다시
     this.runSteps.forEach((s) => {
       if (s.status === "running" || s.status === "manual-wait") {
@@ -1165,6 +1376,10 @@ export class Wizard {
     this.stepError = "";
     this.simulateEfsFail = false;
     this.efsFailedOnce = false;
+    this.backupSummary = null;
+    this.backupDir = "";
+    this.backupRanGen = -1;
+    this.restoreRanGen = -1;
     this.journalSims = undefined;
     this.sessionFor = null;
     this.pendingJournal = null;
