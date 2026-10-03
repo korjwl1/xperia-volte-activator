@@ -1,5 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod adb;
+mod backup;
 mod firmware;
 mod host;
 mod guard;
@@ -39,7 +40,15 @@ pub fn run() {
             journal::journal_save,
             journal::journal_load,
             journal::journal_archive,
-            guard::run_guard
+            guard::run_guard,
+            backup::backup_run,
+            backup::backup_cancel,
+            backup::backup_manifest_check,
+            backup::smsie_prepare,
+            backup::smsie_collect,
+            backup::restore_run,
+            backup::smsie_restore_stage,
+            backup::smsie_restore_finish
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -67,7 +67,8 @@ export type StepKind =
 
 export type ManualId =
   | "usb-debug" | "su-grant" | "magisk-patch" | "oem-toggle" | "mode-wait" | "ims-check"
-  | "unlock-code" | "firmware-select" | "backup-notice" | "flash-mode" | "ims-precheck";
+  | "unlock-code" | "firmware-select" | "backup-notice" | "flash-mode" | "ims-precheck"
+  | "smsie-export" | "smsie-import";
 
 /** 수동 개입 모달 내용 — input이 있으면 입력 완료 전까지 [완료] 비활성 */
 export interface ManualPrompt {
@@ -204,6 +205,41 @@ export interface SettingsOverview {
   batteryExemptApps: number;
 }
 
+/** 백업 실행 결과 — 백엔드 backup_run (계약 .plans/02-contracts) */
+export interface BackupSummary {
+  complete: boolean;
+  files: number;
+  bytes: number;
+  dir: string;
+  errors: string[];
+  items: { id: string; status: string; files: number; bytes: number }[];
+}
+
+/** 백업·복구 진행 이벤트 페이로드 — 'backup:progress' / 'restore:progress' */
+export interface BackupProgress {
+  itemId: string;
+  phase: string;
+  file?: string;
+  filesDone: number;
+  filesTotal: number;
+  bytesDone: number;
+  bytesTotal: number;
+}
+
+/** SMS Import/Export 수집 결과 — ready=false면 앱에서 아직 내보내지 않음 */
+export interface SmsIeOutcome {
+  ready: boolean;
+  summary: BackupSummary | null;
+}
+
+/** 복구 실행 결과 — 자동 복구 로그·실패 목록(실패가 있어도 나머지는 진행) */
+export interface RestoreOutcome {
+  logs: string[];
+  failures: string[];
+  /** 문자·통화 기록(smsie) 수동 복원이 남아 있음 — 수동 개입 단계로 진행 */
+  smsiePending: boolean;
+}
+
 export type RunStatus =
   | "pending" | "running" | "done" | "failed" | "skipped" | "manual-wait";
 
@@ -231,6 +267,8 @@ export interface RunJournal {
   config: VolteConfig;
   opts: { unroot: boolean; relock: boolean; restore: boolean };
   backupPath: string;
+  /** 실전 백업이 만든 백업 폴더(manifest.json 위치) — 복구·이어받기에 사용 */
+  backupDir?: string;
   /** 선택한 백업 항목 id */
   backupItems: string[];
   steps: PlanStep[];
