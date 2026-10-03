@@ -5,6 +5,7 @@ import { LINKS, maskSecret } from "$lib/data/links";
 import { bootPartition } from "$lib/data/devices";
 import { mockBackupGroups } from "$lib/mock/apps";
 import { bootloaderOnly, buildPlan, updateTarget, type PlanOptions } from "$lib/mock/plan";
+import { SIMULATED_RUN } from "$lib/data/runMode";
 
 export type WizardView = "device" | "warning" | "step1" | "step2" | "step3" | "step4";
 
@@ -299,6 +300,8 @@ export class Wizard {
     this.firmware = j.firmware;
     this.firmwareState = j.firmware ? "done" : "idle";
     this.firmwareDir = j.firmwareDir;
+    // 직접 지정한 폴더는 그사이 바뀌었을 수 있으므로 다시 검사
+    if (!j.firmware && j.firmwareDir) void this.setFirmwareDir(j.firmwareDir);
     this.steps = j.steps;
     // 끊긴 단계는 처음부터 다시 — 실제 구현은 단계 시작 시 기기 상태를 먼저 확인해 이미 끝난 작업은 건너뛴다
     const runSteps: RunStep[] = j.runSteps.map((st) =>
@@ -370,6 +373,27 @@ export class Wizard {
     return api.journalSave(key, JSON.stringify(j));
   }
 
+  // ── 작업 중 PC 보호 (절전·Windows 종료 방지) — 실행 중·폰 확인 대기 중에는 켜고, 끝나거나 멈추면 끈다
+  private guardOn = false;
+  private setGuard(on: boolean) {
+    if (this.guardOn === on) return;
+    this.guardOn = on;
+    void api.runGuard(on, "Xperia VoLTE 작업 진행 중 — 끝날 때까지 PC를 끄지 마세요");
+  }
+
+  /** Windows 종료 요청 (guard.rs 이벤트) — query: 종료 보류 중 기록 저장 / end: 그래도 종료됨 */
+  onSessionEnd(kind: string) {
+    if (!this.runUnfinished) return;
+    const cur = this.runSteps[this.cursor];
+    if (kind === "end" && cur && !this.stopInfo) {
+      this.stopInfo = { stepId: cur.id, stepTitle: cur.title, reason: "Windows 종료로 프로그램이 종료되었습니다", at: new Date().toISOString() };
+      cur.logs.push(`[종료] ${this.stopInfo.reason}`);
+    } else if (kind === "query" && cur) {
+      cur.logs.push("[경고] Windows 종료 요청을 보류했습니다 — 작업이 끝날 때까지 PC를 끄지 마세요");
+    }
+    void this.persist(true);
+  }
+
   /** 끝나지 않은 실행이 있는지 — 창을 닫을 때 확인 */
   get runUnfinished(): boolean {
     return this.view === "step3" && this.runSteps.length > 0 && !this.finished;
@@ -397,12 +421,14 @@ export class Wizard {
       cur.logs.push(`[종료] ${this.stopInfo.reason}`);
     }
     await this.persist(true);
+    this.setGuard(false);
   }
 
   /** 명시적으로 멈춘 사유를 기록 */
   private markStop(reason: string) {
     const cur = this.runSteps[this.cursor];
     this.stopInfo = cur ? { stepId: cur.id, stepTitle: cur.title, reason, at: new Date().toISOString() } : null;
+    this.setGuard(false);
     void this.persist(true);
   }
 
@@ -421,6 +447,7 @@ export class Wizard {
     if (this.running || this.usbError) return;
     this.running = true;
     this.stopInfo = null;
+    this.setGuard(true);
     this.timer = setInterval(() => this.tick(), 140);
   }
 
@@ -596,6 +623,8 @@ export class Wizard {
       cur.status = "manual-wait";
       cur.logs.push(`[실패] 순정 펌웨어 자동 다운로드: ${this.firmwareError}`);
     }
+    this.manualCheckError = "";
+    this.oemUnknownAck = false;
     this.manualCurrent = { id, ...MANUAL_TEXT[id] };
     this.onManualOpen(id);
     cur.logs.push(`[대기] 수동 개입: ${this.manualCurrent.title}`);
@@ -705,18 +734,145 @@ export class Wizard {
   /** 백업 직전 안내 동의 */
   backupNoticeAck = $state(false);
 
+  // ── 수동 확인 검증 — "완료" 버튼은 건너뛰기가 아니라 실제 확인 후 진행 ──
+  manualChecking = $state(false);
+  manualCheckError = $state("");
+  /** 언락 조건 중 "확인 불가" 항목을 폰에서 직접 켰다고 확인 */
+  oemUnknownAck = $state(false);
+  firmwareDirInfo: { file: string; imageBytes: number } | null = $state(null);
+  firmwareDirState = $state<LoadState>("idle");
+  firmwareDirError = $state("");
+  /** 최종 VoLTE 확인을 건너뛰고 마무리했는지 (SIM 없이 미리 패치 등) */
+  imsUnverified = $state(false);
+
+  /** 언락 조건 중 판별할 수 없는 항목 */
+  get prepUnknown(): string[] {
+    const p = this.device?.prep;
+    if (!p) return ["개발자 옵션", "USB 디버깅", "OEM 잠금 해제"];
+    const out: string[] = [];
+    if (p.developerOptions === null) out.push("개발자 옵션");
+    if (p.usbDebugging === null) out.push("USB 디버깅");
+    if (p.oemUnlockAllowed === null) out.push("OEM 잠금 해제");
+    return out;
+  }
+
+  /** 실제 확인이 필요한 수동 단계인지 (동의·입력형 제외) */
+  get manualVerifiable(): boolean {
+    const id = this.manualCurrent?.id;
+    return !!id && ["oem-toggle", "usb-debug", "mode-wait", "flash-mode", "su-grant", "ims-check"].includes(id);
+  }
+
+  /** 목업 실행에서만 — 폰이 실제로 재부팅되지 않아 확인할 수 없는 단계 건너뛰기 */
+  get manualSkippable(): boolean {
+    return SIMULATED_RUN && this.manualVerifiable;
+  }
+
+  /** 직접 지정한 펌웨어 폴더 — 고르는 즉시 검사 */
+  async setFirmwareDir(dir: string) {
+    this.firmwareDir = dir;
+    this.firmwareDirInfo = null;
+    this.firmwareDirError = "";
+    const partition = this.partition;
+    if (!partition) {
+      this.firmwareDirState = "failed";
+      this.firmwareDirError = "이 기종의 대상 파티션이 확인되지 않아 폴더를 검사할 수 없습니다";
+      return;
+    }
+    this.firmwareDirState = "loading";
+    const r = await api.firmwareDirCheck(dir, partition);
+    if (this.firmwareDir !== dir) return;
+    if (r.ok) {
+      this.firmwareDirInfo = r.value;
+      this.firmwareDirState = "done";
+    } else {
+      this.firmwareDirState = "failed";
+      this.firmwareDirError = r.error;
+    }
+  }
+
+  /** 수동 단계 실제 확인 — 통과하면 null, 아니면 사용자에게 보여줄 사유 */
+  private async verifyManual(id: ManualId): Promise<string | null> {
+    switch (id) {
+      case "oem-toggle": {
+        await this.recheckPrep();
+        if (this.prepMissing.length > 0) return `${this.prepMissing.join(", ")}이(가) 꺼져 있습니다 — 폰에서 켠 뒤 다시 확인해 주세요`;
+        if (this.prepUnknown.length > 0 && !this.oemUnknownAck) return `${this.prepUnknown.join(", ")}을(를) 자동으로 확인할 수 없습니다 — 폰에서 직접 켠 뒤 아래에 체크해 주세요`;
+        return null;
+      }
+      case "usb-debug":
+        return (await this.usbDebugReady()) ? null : "폰이 아직 USB 디버깅으로 연결되지 않았습니다 — 폰 화면에서 '허용'을 눌렀는지 확인해 주세요";
+      case "mode-wait":
+        return (await this.usbModeIs("fastboot")) ? null : "부트로더(fastboot) 모드가 감지되지 않았습니다 — USB 연결을 확인해 주세요";
+      case "flash-mode":
+        return (await this.usbModeIs("flashmode"))
+          ? null
+          : "플래시 모드가 감지되지 않았습니다 — 전원을 끈 뒤 볼륨 아래 버튼을 누른 채 USB를 연결해 주세요";
+      case "su-grant": {
+        const ok = await api.rootCheck(this.device?.serial);
+        return ok ? null : "루트 권한이 확인되지 않았습니다 — 폰에서 Magisk 권한 요청을 '허용'했는지 확인해 주세요";
+      }
+      case "ims-check":
+        return (await this.imsReady())
+          ? null
+          : "VoLTE 등록이 아직 확인되지 않았습니다 — 재부팅 후 통신사 신호가 잡힐 때까지 잠시 기다려 주세요";
+      default:
+        return null;
+    }
+  }
+
+  /** [확인하고 진행] — 확인되면 진행, 아니면 사유 표시 */
+  async confirmManual() {
+    const m = this.manualCurrent;
+    if (!m || !this.manualInputReady || this.manualChecking) return;
+    this.manualChecking = true;
+    this.manualCheckError = "";
+    try {
+      const err = await this.verifyManual(m.id);
+      if (this.manualCurrent?.id !== m.id) return; // 그사이 자동 감지로 진행됨
+      if (err) {
+        this.manualCheckError = err;
+        this.runSteps[this.cursor]?.logs.push(`[확인 실패] ${err}`);
+        void this.persist(true);
+        return;
+      }
+      this.stopWatch();
+      this.ackManual();
+    } finally {
+      this.manualChecking = false;
+    }
+  }
+
+  /** (목업) 확인 건너뛰기 — SIMULATED_RUN에서만 */
+  skipManual() {
+    if (!this.manualSkippable) return;
+    this.runSteps[this.cursor]?.logs.push("[목업] 확인을 건너뛰었습니다 — 실제 실행에서는 확인될 때까지 진행하지 않습니다");
+    this.stopWatch();
+    this.ackManual(true);
+  }
+
+  /** 최종 VoLTE 확인 없이 마무리 — SIM 없이 미리 패치한 경우 등 (작업 자체는 모두 끝난 상태) */
+  finishWithoutIms() {
+    if (this.manualCurrent?.id !== "ims-check") return;
+    this.imsUnverified = true;
+    this.runSteps[this.cursor]?.logs.push("[확인 생략] VoLTE 등록을 확인하지 못한 채 마무리했습니다 — SIM을 넣은 뒤 VoLTE 상태를 확인해 주세요");
+    this.stopWatch();
+    this.ackManual(true);
+  }
+
   /** 입력형 수동 개입은 값이 채워져야 완료 가능 */
   get manualInputReady(): boolean {
     const m = this.manualCurrent;
     if (m?.id === "backup-notice") return this.backupNoticeAck;
-    if (m?.id === "oem-toggle") return this.prepMissing.length === 0 && !this.prepChecking;
+    if (m?.id === "oem-toggle") return this.prepMissing.length === 0 && (this.prepUnknown.length === 0 || this.oemUnknownAck) && !this.prepChecking;
     if (!m?.input) return true;
     if (m.input === "unlock-code") return this.unlockCodeValid;
-    return this.firmware !== null || this.firmwareDir.trim().length > 0;
+    return this.firmware !== null || this.firmwareDirInfo !== null;
   }
 
-  ackManual() {
-    if (!this.manualInputReady) return;
+  /** 수동 단계 완료 처리 — 확인을 거친 경로(confirmManual·자동 감지·목업 건너뛰기)에서만 호출 */
+  ackManual(force = false) {
+    if (!force && !this.manualInputReady) return;
+    this.manualCheckError = "";
     const cur = this.runSteps[this.cursor];
     const m = this.manualCurrent;
     if (cur) {
@@ -799,6 +955,14 @@ export class Wizard {
     this.simulateUsbError = false;
     this.erroredOnce = false;
     this.cursor = 0;
+    this.setGuard(false);
+    this.manualChecking = false;
+    this.manualCheckError = "";
+    this.oemUnknownAck = false;
+    this.firmwareDirInfo = null;
+    this.firmwareDirState = "idle";
+    this.firmwareDirError = "";
+    this.imsUnverified = false;
     this.pendingJournal = null;
     this.journalKey = null;
     this.journalStarted = "";
@@ -808,6 +972,7 @@ export class Wizard {
   private complete() {
     this.pause();
     this.finished = true;
+    this.setGuard(false);
     void this.persist(true);
     if (this.journalKey) void api.journalArchive(this.journalKey, "done");
   }

@@ -68,6 +68,12 @@ export interface Api {
   journalLoad(key: string): Promise<string | null>;
   /** 진행 기록 보관 — done(끝남) / discarded(새로 시작) */
   journalArchive(key: string, tag: "done" | "discarded"): Promise<boolean>;
+  /** 루트 권한 승인 여부 (su -c id = uid=0), 조회 실패 시 null */
+  rootCheck(serial?: string): Promise<boolean | null>;
+  /** 직접 지정한 펌웨어 폴더 검사 — <partition>_*.sin 존재 + 부트 이미지 추출 가능 */
+  firmwareDirCheck(dir: string, partition: string): Promise<{ ok: true; value: { file: string; imageBytes: number } } | { ok: false; error: string }>;
+  /** 작업 중 PC 보호 — 절전 방지 + Windows 종료 방지 (작업 중에만 켬) */
+  runGuard(active: boolean, reason?: string): Promise<boolean>;
 }
 
 const hybridApi: Api = {
@@ -165,6 +171,18 @@ const hybridApi: Api = {
 
   async journalArchive(key, tag) {
     return (await invokeResult<null>("journal_archive", { key, tag })).ok;
+  },
+
+  async rootCheck(serial) {
+    return await invokeBackend<boolean>("root_check", { serial: serial ?? null });
+  },
+
+  async firmwareDirCheck(dir, partition) {
+    return await invokeResult<{ file: string; imageBytes: number }>("firmware_dir_check", { dir, partition });
+  },
+
+  async runGuard(active, reason) {
+    return (await invokeResult<null>("run_guard", { active, reason: reason ?? null })).ok;
   },
 
   async openExternal(url) {

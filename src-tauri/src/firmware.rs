@@ -521,6 +521,55 @@ fn versions_work(serial: Option<String>) -> Result<FirmwareVersionsOut, String> 
     Ok(FirmwareVersionsOut { model, installed, supported: true, versions })
 }
 
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FirmwareDirOut {
+    /// 찾은 .sin 파일 이름
+    file: String,
+    /// 추출한 이미지 크기
+    image_bytes: u64,
+}
+
+/// 직접 지정한 펌웨어 폴더 검사 — <partition>_*.sin이 있고, 그 안의 이미지가 부트 이미지(ANDROID!)인지 (PC 파일 읽기만)
+fn dir_check_work(dir: &str, partition: &str) -> Result<FirmwareDirOut, String> {
+    if partition != "init_boot" && partition != "boot" {
+        return Err("지원하지 않는 파티션입니다".into());
+    }
+    let root = Path::new(dir);
+    if !root.is_dir() {
+        return Err("폴더를 찾을 수 없습니다".into());
+    }
+    // XperiFirm은 폴더 안에 바로 풀어 두지만, 한 단계 아래 폴더도 확인
+    let mut candidates = vec![];
+    for entry in std::fs::read_dir(root).map_err(|e| format!("폴더 읽기 실패: {e}"))?.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            if let Ok(sub) = std::fs::read_dir(&p) {
+                candidates.extend(sub.flatten().map(|e| e.path()));
+            }
+        } else {
+            candidates.push(p);
+        }
+    }
+    let sin = candidates
+        .into_iter()
+        .filter(|p| p.is_file())
+        .find(|p| sin_name_matches(&p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), partition))
+        .ok_or_else(|| format!("폴더에 {partition}_*.sin 파일이 없습니다 — XperiFirm으로 받은 펌웨어 폴더인지 확인해 주세요"))?;
+    let data = std::fs::read(&sin).map_err(|e| format!("{} 읽기 실패: {e}", sin.display()))?;
+    let img = extract_sin_image(&data)?;
+    Ok(FirmwareDirOut {
+        file: sin.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+        image_bytes: img.len() as u64,
+    })
+}
+
+/// 직접 지정한 펌웨어 폴더가 쓸 수 있는지 확인 (읽기 전용)
+#[tauri::command]
+pub async fn firmware_dir_check(dir: String, partition: String) -> Result<FirmwareDirOut, String> {
+    guarded(Duration::from_secs(60), move || dir_check_work(&dir, &partition)).await
+}
+
 /// 서버에 있는 펌웨어 버전 (읽기 전용 조회)
 #[tauri::command]
 pub async fn firmware_versions(serial: Option<String>) -> Result<FirmwareVersionsOut, String> {
@@ -530,6 +579,18 @@ pub async fn firmware_versions(serial: Option<String>) -> Result<FirmwareVersion
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dir_check_rejects_bad_folders() {
+        let tmp = std::env::temp_dir().join("xvolte_dircheck_test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        assert!(dir_check_work(tmp.to_str().unwrap(), "init_boot").unwrap_err().contains(".sin 파일이 없습니다"));
+        std::fs::write(tmp.join("init_boot_X-FLASH-ALL-TEST.sin"), b"not a tar").unwrap();
+        assert!(dir_check_work(tmp.to_str().unwrap(), "init_boot").is_err());
+        assert!(dir_check_work("Z:\\없는 폴더", "init_boot").is_err());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn space_check_and_dest_dir() {

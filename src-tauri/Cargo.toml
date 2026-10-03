@@ -42,3 +42,7 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# 작업 중 절전·Windows 종료 방지 (guard.rs)
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Power", "Win32_System_Threading", "Win32_System_Shutdown", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

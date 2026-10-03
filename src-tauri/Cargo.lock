@@ -5563,6 +5563,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "ureq",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

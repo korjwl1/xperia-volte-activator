@@ -172,3 +172,20 @@ invoke('journal_archive', { key, tag: 'done'|'discarded' }) → void  // <key>.<
 // key = SHA-256(모델|시리얼) 앞 16바이트 hex — 파일 이름에 시리얼을 그대로 쓰지 않음, Rust에서 16~64자 hex만 허용
 // data = RunJournal (types.ts): 선택 옵션·계획·단계별 상태/로그(단계당 최근 300줄)·멈춘 사유. 언락 코드·IMEI 없음
 ```
+
+## guard (작업 중 PC 보호 — 사용자 승인 2026-10-03)
+
+```ts
+invoke('run_guard', { active: boolean, reason?: string }) → void
+// 켬: 절전 방지(PowerCreateRequest/PowerSetRequest SystemRequired) + Windows 종료 방지(ShutdownBlockReasonCreate)
+// 메인 창 서브클래스가 보호 중 WM_QUERYENDSESSION에 FALSE 응답 → Windows가 "종료를 막고 있습니다: <사유>" 표시
+// 이벤트 'run-guard': "query"(종료 보류 — 기록 저장) | "end"(사용자가 그래도 종료 — 사유 기록)
+// 프론트: begin() 시 켬, complete/중단·오류(markStop)/창 닫기/처음으로 시 끔. 폰 확인 대기 중에는 유지
+```
+
+## 수동 확인용 (읽기 전용)
+
+```ts
+invoke('root_check', { serial? }) → boolean            // su -c id 결과에 uid=0 — Magisk 허용 창이 뜰 수 있음, 기기 변경 없음
+invoke('firmware_dir_check', { dir, partition }) → { file, imageBytes }  // PC 폴더에서 <partition>_*.sin 찾아 부트 이미지 추출 확인
+```

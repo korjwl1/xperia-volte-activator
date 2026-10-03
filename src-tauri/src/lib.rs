@@ -2,6 +2,7 @@
 mod adb;
 mod firmware;
 mod host;
+mod guard;
 mod journal;
 mod usbmode;
 
@@ -17,6 +18,8 @@ pub fn run() {
             if let Ok(dir) = app.path().app_local_data_dir() {
                 adb::set_key_dir(dir);
             }
+            // 작업 중 Windows 종료 메시지 가로채기 (보호는 run_guard로 켤 때만 동작)
+            guard::init(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -31,9 +34,12 @@ pub fn run() {
             host::disk_free,
             firmware::firmware_fetch,
             firmware::firmware_versions,
+            firmware::firmware_dir_check,
+            adb::root_check,
             journal::journal_save,
             journal::journal_load,
-            journal::journal_archive
+            journal::journal_archive,
+            guard::run_guard
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

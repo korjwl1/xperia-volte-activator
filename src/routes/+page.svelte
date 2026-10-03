@@ -22,16 +22,22 @@
   onMount(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     let unlisten: (() => void) | undefined;
+    let unlistenGuard: (() => void) | undefined;
     void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
       const win = getCurrentWindow();
       closeWindow = () => win.destroy();
+      const { listen } = await import("@tauri-apps/api/event");
+      unlistenGuard = await listen<string>("run-guard", (e) => wizard.onSessionEnd(e.payload));
       unlisten = await win.onCloseRequested(async (e) => {
         if (!wizard.runUnfinished) return;
         e.preventDefault();
         closeAsk = true;
       });
     });
-    return () => unlisten?.();
+    return () => {
+      unlisten?.();
+      unlistenGuard?.();
+    };
   });
 
   async function confirmClose() {
@@ -124,18 +130,24 @@
               <TriangleAlert size={20} />
             </span>
             <div class="space-y-0.5">
-              <h2 class="text-base font-semibold">작업이 아직 끝나지 않았습니다</h2>
-              <p class="text-xs text-muted-foreground">지금 종료하면 현재 단계에서 멈추고, 같은 폰을 다시 연결하면 이어서 진행할 수 있습니다</p>
+              <h2 class="text-base font-semibold">{wizard.runInDanger ? "지금은 프로그램을 닫을 수 없습니다" : "작업이 아직 끝나지 않았습니다"}</h2>
+              <p class="text-xs text-muted-foreground">
+                {wizard.runInDanger
+                  ? "이 단계가 끝나면 닫을 수 있습니다"
+                  : "지금 종료하면 현재 단계에서 멈추고, 같은 폰을 다시 연결하면 이어서 진행할 수 있습니다"}
+              </p>
             </div>
           </div>
           {#if wizard.runInDanger}
             <div class="rounded-lg bg-danger-container/60 px-4 py-2 text-xs text-destructive">
-              되돌리기 어려운 작업이 진행 중입니다. 중간에 끊기면 폰이 정상적으로 켜지지 않을 수 있으니 끝날 때까지 기다리는 것을 권장합니다.
+              되돌리기 어려운 작업이 진행 중입니다. 중간에 끊기면 폰이 정상적으로 켜지지 않을 수 있습니다.
             </div>
           {/if}
           <div class="flex justify-end gap-2">
             <Button variant="outline" size="sm" disabled={closing} onclick={() => (closeAsk = false)}>계속 작업</Button>
-            <Button variant="destructive" size="sm" disabled={closing} onclick={confirmClose}>{closing ? "기록 저장 중…" : "종료"}</Button>
+            {#if !wizard.runInDanger}
+              <Button variant="destructive" size="sm" disabled={closing} onclick={confirmClose}>{closing ? "기록 저장 중…" : "종료"}</Button>
+            {/if}
           </div>
         </div>
       </div>

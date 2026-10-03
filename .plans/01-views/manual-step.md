@@ -34,3 +34,21 @@ RunProgress 실행 중 폰 측 조작이 필요한 지점(§12)에서 모달로 
   - 강조 테두리는 이미지에 굽지 않고 테마 색(--primary)으로 CSS에서 그림 → 다크/라이트 공통
 - 현재 적용: oem-toggle(빌드 번호 → 개발자 옵션 → OEM 잠금 해제 → USB 디버깅), flash-mode(일러스트 1장), usb-debug(빌드 번호 → USB 디버깅 → PC 연결·허용)
 - 최종 VoLTE 확인(ims-check)은 앱이 IMS 등록으로 자동 판정하므로 그림 안내 없음
+
+
+## 수동 단계 완료 = 실제 확인 (사용자 지시 2026-10-03)
+
+- "폰에서 완료했어요"(건너뛰기) 대신 **[확인하고 진행]**: 누르면 그 자리에서 확인, 통과해야 진행. 실패 시 사유 표시 + 로그 [확인 실패]
+  | 단계 | 확인 방법 |
+  |---|---|
+  | oem-toggle | 다시 읽어서 꺼진 항목 없음. "확인 불가" 항목은 통과로 보지 않음 → "폰에서 직접 켜 두었습니다" 체크 필요(안 켜져 있으면 언락 명령이 거부되어 멈춤, 폰 영향 없음) |
+  | usb-debug | 같은 기기가 adb device 상태 |
+  | mode-wait / flash-mode | usb_modes에 fastboot / flashmode |
+  | su-grant | root_check (su -c id = uid=0) |
+  | ims-check | 패치한 슬롯이 모두 IMS 음성 등록. 실패 시 [확인 없이 마무리] 허용 — SIM 없이 미리 패치하는 경우 등, 작업은 이미 끝난 상태 (완료 화면에 "VoLTE 등록은 확인하지 못했습니다" 안내) |
+  | unlock-code | 형식(16자리 16진수)만 — 실제 백엔드는 fastboot가 거부하면 그 단계에서 멈추고 다시 입력받음 |
+  | firmware(직접 지정) | firmware_dir_check: 폴더(한 단계 하위 포함)에 <partition>_*.sin, 부트 이미지(ANDROID!) 추출 가능. 버전 일치 확인은 실제 백엔드에서 추가 필요 |
+  | backup-notice | 동의 체크(확인 대상 아님) |
+- 자동 감지(watcher)는 그대로 — 감지되면 자동 진행
+- 목업 실행(src/lib/data/runMode.ts SIMULATED_RUN = true)에서만 "(목업) 건너뛰기" 표시 — 폰이 실제로 재부팅되지 않아 모드·루트 확인이 통과할 수 없기 때문. 실전 백엔드 연결 시 false
+- 실제 백엔드의 각 단계는 명령을 보내기 전에 전제 조건을 다시 확인 (예: 리락 전 fastboot 연결·순정 부트 이미지)

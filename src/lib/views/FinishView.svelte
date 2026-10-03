@@ -39,6 +39,17 @@
       </CardContent>
     </Card>
 
+    {#if wizard.imsUnverified}
+      <Card class="elev-1">
+        <CardContent class="py-4 text-[13px]">
+          <div class="font-medium">VoLTE 등록은 확인하지 못했습니다</div>
+          <div class="text-[12px] text-muted-foreground">
+            작업은 모두 끝났습니다. SIM을 넣고 재부팅한 뒤 통화 설정에서 VoLTE가 켜지는지 확인해 주세요.
+          </div>
+        </CardContent>
+      </Card>
+    {/if}
+
     {#if backedUp && wizard.backupPath}
       <Card class="elev-1">
         <CardContent class="py-4 flex items-center gap-3">

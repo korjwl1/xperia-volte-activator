@@ -19,10 +19,12 @@
   import BackupNotice from "$lib/components/BackupNotice.svelte";
   import GuideSlides from "$lib/components/GuideSlides.svelte";
   import { GUIDES } from "$lib/data/guides";
+  import { SIMULATED_RUN } from "$lib/data/runMode";
+  import { Checkbox } from "$lib/components/ui/checkbox";
 
   async function pickFirmware() {
     const dir = await api.pickFolder();
-    if (dir) wizard.firmwareDir = dir;
+    if (dir) void wizard.setFirmwareDir(dir);
   }
   async function pickFirmwareDest() {
     const dir = await api.pickFolder();
@@ -172,6 +174,15 @@
               </div>
             {/each}
           </div>
+          {#if wizard.prepUnknown.length > 0}
+            <label class="flex items-start gap-2.5 rounded-lg border px-3 py-2.5 cursor-pointer {wizard.oemUnknownAck ? 'border-primary/40 bg-primary/5' : ''}">
+              <Checkbox class="mt-0.5" checked={wizard.oemUnknownAck} onCheckedChange={(v: boolean | "indeterminate") => (wizard.oemUnknownAck = v === true)} />
+              <span class="text-[12.5px]">
+                {wizard.prepUnknown.join(", ")}을(를) 폰에서 직접 켜 두었습니다
+                <span class="block text-[11px] text-muted-foreground">켜져 있지 않으면 언락 단계에서 거부되어 멈춥니다 — 폰에는 영향이 없습니다</span>
+              </span>
+            </label>
+          {/if}
           <div class="flex gap-2">
             <Button variant="outline" size="sm" onclick={() => wizard.openPhoneSettings()}>폰에서 설정 화면 열기</Button>
             <Button variant="outline" size="sm" disabled={wizard.prepChecking} onclick={() => wizard.recheckPrep()}>
@@ -261,6 +272,19 @@
               </div>
               <Button variant="outline" size="sm" class="shrink-0" onclick={pickFirmware}>폴더 선택</Button>
             </div>
+            {#if wizard.firmwareDirState === "loading"}
+              <div class="flex items-center gap-2 text-[12px] text-muted-foreground">
+                <LoaderCircle size={13} class="animate-spin text-primary shrink-0" />폴더 검사 중…
+              </div>
+            {:else if wizard.firmwareDirInfo}
+              <div class="flex items-center gap-2 text-[12px] text-success">
+                <CircleCheck size={13} class="shrink-0" />{wizard.firmwareDirInfo.file} · 부트 이미지 {mb(wizard.firmwareDirInfo.imageBytes)} 확인
+              </div>
+            {:else if wizard.firmwareDirState === "failed"}
+              <div class="flex items-start gap-2 text-[12px] text-destructive">
+                <OctagonX size={13} class="shrink-0 mt-0.5" />{wizard.firmwareDirError}
+              </div>
+            {/if}
           {/if}
         {/if}
         {#if wizard.manualCurrent.id === "ims-check" && wizard.imsSims.length > 0}
@@ -281,13 +305,32 @@
             <LoaderCircle size={13} class="animate-spin shrink-0" />{wizard.manualWatching} 자동 감지 중 — 감지되면 바로 다음 단계로 진행합니다
           </div>
         {/if}
-        <div class="flex items-center justify-between">
+        {#if wizard.manualCheckError}
+          <div class="flex items-start gap-2 rounded-lg bg-danger-container/60 px-3 py-2 text-[12px] text-destructive">
+            <OctagonX size={13} class="shrink-0 mt-0.5" />{wizard.manualCheckError}
+          </div>
+        {/if}
+        <div class="flex items-center justify-between gap-3">
           <span class="text-[11px] text-muted-foreground">
-            {wizard.manualCurrent.input ? "입력을 마치면 다음 단계로 진행됩니다" : wizard.manualWatching ? "직접 확인했다면 눌러서 진행할 수 있습니다" : "완료하면 자동으로 다음 단계로 진행됩니다"}
+            {wizard.manualCurrent.input
+              ? "입력을 마치면 다음 단계로 진행됩니다"
+              : wizard.manualVerifiable
+                ? wizard.manualWatching
+                  ? "감지되면 자동으로 진행합니다 — [확인하고 진행]으로 바로 확인할 수도 있습니다"
+                  : "폰에서 마친 뒤 [확인하고 진행]을 누르면 확인 후 진행합니다"
+                : "완료하면 다음 단계로 진행됩니다"}
           </span>
-          <Button disabled={!wizard.manualInputReady} onclick={() => wizard.ackManual()}>
-            {wizard.manualCurrent.input ? "입력 완료" : "폰에서 완료했어요"}
-          </Button>
+          <div class="flex shrink-0 gap-2">
+            {#if wizard.manualSkippable}
+              <Button variant="ghost" class="text-muted-foreground" onclick={() => wizard.skipManual()}>(목업) 건너뛰기</Button>
+            {/if}
+            {#if wizard.manualCurrent.id === "ims-check" && wizard.manualCheckError}
+              <Button variant="outline" onclick={() => wizard.finishWithoutIms()}>확인 없이 마무리</Button>
+            {/if}
+            <Button disabled={!wizard.manualInputReady || wizard.manualChecking} onclick={() => wizard.confirmManual()}>
+              {#if wizard.manualChecking}<LoaderCircle size={14} class="mr-1 animate-spin" />확인 중…{:else}{wizard.manualCurrent.input ? "입력 완료" : wizard.manualVerifiable ? "확인하고 진행" : "다음"}{/if}
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>

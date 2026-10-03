@@ -955,6 +955,15 @@ fn luhn_ok(n: &str) -> bool {
     sum % 10 == 0
 }
 
+/// 루트 권한 확인 — `su -c id`가 uid=0이면 승인됨 (Magisk 허용 창이 뜨면 사용자가 허용해야 함, 기기 변경 없음)
+#[tauri::command]
+pub async fn root_check(serial: Option<String>) -> Result<bool, String> {
+    guarded(Duration::from_secs(30), move || {
+        with_first_device(&serial, |dev| Ok(shell(dev, "su -c id 2>&1")?.contains("uid=0")))
+    })
+    .await
+}
+
 /// IMEI 1 (전체 값 — 프론트는 마스킹 표시, 복사 버튼에만 사용)
 #[tauri::command]
 pub async fn read_imei1(serial: Option<String>) -> Result<String, String> {
