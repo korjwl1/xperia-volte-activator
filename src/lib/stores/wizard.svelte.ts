@@ -102,6 +102,16 @@ const MANUAL_TEXT: Record<ManualId, Omit<ManualPrompt, "id">> = {
       "내보내기가 끝나면 자동으로 감지됩니다",
     ],
   },
+  "contacts-import": {
+    title: "연락처 가져오기 (폰 조작)",
+    steps: [
+      "백업한 연락처 파일(contacts-restore.vcf)을 폰의 내장 저장소에 올려 두었습니다",
+      "폰의 연락처 앱을 열고 메뉴(⋮ 또는 ☰) → 설정 → '가져오기'를 누릅니다",
+      "'.vcf 파일'을 고르고 내장 저장소에서 contacts-restore.vcf를 선택합니다",
+      "저장할 곳을 묻으면 쓰실 Google 계정(또는 기기)을 고릅니다",
+      "가져오기가 끝나면 [확인하고 진행]을 누르세요 — 폰의 연락처 수가 백업과 맞는지 확인합니다",
+    ],
+  },
   "smsie-import": {
     title: "문자·통화 기록 복원 (폰 조작)",
     steps: [
@@ -1010,7 +1020,7 @@ export class Wizard {
   /** 실제 확인이 필요한 수동 단계인지 (동의·입력형 제외) */
   get manualVerifiable(): boolean {
     const id = this.manualCurrent?.id;
-    return !!id && ["oem-toggle", "usb-debug", "mode-wait", "flash-mode", "su-grant", "ims-check", "ims-precheck", "smsie-export"].includes(id);
+    return !!id && ["oem-toggle", "usb-debug", "mode-wait", "flash-mode", "su-grant", "ims-check", "ims-precheck", "smsie-export", "contacts-import"].includes(id);
   }
 
   /** 목업 실행에서만 — 폰이 실제로 재부팅되지 않아 확인할 수 없는 단계 건너뛰기 */
@@ -1076,6 +1086,15 @@ export class Wizard {
         return (await this.imsReady())
           ? null
           : "VoLTE 등록이 아직 확인되지 않았습니다 — 재부팅 후 통신사 신호가 잡힐 때까지 잠시 기다려 주세요";
+      case "contacts-import": {
+        const r = await api.contactsRestoreCheck(this.device?.serial, this.backupDir);
+        if (!r) return "연락처 수를 확인하지 못했습니다 — 폰 연결을 확인해 주세요";
+        if (r.onDevice >= r.backedUp) {
+          this.runSteps[this.cursor]?.logs.push(`[확인] 연락처 ${r.onDevice}명 (백업 ${r.backedUp}명)`);
+          return null;
+        }
+        return `폰의 연락처가 ${r.onDevice}명으로 백업(${r.backedUp}명)보다 적습니다 — 가져오기가 끝났는지 확인해 주세요`;
+      }
       case "smsie-export": {
         // 산출물 수신 확인 — 수집이 합쳐지면 완결 여부도 갱신
         const outcome = await api.smsieCollect(this.device?.serial, this.backupDir);
@@ -1178,7 +1197,18 @@ export class Wizard {
       this.failStep("백업 저장 위치가 지정되지 않았습니다");
       return;
     }
-    cur.logs.push(`[실전] 백업 시작 — 항목 ${items.length}개 → ${dest}`);
+    // 시작 시각 기준 폴더를 먼저 만들고 절대 경로를 진행 기록에 저장 — 끊겨도 같은 폴더로 이어서 받는다
+    if (!this.backupDir) {
+      const prep = await api.backupPrepare(this.device?.serial, dest);
+      if (gen !== this.runGen) return;
+      if (!prep.ok) {
+        this.failStep(`백업 폴더 생성 실패: ${prep.error}`);
+        return;
+      }
+      this.backupDir = prep.value;
+      await this.persist(true);
+    }
+    cur.logs.push(`[실전] 백업 시작 — 항목 ${items.length}개 → ${this.backupDir}`);
     // 진행 이벤트 구독 → progress·sub 체크포인트 반영
     const itemOrder = items.slice();
     const markItemDone = (itemId: string) => {
@@ -1278,13 +1308,17 @@ export class Wizard {
     for (const fail of r.value.failures) cur.logs.push(`[실패] ${fail}`);
     cur.progress = 0.99;
     void this.persist(true);
-    if (r.value.smsiePending && this.needSmsie(items)) {
+    // 폰에서 직접 해야 하는 복원 — 연락처 가져오기, 문자·통화 기록 순서
+    const manuals: ManualId[] = [];
+    if (items.includes("contacts") && !r.value.failures.some((f) => f.startsWith("연락처"))) manuals.push("contacts-import");
+    if (r.value.smsiePending && this.needSmsie(items)) manuals.push("smsie-import");
+    if (manuals.length > 0) {
       const stepDef = this.steps.find((s) => s.id === "restore");
-      if (stepDef && !stepDef.manual?.includes("smsie-import")) stepDef.manual = [...(stepDef.manual ?? []), "smsie-import"];
+      if (stepDef) stepDef.manual = manuals;
       cur.manualDone = 0;
       cur.status = "manual-wait";
       this.pause();
-      void this.openManual(cur, "smsie-import");
+      void this.openManual(cur, manuals[0]);
       return;
     }
     this.stepDone(cur);
@@ -1323,11 +1357,13 @@ export class Wizard {
 
   /** smsie 수동 복원 마무리 — 기본 문자 앱 역할 원복 + 안내 로그 */
   private async finishRealRestore(cur: RunStep) {
-    const r = await api.smsieRestoreFinish(this.device?.serial);
-    if (r.ok) {
-      for (const line of r.value) cur.logs.push(`[마무리] ${line}`);
-    } else {
-      cur.logs.push(`[마무리 실패] ${r.error}`);
+    if (this.needSmsie(this.checkedBackupItems())) {
+      const r = await api.smsieRestoreFinish(this.device?.serial);
+      if (r.ok) {
+        for (const line of r.value) cur.logs.push(`[마무리] ${line}`);
+      } else {
+        cur.logs.push(`[마무리 실패] ${r.error}`);
+      }
     }
     cur.progress = 1;
     void this.persist(true);

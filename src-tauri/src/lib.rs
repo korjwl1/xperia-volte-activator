@@ -41,6 +41,8 @@ pub fn run() {
             journal::journal_load,
             journal::journal_archive,
             guard::run_guard,
+            backup::backup_prepare,
+            backup::contacts_restore_check,
             backup::backup_run,
             backup::backup_cancel,
             backup::backup_manifest_check,

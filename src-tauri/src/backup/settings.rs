@@ -13,7 +13,8 @@ pub const RESTORE_KEYS: &[(&str, &str)] = &[
     ("system", "screen_brightness"),
     ("system", "screen_off_timeout"),
     ("system", "font_scale"),
-    ("system", "stay_on_while_plugged_in"),
+    // global 네임스페이스 (2026-10-03 실기기 덤프 확인 — system으로 두면 항상 건너뜀)
+    ("global", "stay_on_while_plugged_in"),
 ];
 
 /// adb_enabled은 보안 토글이라 자동 재생하지 않는다 — 안내 문구만 (§6-5)
@@ -166,8 +167,8 @@ mod tests {
     #[test]
     fn collect_and_restore_roundtrip() {
         let mut d = FakeADBDevice::new();
-        d.answer_shell("settings list system", "screen_brightness=31\nscreen_off_timeout=30000\nfont_scale=1.1\nstay_on_while_plugged_in=7\n");
-        d.answer_shell("settings list global", "airplane_mode_on=0\n");
+        d.answer_shell("settings list system", "screen_brightness=31\nscreen_off_timeout=30000\nfont_scale=1.1\n");
+        d.answer_shell("settings list global", "airplane_mode_on=0\nstay_on_while_plugged_in=7\n");
         d.answer_shell("settings list secure", "sysui_qs_tiles=internet,bt,rotation\ndefault_input_method=com.estsoft.android.keyboard/com.estmob.broccoli.KeyboardService\n");
         d.answer_shell("dumpsys deviceidle whitelist", "+com.android.systemui=u:persistent\n+com.kakao.talk=u:persistent\n+com.friendscube.somoim\n");
         d.answer_shell("pm list packages -3 -f", "package:/data/app/~~abc/com.kakao.talk-XYZ/base.apk=com.kakao.talk\n");
@@ -186,6 +187,7 @@ mod tests {
         assert!(log.iter().any(|l| l.contains("default_input_method 복원")));
         assert!(log.iter().any(|l| l.contains("screen_brightness 복원")));
         assert!(log.iter().any(|l| l.contains("adb_enabled")));
+        assert!(log.iter().any(|l| l.contains("global/stay_on_while_plugged_in 복원")));
         let calls: Vec<&String> = d.shell_calls.iter().collect();
         let qs = calls.iter().find(|c| c.contains("sysui_qs_tiles")).unwrap();
         assert!(qs.contains("settings put secure sysui_qs_tiles \"internet,bt,rotation\""));

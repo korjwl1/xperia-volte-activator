@@ -82,6 +82,31 @@ pub fn backup_dir_name(model: &str) -> String {
     format!("backup-{ts}-{safe}")
 }
 
+/// 백업 시작 — 지정 폴더 아래에 시작 시각 기준 폴더(backup-<시각>-<모델>)를 만들고 빈 manifest를 저장한다.
+/// 반환 경로는 절대 경로 — 진행 기록에 그대로 저장해 끊겨도 같은 폴더로 이어서 받는다
+pub fn prepare_backup_root(dev: &mut dyn ADBDeviceExt, dest: &Path) -> Result<PathBuf, String> {
+    let dest = std::path::absolute(dest).map_err(|e| format!("백업 위치 확인 실패: {e}"))?;
+    if !dest.is_dir() {
+        return Err("백업 저장 위치 폴더가 없습니다".into());
+    }
+    let (model, firmware, android, serial_masked) = device_meta(dev)?;
+    let root = dest.join(backup_dir_name(&model));
+    std::fs::create_dir_all(&root).map_err(|e| format!("백업 폴더 생성 실패: {e}"))?;
+    save_manifest_atomic(&Manifest::new(&model, &serial_masked, &firmware, &android), &root)?;
+    Ok(root)
+}
+
+/// 이어서 백업 — 끝나지 않은 항목이 남긴 이전 파일을 지운다(그 항목은 처음부터 다시 받아 덮어씀).
+/// 백업 폴더 밖 경로는 건드리지 않는다
+fn clear_unfinished_item(root: &Path, prev: &ItemRecord) {
+    for e in &prev.entries {
+        if e.local.is_empty() || e.local.split('/').any(|c| c == "..") {
+            continue;
+        }
+        let _ = std::fs::remove_file(root.join(&e.local));
+    }
+}
+
 /// 열거 결과를 풀 결과에 병합 — 열거 오류·스킵 기록도 항목 완결 판정에 들어간다(§6-2 전수 열거)
 fn merge_walk(rec: &mut ItemRecord, w: &walker::WalkResult) {
     if !w.errors.is_empty() {
@@ -122,14 +147,9 @@ pub fn run_backup_items(
         Some(dir) => {
             // 재개 — manifest가 있는 폴더만 허용(그 외 덮어쓰기 방지)
             load_manifest(dir).map_err(|e| format!("이어서 진행할 수 없습니다 — {e}"))?;
-            dir.to_path_buf()
+            std::path::absolute(dir).map_err(|e| format!("백업 폴더 확인 실패: {e}"))?
         }
-        None => {
-            let (model, _, _, _) = device_meta(dev)?;
-            let root = dest.join(backup_dir_name(&model));
-            std::fs::create_dir_all(&root).map_err(|e| format!("백업 폴더 생성 실패: {e}"))?;
-            root
-        }
+        None => prepare_backup_root(dev, dest)?,
     };
     let mut manifest = match load_manifest(&root) {
         Ok(m) => m,
@@ -150,6 +170,8 @@ pub fn run_backup_items(
             if prev.status == ItemStatus::Done {
                 continue;
             }
+            // 중간에 멈췄던 항목 — 이전 파일을 지우고 처음부터 다시 받는다
+            clear_unfinished_item(&root, prev);
         }
         let rec: ItemRecord = match id.as_str() {
             "settings-all" => {
@@ -366,6 +388,48 @@ mod tests {
         let dcim_pulls = d.shell_calls[calls_before..].iter().filter(|c| c.contains("DCIM")).count();
         assert_eq!(dcim_pulls, 0, "끝난 항목은 다시 받지 않는다");
         assert!(Path::new(&second.dir).join("android-data/com.kakao.talk/db").exists());
+    }
+
+    /// 실기기 백업 확인용 — 폰에서 읽어 PC로 복사만 한다(기기 변경 없음).
+    /// 실행: XVOLTE_LIVE_BACKUP_DEST=<폴더> XVOLTE_LIVE_BACKUP_ITEMS=settings-all,apk,... cargo test --lib -- --ignored live_backup --nocapture
+    #[test]
+    #[ignore]
+    fn live_backup() {
+        let dest = std::env::var("XVOLTE_LIVE_BACKUP_DEST").expect("XVOLTE_LIVE_BACKUP_DEST 필요");
+        let items: Vec<String> = std::env::var("XVOLTE_LIVE_BACKUP_ITEMS")
+            .expect("XVOLTE_LIVE_BACKUP_ITEMS 필요")
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s != "sms" && s != "calllog") // 앱 설치가 필요한 항목은 제외
+            .collect();
+        let started = std::time::Instant::now();
+        let mut last = std::time::Instant::now();
+        let mut sink: ProgressSink = Box::new(move |p| {
+            if last.elapsed().as_secs() >= 5 || (p.files_total > 0 && p.files_done == p.files_total) {
+                last = std::time::Instant::now();
+                eprintln!(
+                    "[진행] {} {} {}/{} 파일, {}/{} MB",
+                    p.item_id, p.phase, p.files_done, p.files_total, p.bytes_done / 1_048_576, p.bytes_total / 1_048_576
+                );
+            }
+        });
+        let summary = crate::adb::with_first_device(&None, |dev| {
+            // XVOLTE_LIVE_BACKUP_RESUME=<기존 백업 폴더> — 이어서 백업(끝난 항목은 건너뜀) 확인용
+            let resume = std::env::var("XVOLTE_LIVE_BACKUP_RESUME").ok().filter(|v| !v.is_empty());
+            run_backup_items(dev, &items, Path::new(&dest), resume.as_deref().map(Path::new), &CancelFlag::new(), &mut sink)
+        })
+        .expect("백업 실행 실패");
+        eprintln!("[결과] 폴더 {}", summary.dir);
+        eprintln!(
+            "[결과] 완결 {} · 파일 {} · {} MB · {}초",
+            summary.complete,
+            summary.files,
+            summary.bytes / 1_048_576,
+            started.elapsed().as_secs()
+        );
+        for e in summary.errors.iter().take(40) {
+            eprintln!("[오류] {e}");
+        }
     }
 
     #[test]

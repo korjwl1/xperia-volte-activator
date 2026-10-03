@@ -181,6 +181,44 @@ pub async fn backup_run(
     }
 }
 
+/// 백업 시작 — 지정 폴더 아래 시작 시각 기준 폴더를 만들고 절대 경로를 반환(진행 기록에 먼저 저장)
+#[tauri::command]
+pub async fn backup_prepare(serial: Option<String>, dest: String) -> Result<String, String> {
+    let dest_path = PathBuf::from(&dest);
+    if dest.trim().is_empty() || !dest_path.is_dir() {
+        return Err("백업 저장 위치 폴더가 없습니다 — 먼저 지정해 주세요".into());
+    }
+    let work = move || {
+        crate::adb::with_first_device(&serial, |dev| runner::prepare_backup_root(dev, &dest_path))
+            .map(|p| p.to_string_lossy().to_string())
+    };
+    match tauri::async_runtime::spawn_blocking(work).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("백업 준비 스레드 오류: {e}")),
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactsCheck {
+    pub backed_up: u64,
+    pub on_device: u64,
+}
+
+/// 연락처 가져오기 확인 — 백업한 수와 지금 폰의 수 비교용
+#[tauri::command]
+pub async fn contacts_restore_check(serial: Option<String>, dir: String) -> Result<ContactsCheck, String> {
+    let backup_dir = PathBuf::from(&dir);
+    let work = move || {
+        crate::adb::with_first_device(&serial, |dev| contacts::restore_check(dev, &backup_dir))
+            .map(|(backed_up, on_device)| ContactsCheck { backed_up, on_device })
+    };
+    match tauri::async_runtime::spawn_blocking(work).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("연락처 확인 스레드 오류: {e}")),
+    }
+}
+
 #[tauri::command]
 pub async fn backup_cancel() -> Result<(), String> {
     shared_cancel().store(true, Ordering::Relaxed);

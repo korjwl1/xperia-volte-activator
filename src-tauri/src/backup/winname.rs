@@ -80,17 +80,6 @@ pub fn check_relative_path(
     None
 }
 
-/// 사유를 manifest 오류 문구로
-pub fn issue_reason(issue: &WinNameIssue) -> String {
-    match issue {
-        WinNameIssue::ForbiddenChar(c) => format!("Windows에서 쓸 수 없는 문자({c:?})"),
-        WinNameIssue::ReservedName => "Windows 예약 이름(CON, COM1 등)".into(),
-        WinNameIssue::TrailingDotOrSpace => "이름이 점·공백으로 끝남".into(),
-        WinNameIssue::TooLong(n) => format!("이름이 너무 김({n}자)"),
-        WinNameIssue::CaseConflict => "같은 폴더에 대소문자만 다른 이름이 있음".into(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

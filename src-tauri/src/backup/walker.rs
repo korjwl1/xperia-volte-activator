@@ -43,12 +43,10 @@ pub struct WalkResult {
     pub errors: Vec<String>,
 }
 
+#[cfg(test)]
 impl WalkResult {
     pub fn total_bytes(&self) -> u64 {
         self.files.iter().map(|f| f.size).sum()
-    }
-    pub fn ok(&self) -> bool {
-        self.errors.is_empty()
     }
 }
 
@@ -173,7 +171,7 @@ mod tests {
         assert!(!paths.iter().any(|p| p.starts_with("/sdcard/DCIM"))); // 기명 제외
         assert!(!paths.iter().any(|p| p.starts_with("/sdcard/Download")));
         assert!(!paths.iter().any(|p| p.starts_with("/sdcard/Android/data"))); // data 제외
-        assert!(r.ok());
+        assert!(r.errors.is_empty());
         // 기명 폴더 하위는 통째로 건너뛰므로 그 안의 심볼릭 링크도 보이지 않는다
         assert_eq!(r.skipped.len(), 0);
     }
@@ -195,7 +193,7 @@ mod tests {
         let mut d = FakeADBDevice::new();
         d.fail_list("/sdcard/Music");
         let r = walk(&mut d, "/sdcard/Music", &|_| false);
-        assert!(!r.ok());
+        assert!(!r.errors.is_empty());
         assert!(r.errors[0].contains("/sdcard/Music"));
     }
 }

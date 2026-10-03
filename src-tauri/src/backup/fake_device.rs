@@ -45,6 +45,10 @@ pub struct FakeADBDevice {
     pub now: u32,
     /// exec 명령의 종료 코드(종료 코드 표식을 붙인 명령에만 반영)
     pub exec_rc: i32,
+    /// 설정하면 exec stdin을 메모리 대신 이 폴더의 파일로 받는다(실제 백업 크기 복원 모의용)
+    pub spool_dir: Option<std::path::PathBuf>,
+    /// spool_dir 사용 시 (명령, 받은 파일)
+    pub spooled: Vec<(String, std::path::PathBuf)>,
 }
 
 impl FakeADBDevice {
@@ -84,10 +88,6 @@ impl FakeADBDevice {
     /// 명령 시작부가 prefix와 일치하면 stdout으로 answer 반환
     pub fn answer_shell(&mut self, prefix: &str, answer: &str) {
         self.shell_answers.push((prefix.to_string(), answer.to_string()));
-    }
-
-    pub fn file_rec(&self, path: &str) -> Option<&FileRec> {
-        self.files.get(path)
     }
 
     fn parent_of(path: &str) -> &str {
@@ -148,11 +148,18 @@ impl ADBDeviceExt for FakeADBDevice {
     ) -> Result<(), RustADBError> {
         // stdin으로 받은 바이트를 기록(tar 스트리밍·install-write 검증용)
         self.shell_calls.push(command.to_string());
-        let mut buf = Vec::new();
-        reader.read_to_end(&mut buf)?;
         // 기록은 표식을 뗀 원래 명령으로 (검증 편의)
         let base = command.split(" 2>&1; echo __XV_RC=").next().unwrap_or(command).to_string();
-        self.shell_streams.push((base, buf));
+        if let Some(dir) = &self.spool_dir {
+            let path = dir.join(format!("stream-{:05}.bin", self.spooled.len()));
+            let mut f = std::fs::File::create(&path)?;
+            std::io::copy(reader, &mut f)?;
+            self.spooled.push((base, path));
+        } else {
+            let mut buf = Vec::new();
+            reader.read_to_end(&mut buf)?;
+            self.shell_streams.push((base, buf));
+        }
         writer.write_all(b"Success\n")?;
         if command.contains("echo __XV_RC=") {
             writer.write_all(format!("__XV_RC={}\n", self.exec_rc).as_bytes())?;

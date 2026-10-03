@@ -244,3 +244,10 @@ invoke('firmware_dir_check', { dir, partition }) → { file, imageBytes }  // PC
 - env_check 항목 추가 필요: 번들 EfsTools(util/EfsTools)는 runtimeconfig 기준 Microsoft.NETCore.App 5.0(net5.0)을 요구 — 설치 여부 확인·안내.
   카페의 .NET 9 대응 빌드(612904)는 제목과 달리 실제 runtimeconfig가 net8.0. 런타임 안내는 게시글 제목이 아니라 실제 runtimeconfig.json 기준
 - 게시자 기준 추적(tasks/research-efs-preset-versions.md "게시자 기준 추적"): 20250901 이후 EFS 후속 배포 없음. 1 VII 등의 속성 모듈·IMS 앱·APN·eSIM 모뎀 패키지는 EFS와 별개 자료로 분리 관리
+
+## backup 추가 명령 (2026-10-03)
+
+```ts
+invoke('backup_prepare', { serial?, dest }) → string            // 지정 폴더 아래 backup-<시각>-<모델> 생성, 절대 경로 — 진행 기록에 먼저 저장 후 backup_run(resumeDir)
+invoke('contacts_restore_check', { serial?, dir }) → { backedUp, onDevice }  // 연락처 가져오기 확인(폰은 목록 조회만)
+```
