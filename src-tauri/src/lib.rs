@@ -1,5 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod adb;
+mod backup;
 mod firmware;
 mod host;
 mod guard;
