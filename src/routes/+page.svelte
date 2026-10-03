@@ -11,6 +11,7 @@
   import ResumeJournal from "$lib/components/ResumeJournal.svelte";
 
   import { onMount } from "svelte";
+  import { observeDesktopWindow } from "$lib/api";
   import { TriangleAlert } from "@lucide/svelte/icons";
 
   let checkingJournal = $state(false);
@@ -20,23 +21,24 @@
   let closing = $state(false);
   let closeWindow: (() => Promise<void>) | null = null;
   onMount(() => {
-    if (!("__TAURI_INTERNALS__" in window)) return;
-    let unlisten: (() => void) | undefined;
-    let unlistenGuard: (() => void) | undefined;
-    void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
-      const win = getCurrentWindow();
-      closeWindow = () => win.destroy();
-      const { listen } = await import("@tauri-apps/api/event");
-      unlistenGuard = await listen<string>("run-guard", (e) => wizard.onSessionEnd(e.payload));
-      unlisten = await win.onCloseRequested(async (e) => {
-        if (!wizard.runUnfinished) return;
-        e.preventDefault();
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    void observeDesktopWindow(
+      () => {
+        if (!wizard.runUnfinished) return false;
         closeAsk = true;
-      });
+        return true;
+      },
+      (kind) => wizard.onSessionEnd(kind),
+    ).then((session) => {
+      if (!session) return;
+      if (disposed) return session.dispose();
+      cleanup = session.dispose;
+      closeWindow = session.close;
     });
     return () => {
-      unlisten?.();
-      unlistenGuard?.();
+      disposed = true;
+      cleanup?.();
     };
   });
 
@@ -49,7 +51,11 @@
       closing = false;
       return;
     }
-    await closeWindow?.();
+    try {
+      await closeWindow?.();
+    } finally {
+      closing = false;
+    }
   }
 
   const canNext = $derived(

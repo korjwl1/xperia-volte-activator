@@ -4,7 +4,7 @@
 //! - adb:      0xFF / 0x42 / 0x01
 //! - flashmode(Sony S1): 제품 ID 0xADDE — ⚠ 실기기 미검증 (커뮤니티 기록 기준)
 
-use crate::adb::guarded;
+use crate::tasks::guarded;
 use serde::Serialize;
 use std::time::Duration;
 
@@ -37,7 +37,9 @@ fn scan() -> Result<Vec<UsbModeOut>, String> {
     let devices = rusb::devices().map_err(|e| format!("USB 장치 목록 조회 실패: {e}"))?;
     let mut out = vec![];
     for dev in devices.iter() {
-        let Ok(desc) = dev.device_descriptor() else { continue };
+        let Ok(desc) = dev.device_descriptor() else {
+            continue;
+        };
         if desc.vendor_id() != SONY_VID {
             continue;
         }
@@ -78,7 +80,10 @@ mod tests {
     #[test]
     fn classify_modes() {
         assert_eq!(classify(0x0DDE, &[(0xFF, 0x42, 0x03)]), "fastboot");
-        assert_eq!(classify(0x0AEB, &[(0x06, 0x01, 0x01), (0xFF, 0x42, 0x01)]), "android");
+        assert_eq!(
+            classify(0x0AEB, &[(0x06, 0x01, 0x01), (0xFF, 0x42, 0x01)]),
+            "android"
+        );
         assert_eq!(classify(0xADDE, &[(0xFF, 0xFF, 0xFF)]), "flashmode");
         assert_eq!(classify(0x1234, &[(0x08, 0x06, 0x50)]), "other");
     }

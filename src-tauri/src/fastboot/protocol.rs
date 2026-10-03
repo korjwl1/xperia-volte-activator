@@ -43,7 +43,10 @@ impl<T: FastbootTransport> FastbootDevice<T> {
                 b"OKAY" => return Ok(Terminal::Ok(payload)),
                 b"FAIL" => return Ok(Terminal::Fail(payload)),
                 b"DATA" => {
-                    if n != 12 || payload.len() != 8 || !payload.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    if n != 12
+                        || payload.len() != 8
+                        || !payload.bytes().all(|b| b.is_ascii_hexdigit())
+                    {
                         return Err("DATA 크기는 정확히 8자리 16진수여야 합니다".into());
                     }
                     let size = u64::from_str_radix(&payload, 16)
@@ -66,11 +69,18 @@ impl<T: FastbootTransport> FastbootDevice<T> {
     /// 단일 명령 → 종결 응답 (INFO는 로그)
     fn command(&mut self, cmd: &str) -> Result<Terminal, String> {
         // 프로토콜 콜백 자체에도 언락 코드를 노출하지 않는다.
-        let logged = if cmd.starts_with("oem unlock ") { "oem unlock [마스킹]" } else { cmd };
+        let logged = if cmd.starts_with("oem unlock ") {
+            "oem unlock [마스킹]"
+        } else {
+            cmd
+        };
         (self.on_log)(format!("> {logged}"));
         self.transport.write_command(cmd)?;
         let t = self.read_terminal()?;
-        if ["imei", "meid", "serialno", "serial-number"].iter().any(|key| cmd.to_ascii_lowercase().contains(key)) {
+        if ["imei", "meid", "serialno", "serial-number"]
+            .iter()
+            .any(|key| cmd.to_ascii_lowercase().contains(key))
+        {
             (self.on_log)("[기기 식별정보 응답 마스킹]".into());
             return Ok(t);
         }
@@ -108,9 +118,7 @@ impl<T: FastbootTransport> FastbootDevice<T> {
                 b"INFO" | b"TEXT" if frame < MAX_INFO_FRAMES => {
                     (self.on_log)(payload.clone());
                     // "(bootloader)  key: value" / "key: value" 모두 허용
-                    let line = payload
-                        .trim_start_matches("(bootloader)")
-                        .trim();
+                    let line = payload.trim_start_matches("(bootloader)").trim();
                     // 슬롯 변수의 이름에도 ':'가 있다: slot-successful:a: yes.
                     if let Some((k, v)) = line.split_once(": ").or_else(|| line.rsplit_once(':')) {
                         vars.insert(k.trim().to_string(), v.trim().to_string());
@@ -120,7 +128,12 @@ impl<T: FastbootTransport> FastbootDevice<T> {
                 b"OKAY" => return Ok(vars),
                 b"FAIL" => return Err(format!("getvar:all 거부: {payload}")),
                 b"DATA" => return Err("getvar에 DATA 응답(비정상)".into()),
-                other => return Err(format!("알 수 없는 응답: {}", String::from_utf8_lossy(other))),
+                other => {
+                    return Err(format!(
+                        "알 수 없는 응답: {}",
+                        String::from_utf8_lossy(other)
+                    ))
+                }
             }
         }
         Err("INFO 프레임 한도(256) 초과 — getvar:all이 끝나지 않습니다".into())
@@ -147,7 +160,9 @@ impl<T: FastbootTransport> FastbootDevice<T> {
     pub fn ensure_bootloader(&mut self) -> Result<(), String> {
         match self.getvar("is-userspace")?.as_deref().map(str::trim) {
             Some(v) if v.eq_ignore_ascii_case("no") => Ok(()),
-            Some(v) if v.eq_ignore_ascii_case("yes") => Err("fastbootd에서는 실행할 수 없습니다 — 부트로더 모드가 필요합니다".into()),
+            Some(v) if v.eq_ignore_ascii_case("yes") => {
+                Err("fastbootd에서는 실행할 수 없습니다 — 부트로더 모드가 필요합니다".into())
+            }
             _ => Err("부트로더 모드를 확인할 수 없습니다(is-userspace)".into()),
         }
     }
@@ -178,15 +193,20 @@ impl<T: FastbootTransport> FastbootDevice<T> {
             return Err("빈 이미지는 전송하지 않습니다".into());
         }
         if len > MAX_DOWNLOAD {
-            return Err(format!("이미지가 너무 큽니다({len}바이트 > {MAX_DOWNLOAD})"));
+            return Err(format!(
+                "이미지가 너무 큽니다({len}바이트 > {MAX_DOWNLOAD})"
+            ));
         }
         (self.on_log)(format!("> download:{len:#010x}"));
-        self.transport.write_command(&format!("download:{len:08x}"))?;
+        self.transport
+            .write_command(&format!("download:{len:08x}"))?;
         match self.read_terminal()? {
             Terminal::Data(offer) if offer == len => {}
             Terminal::Data(offer) => {
                 // 크기 불일치 — 본문을 보내면 기기 상태가 꼬일 수 있으니 즉시 중단
-                return Err(format!("DATA 크기 불일치: 기기 {offer}바이트, 요청 {len}바이트"));
+                return Err(format!(
+                    "DATA 크기 불일치: 기기 {offer}바이트, 요청 {len}바이트"
+                ));
             }
             Terminal::Fail(r) => return Err(format!("다운로드 거부(FAIL): {r}")),
             Terminal::Ok(_) => return Err("본문 없이 OKAY(비정상)".into()),
@@ -204,7 +224,8 @@ impl<T: FastbootTransport> FastbootDevice<T> {
         validate_partition(partition)?;
         // max-download-size 확인(알 수 없으면 상한만)
         if let Some(max) = self.getvar("max-download-size")? {
-            let cap = parse_size(&max).filter(|n| *n > 0)
+            let cap = parse_size(&max)
+                .filter(|n| *n > 0)
                 .ok_or("기기 다운로드 상한을 해석할 수 없습니다")?;
             if image.len() as u64 > cap {
                 return Err(format!(
@@ -227,11 +248,6 @@ impl<T: FastbootTransport> FastbootDevice<T> {
         };
         // FAIL/DATA/타임아웃은 성공 확인이 아니다.
         self.expect_ok(cmd).map(|_| ())
-    }
-
-    /// 연결 해제(인터페이스 반납은 Drop)
-    pub fn into_inner(self) -> T {
-        self.transport
     }
 }
 
@@ -293,12 +309,11 @@ pub mod fake {
 
     impl FakeTransport {
         pub fn new(frames: Vec<Frame>) -> Self {
-            Self { sent_cmds: vec![], sent_data: vec![], frames: frames.into() }
-        }
-        /// download:%08x 명령에 자동으로 DATA 승인 프레임을 준비하는 헬퍼
-        pub fn with_download(mut self) -> Self {
-            self.frames.push_back(Frame::Data(None));
-            self
+            Self {
+                sent_cmds: vec![],
+                sent_data: vec![],
+                frames: frames.into(),
+            }
         }
     }
 
@@ -314,7 +329,9 @@ pub mod fake {
             };
             let (status, payload): ([u8; 4], String) = match frame {
                 Frame::Raw(bytes) => {
-                    if bytes.len() > buf.len() { return Err("프레임이 너무 큽니다".into()); }
+                    if bytes.len() > buf.len() {
+                        return Err("프레임이 너무 큽니다".into());
+                    }
                     buf[..bytes.len()].copy_from_slice(bytes);
                     return Ok(bytes.len());
                 }
@@ -353,7 +370,12 @@ mod tests {
     use super::fake::*;
     use super::*;
 
-    fn dev_with(frames: Vec<Frame>) -> (FastbootDevice<FakeTransport>, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    fn dev_with(
+        frames: Vec<Frame>,
+    ) -> (
+        FastbootDevice<FakeTransport>,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
         let logs = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let l2 = logs.clone();
         let dev = FastbootDevice::new(
@@ -374,11 +396,20 @@ mod tests {
             Frame::Ok(""),
         ]);
         let vars = d.getvar_all().unwrap();
-        assert_eq!(vars.get("version-bootloader").map(String::as_str), Some("1.0"));
+        assert_eq!(
+            vars.get("version-bootloader").map(String::as_str),
+            Some("1.0")
+        );
         assert_eq!(vars.get("unlocked").map(String::as_str), Some("yes"));
         assert_eq!(vars.get("current-slot").map(String::as_str), Some("a"));
-        assert_eq!(vars.get("slot-successful:a").map(String::as_str), Some("yes"));
-        assert_eq!(vars.get("slot-retry-count:b").map(String::as_str), Some("3"));
+        assert_eq!(
+            vars.get("slot-successful:a").map(String::as_str),
+            Some("yes")
+        );
+        assert_eq!(
+            vars.get("slot-retry-count:b").map(String::as_str),
+            Some("3")
+        );
         assert_eq!(logs.lock().unwrap().len(), 6);
     }
 
@@ -390,7 +421,12 @@ mod tests {
 
     #[test]
     fn unknown_unlock_state_cannot_be_mistaken_for_locked() {
-        for frame in [Frame::Timeout, Frame::Fail("unsupported"), Frame::Ok(""), Frame::Ok("unknown")] {
+        for frame in [
+            Frame::Timeout,
+            Frame::Fail("unsupported"),
+            Frame::Ok(""),
+            Frame::Ok("unknown"),
+        ] {
             let (mut d, _) = dev_with(vec![frame]);
             assert!(d.unlocked().is_err());
         }
@@ -402,7 +438,12 @@ mod tests {
 
     #[test]
     fn fastbootd_and_unknown_mode_cannot_pass_bootloader_gate() {
-        for frame in [Frame::Ok("yes"), Frame::Fail("unknown variable"), Frame::Timeout, Frame::Ok("")] {
+        for frame in [
+            Frame::Ok("yes"),
+            Frame::Fail("unknown variable"),
+            Frame::Timeout,
+            Frame::Ok(""),
+        ] {
             let (mut d, _) = dev_with(vec![frame]);
             assert!(d.ensure_bootloader().is_err());
         }
@@ -414,7 +455,11 @@ mod tests {
     fn identifier_getvar_does_not_log_the_value() {
         let (mut d, logs) = dev_with(vec![Frame::Ok("AB12345678")]);
         assert_eq!(d.getvar("serialno").unwrap().as_deref(), Some("AB12345678"));
-        assert!(!logs.lock().unwrap().iter().any(|s| s.contains("AB12345678")));
+        assert!(!logs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|s| s.contains("AB12345678")));
     }
 
     #[test]
@@ -436,7 +481,13 @@ mod tests {
 
     #[test]
     fn malformed_data_frames_never_send_payload() {
-        for raw in [b"DATA1".as_slice(), b"DATA00000004 ", b"DATAzzzzzzzz", b"XYZ!", b"OK"] {
+        for raw in [
+            b"DATA1".as_slice(),
+            b"DATA00000004 ",
+            b"DATAzzzzzzzz",
+            b"XYZ!",
+            b"OK",
+        ] {
             let (mut d, _) = dev_with(vec![Frame::Raw(raw)]);
             assert!(d.download(b"data").is_err());
             assert!(d.transport.sent_data.is_empty());
@@ -507,7 +558,7 @@ mod tests {
     fn flash_rejects_oversize_vs_max_download() {
         let image = vec![0u8; 4096];
         let (mut d, _) = dev_with(vec![Frame::Ok("0x1000")]); // 상한 4096
-        // 이미지 4096 == 상한 4096은 통과… 초과 케이스로 4097
+                                                              // 이미지 4096 == 상한 4096은 통과… 초과 케이스로 4097
         let bigger = vec![0u8; 4097];
         assert!(d.flash("boot_a", &bigger).is_err());
         let _ = image;

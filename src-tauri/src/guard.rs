@@ -22,9 +22,15 @@ fn notify(kind: &str) {
 mod win {
     use super::*;
     use std::sync::Mutex;
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, WPARAM};
-    use windows_sys::Win32::System::Power::{PowerClearRequest, PowerCreateRequest, PowerRequestSystemRequired, PowerSetRequest};
-    use windows_sys::Win32::System::Shutdown::{ShutdownBlockReasonCreate, ShutdownBlockReasonDestroy, ShutdownBlockReasonQuery};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, WPARAM,
+    };
+    use windows_sys::Win32::System::Power::{
+        PowerClearRequest, PowerCreateRequest, PowerRequestSystemRequired, PowerSetRequest,
+    };
+    use windows_sys::Win32::System::Shutdown::{
+        ShutdownBlockReasonCreate, ShutdownBlockReasonDestroy, ShutdownBlockReasonQuery,
+    };
     use windows_sys::Win32::System::Threading::{
         POWER_REQUEST_CONTEXT_SIMPLE_STRING, REASON_CONTEXT, REASON_CONTEXT_0,
     };
@@ -56,7 +62,9 @@ mod win {
         let ctx = REASON_CONTEXT {
             Version: POWER_REQUEST_CONTEXT_VERSION,
             Flags: POWER_REQUEST_CONTEXT_SIMPLE_STRING,
-            Reason: REASON_CONTEXT_0 { SimpleReasonString: text.as_mut_ptr() },
+            Reason: REASON_CONTEXT_0 {
+                SimpleReasonString: text.as_mut_ptr(),
+            },
         };
         let h = unsafe { PowerCreateRequest(&ctx) };
         if h.is_null() || h == INVALID_HANDLE_VALUE {
@@ -71,23 +79,40 @@ mod win {
     }
 
     /// 창을 만든 스레드(메인)에서 호출해야 한다
-    pub fn shutdown_block(hwnd: usize, on: bool, reason: &str) {
+    pub fn shutdown_block(hwnd: usize, on: bool, reason: &str) -> Result<(), String> {
         let hwnd = hwnd as HWND;
         unsafe {
             if on {
                 let text = wide(reason);
-                ShutdownBlockReasonCreate(hwnd, text.as_ptr());
+                if ShutdownBlockReasonCreate(hwnd, text.as_ptr()) == 0 {
+                    return Err("Windows 종료 방지 사유 등록 실패".into());
+                }
             } else {
                 ShutdownBlockReasonDestroy(hwnd);
             }
             // 등록 상태 확인 로그 (사유가 있으면 길이 > 0)
             let mut len: u32 = 0;
-            let set = ShutdownBlockReasonQuery(hwnd, std::ptr::null_mut(), &mut len) != 0 && len > 0;
-            eprintln!("[rust] Windows 종료 방지 사유: {}", if set { "등록됨" } else { "없음" });
+            let set =
+                ShutdownBlockReasonQuery(hwnd, std::ptr::null_mut(), &mut len) != 0 && len > 0;
+            eprintln!(
+                "[rust] Windows 종료 방지 사유: {}",
+                if set { "등록됨" } else { "없음" }
+            );
+            if set != on {
+                return Err("Windows 종료 방지 상태 확인 실패".into());
+            }
         }
+        Ok(())
     }
 
-    unsafe extern "system" fn subclass(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _id: usize, _data: usize) -> LRESULT {
+    unsafe extern "system" fn subclass(
+        hwnd: HWND,
+        msg: u32,
+        wp: WPARAM,
+        lp: LPARAM,
+        _id: usize,
+        _data: usize,
+    ) -> LRESULT {
         if ACTIVE.load(Ordering::SeqCst) {
             if msg == WM_QUERYENDSESSION {
                 notify("query");
@@ -111,7 +136,10 @@ mod win {
 fn main_hwnd(app: &AppHandle) -> Option<usize> {
     #[cfg(windows)]
     {
-        app.get_webview_window("main")?.hwnd().ok().map(|h| h.0 as usize)
+        app.get_webview_window("main")?
+            .hwnd()
+            .ok()
+            .map(|h| h.0 as usize)
     }
     #[cfg(not(windows))]
     {
@@ -131,8 +159,10 @@ pub fn init(app: &AppHandle) {
 
 /// 작업 보호 켜기/끄기 — 절전 방지 + Windows 종료 방지
 #[tauri::command]
-pub fn run_guard(app: AppHandle, active: bool, reason: Option<String>) -> Result<(), String> {
-    let reason = reason.filter(|r| !r.trim().is_empty()).unwrap_or_else(|| "VoLTE 작업 진행 중".into());
+pub async fn run_guard(app: AppHandle, active: bool, reason: Option<String>) -> Result<(), String> {
+    let reason = reason
+        .filter(|r| !r.trim().is_empty())
+        .unwrap_or_else(|| "VoLTE 작업 진행 중".into());
     #[cfg(windows)]
     {
         if let Err(e) = win::power(active, &reason) {
@@ -141,13 +171,35 @@ pub fn run_guard(app: AppHandle, active: bool, reason: Option<String>) -> Result
             ACTIVE.store(false, Ordering::SeqCst);
             return Err(e);
         }
-        if let Some(h) = main_hwnd(&app) {
+        let result = if let Some(h) = main_hwnd(&app) {
             let r = reason.clone();
-            if let Err(e) = app.run_on_main_thread(move || win::shutdown_block(h, active, &r)) {
-                let _ = win::power(false, "");
-                ACTIVE.store(false, Ordering::SeqCst);
-                return Err(format!("종료 방지 설정 실패: {e}"));
+            let (tx, rx) = std::sync::mpsc::channel();
+            app.run_on_main_thread(move || {
+                let result = win::shutdown_block(h, active, &r);
+                ACTIVE.store(active && result.is_ok(), Ordering::SeqCst);
+                let _ = tx.send(result);
+            })
+            .map_err(|e| format!("종료 방지 설정 실패: {e}"))
+            .map(|_| rx)
+        } else if active {
+            Err("종료 방지를 적용할 메인 창을 찾을 수 없습니다".into())
+        } else {
+            ACTIVE.store(false, Ordering::SeqCst);
+            return Ok(());
+        };
+        let result = match result {
+            Ok(rx) => {
+                crate::tasks::blocking("종료 방지 확인", move || {
+                    rx.recv().map_err(|e| e.to_string())?
+                })
+                .await
             }
+            Err(e) => Err(e),
+        };
+        if let Err(e) = result {
+            let _ = win::power(false, "");
+            ACTIVE.store(false, Ordering::SeqCst);
+            return Err(e);
         }
     }
     ACTIVE.store(active, Ordering::SeqCst);
@@ -178,7 +230,15 @@ mod tests {
         use windows_sys::Win32::System::Power::{CallNtPowerInformation, SystemExecutionState};
         let state = || {
             let mut v: u32 = 0;
-            let st = unsafe { CallNtPowerInformation(SystemExecutionState, std::ptr::null(), 0, &mut v as *mut u32 as _, 4) };
+            let st = unsafe {
+                CallNtPowerInformation(
+                    SystemExecutionState,
+                    std::ptr::null(),
+                    0,
+                    &mut v as *mut u32 as _,
+                    4,
+                )
+            };
             assert_eq!(st, 0);
             v
         };

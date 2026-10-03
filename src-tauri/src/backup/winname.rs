@@ -86,9 +86,18 @@ mod tests {
 
     #[test]
     fn forbidden_characters() {
-        assert_eq!(check_component("a:b.jpg"), Some(WinNameIssue::ForbiddenChar(':')));
-        assert_eq!(check_component("what?.png"), Some(WinNameIssue::ForbiddenChar('?')));
-        assert_eq!(check_component("a<b"), Some(WinNameIssue::ForbiddenChar('<')));
+        assert_eq!(
+            check_component("a:b.jpg"),
+            Some(WinNameIssue::ForbiddenChar(':'))
+        );
+        assert_eq!(
+            check_component("what?.png"),
+            Some(WinNameIssue::ForbiddenChar('?'))
+        );
+        assert_eq!(
+            check_component("a<b"),
+            Some(WinNameIssue::ForbiddenChar('<'))
+        );
         assert!(check_component("2026-10-03 12;30.txt").is_none()); // ; 는 허용
     }
 
@@ -96,18 +105,30 @@ mod tests {
     fn reserved_names() {
         assert_eq!(check_component("CON"), Some(WinNameIssue::ReservedName));
         assert_eq!(check_component("con.txt"), Some(WinNameIssue::ReservedName));
-        assert_eq!(check_component("lpt9.log"), Some(WinNameIssue::ReservedName));
+        assert_eq!(
+            check_component("lpt9.log"),
+            Some(WinNameIssue::ReservedName)
+        );
         assert!(check_component("CONNECT.txt").is_none());
         assert!(check_component("console.png").is_none());
     }
 
     #[test]
     fn trailing_and_length() {
-        assert_eq!(check_component("name."), Some(WinNameIssue::TrailingDotOrSpace));
-        assert_eq!(check_component("name "), Some(WinNameIssue::TrailingDotOrSpace));
+        assert_eq!(
+            check_component("name."),
+            Some(WinNameIssue::TrailingDotOrSpace)
+        );
+        assert_eq!(
+            check_component("name "),
+            Some(WinNameIssue::TrailingDotOrSpace)
+        );
         assert!(check_component("name..txt").is_none()); // 끝이 t — 허용
         let long = "a".repeat(241);
-        assert!(matches!(check_component(&long), Some(WinNameIssue::TooLong(241))));
+        assert!(matches!(
+            check_component(&long),
+            Some(WinNameIssue::TooLong(241))
+        ));
         let ok = "한글".repeat(100); // UTF-16 기준 200자
         assert!(check_component(&ok).is_none());
     }

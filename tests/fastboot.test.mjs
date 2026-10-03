@@ -5,7 +5,7 @@ import { createServer } from "vite";
 // Vite/Svelte가 실제 store를 컴파일한다. API는 전부 메모리 가짜로 교체한다.
 let server, Wizard, api, REAL_STEPS, originalApi, originalFlags, calls;
 before(async () => {
-  server = await createServer({ server: { middlewareMode: true, watch: null }, appType: "custom" });
+  server = await createServer({ server: { middlewareMode: true, watch: null, hmr: false, ws: false }, appType: "custom" });
   ({ Wizard } = await server.ssrLoadModule("/src/lib/stores/wizard.svelte.ts"));
   ({ api } = await server.ssrLoadModule("/src/lib/api/index.ts"));
   ({ REAL_STEPS } = await server.ssrLoadModule("/src/lib/data/runMode.ts"));

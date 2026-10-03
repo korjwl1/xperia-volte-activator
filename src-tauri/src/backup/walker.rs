@@ -53,11 +53,7 @@ impl WalkResult {
 /// `root` 아래 전수 열거(파일만). `skip`은 각 항목 경로(디렉터리 포함)에 대해 호출,
 /// true면 그 항목과 하위 전체를 건너뛴다(제외 사유는 호출부에서 기록).
 /// 심볼릭 링크는 따라가지 않는다(사이클·기기 외 경로 방지).
-pub fn walk(
-    dev: &mut dyn ADBDeviceExt,
-    root: &str,
-    skip: &dyn Fn(&str) -> bool,
-) -> WalkResult {
+pub fn walk(dev: &mut dyn ADBDeviceExt, root: &str, skip: &dyn Fn(&str) -> bool) -> WalkResult {
     let mut out = WalkResult::default();
     let mut queue: Vec<String> = vec![root.to_string()];
     let mut depth: BTreeMap<String, u32> = BTreeMap::new();
@@ -66,7 +62,10 @@ pub fn walk(
         let entries = match dev.list(&dir) {
             Ok(l) => l,
             Err(e) => {
-                out.errors.push(format!("{}: 열거 실패({e})", crate::backup::scrub(&e.to_string())));
+                out.errors.push(format!(
+                    "{}: 열거 실패({e})",
+                    crate::backup::scrub(&e.to_string())
+                ));
                 continue;
             }
         };
@@ -93,7 +92,10 @@ pub fn walk(
                 }
                 ADBListItemType::Symlink(i) => {
                     let path = join(&dir, &i.name);
-                    out.skipped.push(Skip { remote: path, reason: "심볼릭 링크".into() });
+                    out.skipped.push(Skip {
+                        remote: path,
+                        reason: "심볼릭 링크".into(),
+                    });
                     continue;
                 }
                 ADBListItemType::Fifo(i)
@@ -102,7 +104,10 @@ pub fn walk(
                 | ADBListItemType::Socket(i)
                 | ADBListItemType::Other(i) => {
                     let path = join(&dir, &i.name);
-                    out.skipped.push(Skip { remote: path, reason: "특수 파일".into() });
+                    out.skipped.push(Skip {
+                        remote: path,
+                        reason: "특수 파일".into(),
+                    });
                     continue;
                 }
             };
@@ -150,14 +155,29 @@ mod tests {
         let mut d = FakeADBDevice::new();
         d.add_dir("/sdcard");
         d.add_dir("/sdcard/DCIM/Camera");
-        d.add_file("/sdcard/DCIM/Camera/a.jpg", b"jpeg-bytes", 1700000000, 0o644);
+        d.add_file(
+            "/sdcard/DCIM/Camera/a.jpg",
+            b"jpeg-bytes",
+            1700000000,
+            0o644,
+        );
         d.add_file("/sdcard/DCIM/b:bad.jpg", b"x", 1700000001, 0o644);
         d.add_dir("/sdcard/Download");
         d.add_file("/sdcard/Download/note.txt", b"hello", 1700000002, 0o644);
         d.add_dir("/sdcard/Android/data/com.kakao.talk");
-        d.add_file("/sdcard/Android/data/com.kakao.talk/db.bin", b"k", 1700000003, 0o600);
+        d.add_file(
+            "/sdcard/Android/data/com.kakao.talk/db.bin",
+            b"k",
+            1700000003,
+            0o600,
+        );
         d.add_dir("/sdcard/Android/media/com.Slack");
-        d.add_file("/sdcard/Android/media/com.Slack/m.png", b"m", 1700000004, 0o644);
+        d.add_file(
+            "/sdcard/Android/media/com.Slack/m.png",
+            b"m",
+            1700000004,
+            0o644,
+        );
         d.add_symlink("/sdcard/DCIM/latest", "/sdcard/DCIM/Camera");
         d
     }
@@ -183,7 +203,7 @@ mod tests {
         assert_eq!(r.files.len(), 2);
         assert_eq!(r.total_bytes(), (b"jpeg-bytes".len() + 1) as u64);
         assert_eq!(r.skipped.len(), 1); // 심볼릭 링크는 기록만
-        // 기명 항목 자체는 fs-rest 필터 없이 자기 폴더만 걷는다(Download에 fs-rest 필터를 쓰면 자기 내용이 스킵됨)
+                                        // 기명 항목 자체는 fs-rest 필터 없이 자기 폴더만 걷는다(Download에 fs-rest 필터를 쓰면 자기 내용이 스킵됨)
         let r2 = walk(&mut d, "/sdcard/Download", &|_| false);
         assert_eq!(r2.files.len(), 1);
     }

@@ -4,10 +4,12 @@ import { api } from "$lib/api";
 import { LINKS, maskSecret } from "$lib/data/links";
 import { bootPartition } from "$lib/data/devices";
 import { mockBackupGroups } from "$lib/mock/apps";
-import { bootloaderOnly, buildPlan, updateTarget, type PlanOptions } from "$lib/mock/plan";
+import { bootloaderOnly, buildPlan, updateTarget, type PlanOptions } from "$lib/domain/plan";
 import { SIMULATED_RUN, REAL_STEPS } from "$lib/data/runMode";
 import { EFS_PRESET_MODE, EFS_PRESET_VERSION, efsPreset } from "$lib/data/efsPresets";
 import type { BackupSummary } from "$lib/types";
+import { AsyncQueue } from "$lib/domain/asyncQueue";
+import { decodeJournal } from "$lib/domain/journal";
 
 export type WizardView = "device" | "warning" | "step1" | "step2" | "step3" | "step4";
 
@@ -132,22 +134,9 @@ const defaultVolteConfig = (): VolteConfig => ({
 });
 
 /** 백업 항목 id → 화면 라벨 (mock/apps.ts 정의와 동일 — 로그·체크포인트 표기용) */
-const BACKUP_ITEM_LABEL: Record<string, string> = {
-  "settings-all": "전체 설정 백업",
-  apk: "APK 파일",
-  "app-data": "앱 데이터",
-  dcim: "사진·영상 (DCIM)",
-  download: "다운로드",
-  pictures: "Pictures",
-  movies: "Movies",
-  music: "Music",
-  documents: "Documents",
-  recordings: "Recordings",
-  "fs-rest": "그 외 전체 파일 시스템",
-  calllog: "통화 기록",
-  sms: "문자",
-  contacts: "연락처",
-};
+const BACKUP_ITEM_LABEL: Record<string, string> = Object.fromEntries(
+  mockBackupGroups.flatMap((group) => group.items.map((item) => [item.id, item.label])),
+);
 
 export class Wizard {
   view = $state<WizardView>("device");
@@ -204,6 +193,18 @@ export class Wizard {
     if (!d) return;
     const key = `${d.model}|${d.serial ?? d.serialMasked}`;
     if (this.sessionFor !== key) {
+      this.pause();
+      this.stopWatch();
+      this.setGuard(false);
+      this.runGen++;
+      this.backupDir = "";
+      this.backupSummary = null;
+      this.runSteps = [];
+      this.steps = [];
+      this.journalKey = null;
+      this.pendingJournal = null;
+      this.stepError = "";
+      this.finished = false;
       this.sessionFor = key;
       this.volteConfig = defaultVolteConfig();
       this.omdAck = false;
@@ -351,6 +352,8 @@ export class Wizard {
   private journalStarted = "";
   private lastJournalSave = 0;
   private journalSims: RunJournal["sims"] = undefined;
+  private readonly journalWrites = new AsyncQueue();
+  private readonly guardWrites = new AsyncQueue();
 
   private simSnapshot(): RunJournal["sims"] {
     return this.device?.sims.map((s) => ({ slot: s.slot, carrier: s.carrier, state: s.state }));
@@ -370,32 +373,34 @@ export class Wizard {
   /** 기기 식별 키 — 모델+시리얼의 SHA-256 앞 16바이트 (파일 이름에 시리얼을 그대로 쓰지 않음) */
   private async journalKeyReady(): Promise<string | null> {
     const d = this.device;
+    const gen = this.runGen;
     if (!d?.serial) return (this.journalKey = null);
     const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${d.model}|${d.serial}`));
+    if (gen !== this.runGen || this.device?.serial !== d.serial) return null;
     this.journalKey = [...new Uint8Array(buf)].slice(0, 16).map((b) => b.toString(16).padStart(2, "0")).join("");
     return this.journalKey;
   }
 
   /** 경고 페이지 [다음] — 같은 폰의 끝나지 않은 작업이 있으면 pendingJournal에 두고 true */
   async checkJournal(): Promise<boolean> {
+    const gen = this.runGen;
     const key = await this.journalKeyReady();
     if (!key) return false;
     const raw = await api.journalLoad(key);
-    if (!raw) return false;
-    try {
-      const j = JSON.parse(raw) as RunJournal;
-      if (j.version !== 1 || !j.runSteps?.length) return false;
-      this.pendingJournal = j;
-      return true;
-    } catch {
-      return false;
-    }
+    if (!raw || gen !== this.runGen) return false;
+    const journal = decodeJournal(raw);
+    if (!journal || journal.model !== this.device?.model || journal.serialMasked !== this.device?.serialMasked) return false;
+    this.pendingJournal = journal;
+    return true;
   }
 
   /** [새로 시작] — 이전 기록은 discarded로 보관하고 1단계부터 */
   discardJournal() {
-    if (this.journalKey) void api.journalArchive(this.journalKey, "discarded");
+    const key = this.journalKey;
+    if (key) void this.journalWrites.push(() => api.journalArchive(key, "discarded"));
     this.pendingJournal = null;
+    this.backupDir = "";
+    this.backupSummary = null;
     this.view = "step1";
   }
 
@@ -403,6 +408,10 @@ export class Wizard {
   resumeJournal() {
     const j = this.pendingJournal;
     if (!j) return;
+    this.runGen++;
+    this.stepError = "";
+    this.manualCurrent = null;
+    this.stopWatch();
     this.volteConfig = { ...defaultVolteConfig(), ...j.config };
     this.ensureOptions();
     for (const g of this.groups) for (const i of g.items) i.checked = j.backupItems.includes(i.id);
@@ -465,7 +474,6 @@ export class Wizard {
     this.finished = false;
     this.usbError = false;
     this.erroredOnce = false;
-    this.runGen++;
     this.pendingJournal = null;
     this.view = "step3";
     void this.persist(true);
@@ -500,7 +508,8 @@ export class Wizard {
       sims: this.journalSims,
       stop: this.stopInfo,
     };
-    return api.journalSave(key, JSON.stringify(j));
+    const data = JSON.stringify(j);
+    return this.journalWrites.push(() => api.journalSave(key, data));
   }
 
   // ── 작업 중 PC 보호 (절전·Windows 종료 방지) — 실행 중·폰 확인 대기 중에는 켜고, 끝나거나 멈추면 끈다
@@ -508,7 +517,7 @@ export class Wizard {
   private setGuard(on: boolean) {
     if (this.guardOn === on) return;
     this.guardOn = on;
-    void api.runGuard(on, "Xperia VoLTE 작업 진행 중 — 끝날 때까지 PC를 끄지 마세요").then((ok) => {
+    void this.guardWrites.push(() => api.runGuard(on, "Xperia VoLTE 작업 진행 중 — 끝날 때까지 PC를 끄지 마세요")).then((ok) => {
       if (ok || !on || !this.guardOn) return;
       // 켜기 실패 — 상태를 되돌려 다음 시작 때 다시 시도하고, 사용자에게 알림
       this.guardOn = false;
@@ -542,6 +551,8 @@ export class Wizard {
 
   /** 창 닫기 — 멈춘 사유를 남기고 기록을 확실히 저장 (사용자가 이미 중단한 경우 그 사유 유지) */
   async closeForExit(): Promise<boolean> {
+    this.runGen++;
+    void api.backupCancel();
     const cur = this.runSteps[this.cursor];
     const wasWaiting = cur?.status === "manual-wait";
     this.pause();
@@ -775,9 +786,10 @@ export class Wizard {
 
   /** VoLTE 패치 대상 슬롯이 모두 IMS 음성 등록(on)인지 — 최종 확인 자동 판정 */
   private async imsReady(): Promise<boolean> {
+    const gen = this.runGen;
     const list = await api.deviceList();
     const d = list?.find((x) => x.state === "device" && x.serial === this.device?.serial);
-    if (!d) return false;
+    if (!d || gen !== this.runGen) return false;
     this.imsSims = d.sims;
     const targets = this.volteConfig.sims.filter((s) => s.carrier !== null).map((s) => s.slot);
     const slots = targets.length > 0 ? targets : d.sims.filter((s) => s.carrier).map((s) => s.slot);
@@ -790,24 +802,30 @@ export class Wizard {
   /** 자동 감지 중인 항목 설명 (모달에 표시) */
   manualWatching = $state("");
   private watchTimer: ReturnType<typeof setInterval> | undefined;
+  private watchGeneration = 0;
 
   /** 자동 감지: 조건이 충족될 때까지 주기적으로 확인 → 충족되면 자동 진행 (수동 [완료]도 가능) */
   private watchManual(cur: RunStep, id: ManualId, label: string, check: () => Promise<boolean>, everyMs: number) {
+    this.stopWatch();
     this.manualWatching = label;
+    const watch = this.watchGeneration;
     const gen = this.runGen;
     let busy = false;
     this.watchTimer = setInterval(async () => {
+      if (watch !== this.watchGeneration) return;
       if (this.manualCurrent?.id !== id || gen !== this.runGen) return this.stopWatch();
       if (busy) return;
       busy = true;
       try {
         const ok = await check();
-        if (gen !== this.runGen || this.manualCurrent?.id !== id) return; // 그사이 중단·진행됨
+        if (watch !== this.watchGeneration || gen !== this.runGen || this.manualCurrent?.id !== id) return; // 그사이 중단·진행됨
         if (ok) {
           this.stopWatch();
           cur.logs.push(`[감지] ${label} — 자동으로 진행합니다`);
           this.ackManual();
         }
+      } catch {
+        if (watch === this.watchGeneration && gen === this.runGen && this.manualCurrent?.id === id) this.manualCheckError = "기기 확인에 실패했습니다 — 연결 상태를 확인하고 다시 시도해 주세요";
       } finally {
         busy = false;
       }
@@ -815,6 +833,7 @@ export class Wizard {
   }
 
   private stopWatch() {
+    this.watchGeneration++;
     if (this.watchTimer) clearInterval(this.watchTimer);
     this.watchTimer = undefined;
     this.manualWatching = "";
@@ -852,6 +871,7 @@ export class Wizard {
     this.oemUnknownAck = false;
     this.callAck = false;
     this.manualCurrent = { id, ...MANUAL_TEXT[id] };
+    this.manualSetupState = "idle";
     this.onManualOpen(id);
     cur.logs.push(`[대기] 수동 개입: ${this.manualCurrent.title}`);
     void this.persist(true);
@@ -897,12 +917,23 @@ export class Wizard {
 
   /** smsie 수동 복원 준비 */
   async smsieRestoreStage() {
+    const gen = this.runGen;
     const cur = this.runSteps[this.cursor];
-    if (!this.backupDir) return;
-    const r = await api.smsieRestoreStage(this.device?.serial, this.backupDir);
+    if (!REAL_STEPS.restore) return;
+    this.manualSetupState = "loading";
+    this.manualCheckError = "";
+    if (!this.backupDir) {
+      this.manualSetupState = "failed";
+      this.manualCheckError = "복원할 백업 폴더가 없습니다";
+      return;
+    }
+    const r = await api.smsieRestoreStage(this.device?.serial, this.backupDir, this.checkedBackupItems());
+    if (gen !== this.runGen) return;
+    this.manualSetupState = r.ok ? "done" : "failed";
     if (r.ok) {
       cur?.logs.push(`[준비] ${r.value.split("\n")[0]}`);
     } else {
+      this.manualCheckError = r.error;
       cur?.logs.push(`[실패] 문자·통화 기록 복원 준비: ${r.error}`);
     }
     void this.persist(true);
@@ -910,11 +941,18 @@ export class Wizard {
 
   /** SMS Import/Export 앱 준비 — 설치(필요 시 GitHub 다운로드)·권한·임시 폴더 */
   async smsiePrepare() {
+    const gen = this.runGen;
     const cur = this.runSteps[this.cursor];
+    if (!REAL_STEPS.backup) return;
+    this.manualSetupState = "loading";
+    this.manualCheckError = "";
     const r = await api.smsiePrepare(this.device?.serial, true);
+    if (gen !== this.runGen) return;
+    this.manualSetupState = r.ok ? "done" : "failed";
     if (r.ok) {
       cur?.logs.push(`[준비] SMS Import/Export — ${r.value.join(" · ")}`);
     } else {
+      this.manualCheckError = r.error;
       cur?.logs.push(`[실패] SMS Import/Export 준비: ${r.error}`);
     }
     void this.persist(true);
@@ -926,14 +964,19 @@ export class Wizard {
   }
 
   async loadImei() {
+    const gen = this.runGen;
     this.imeiState = "loading";
-    this.imei1 = await api.readImei1(this.device?.serial);
+    const imei = await api.readImei1(this.device?.serial);
+    if (gen !== this.runGen) return;
+    this.imei1 = imei;
     this.imeiState = this.imei1 ? "done" : "failed";
   }
 
   async fetchFirmware() {
     const gen = this.runGen;
+    const request = ++this.firmwareRequest;
     const partition = this.partition;
+    this.firmware = null;
     this.firmwareError = "";
     if (!partition) {
       this.firmwareState = "failed";
@@ -944,7 +987,7 @@ export class Wizard {
     this.firmwareState = "loading";
     // 업데이트를 고른 경우 루팅용 이미지는 새 버전 것
     const r = await api.firmwareFetch(this.device?.serial, partition, this.updateVersion ?? undefined, this.firmwareDest || undefined);
-    if (gen !== this.runGen) return;
+    if (gen !== this.runGen || request !== this.firmwareRequest || partition !== this.partition) return;
     if (r.ok) {
       this.firmware = r.value;
       this.firmwareState = "done";
@@ -1015,6 +1058,7 @@ export class Wizard {
   // ── 수동 확인 검증 — "완료" 버튼은 건너뛰기가 아니라 실제 확인 후 진행 ──
   manualChecking = $state(false);
   manualCheckError = $state("");
+  manualSetupState = $state<LoadState>("idle");
   /** 리락 전 통신 확인 — 실제 발신·수신을 확인했다는 체크 */
   callAck = $state(false);
   /** 언락 조건 중 "확인 불가" 항목을 폰에서 직접 켰다고 확인 */
@@ -1048,7 +1092,11 @@ export class Wizard {
   }
 
   /** 직접 지정한 펌웨어 폴더 — 고르는 즉시 검사 */
+  private firmwareRequest = 0;
+  private firmwareDirRequest = 0;
   async setFirmwareDir(dir: string) {
+    const gen = this.runGen;
+    const request = ++this.firmwareDirRequest;
     this.firmwareDir = dir;
     this.firmwareDirInfo = null;
     this.firmwareDirError = "";
@@ -1060,7 +1108,7 @@ export class Wizard {
     }
     this.firmwareDirState = "loading";
     const r = await api.firmwareDirCheck(dir, partition);
-    if (this.firmwareDir !== dir) return;
+    if (gen !== this.runGen || request !== this.firmwareDirRequest || this.firmwareDir !== dir || partition !== this.partition) return;
     if (r.ok) {
       this.firmwareDirInfo = r.value;
       this.firmwareDirState = "done";
@@ -1175,6 +1223,7 @@ export class Wizard {
   /** 입력형 수동 개입은 값이 채워져야 완료 가능 */
   get manualInputReady(): boolean {
     const m = this.manualCurrent;
+    if ((m?.id === "smsie-export" && REAL_STEPS.backup) || (m?.id === "smsie-import" && REAL_STEPS.restore)) return this.manualSetupState === "done";
     if (m?.id === "backup-notice") return this.backupNoticeAck;
     if (m?.id === "ims-precheck") return this.callAck;
     if (m?.id === "oem-toggle") return this.prepMissing.length === 0 && (this.prepUnknown.length === 0 || this.oemUnknownAck) && !this.prepChecking;
@@ -1226,18 +1275,20 @@ export class Wizard {
       }
       this.backupDir = prep.value;
       await this.persist(true);
+      if (gen !== this.runGen) return;
     }
     cur.logs.push(`[실전] 백업 시작 — 항목 ${items.length}개 → ${this.backupDir}`);
     // 진행 이벤트 구독 → progress·sub 체크포인트 반영
     const itemOrder = items.slice();
+    const completedItems = new Set<string>();
     const markItemDone = (itemId: string) => {
       if (!cur.sub) return;
-      const idx = itemOrder.indexOf(itemId);
-      if (idx >= 0 && cur.sub.done < idx + 1) {
-        for (let k = cur.sub.done; k <= idx; k++) cur.logs.push(`[체크포인트] ${BACKUP_ITEM_LABEL[itemOrder[k]] ?? itemOrder[k]} 완료`);
-        cur.sub.done = idx + 1;
-        void this.persist(true);
+      completedItems.add(itemId);
+      while (cur.sub.done < itemOrder.length && completedItems.has(itemOrder[cur.sub.done])) {
+        const id = itemOrder[cur.sub.done++];
+        cur.logs.push(`[체크포인트] ${BACKUP_ITEM_LABEL[id] ?? id} 완료`);
       }
+      void this.persist(true);
     };
     let logGate = 0;
     const un = await api.onBackupProgress((p) => {
@@ -1245,12 +1296,13 @@ export class Wizard {
       const ratio = p.bytesTotal > 0 ? p.bytesDone / p.bytesTotal : p.filesTotal > 0 ? p.filesDone / p.filesTotal : 0;
       const idx = Math.max(0, itemOrder.indexOf(p.itemId));
       cur.progress = Math.min(0.99, (idx + ratio) / Math.max(1, itemOrder.length));
-      if (p.filesDone >= p.filesTotal && p.filesTotal > 0) markItemDone(p.itemId);
+      if (p.phase === "done") markItemDone(p.itemId);
       else if (p.file && logGate++ % 25 === 0) {
         cur.logs.push(`[백업] ${BACKUP_ITEM_LABEL[p.itemId] ?? p.itemId} — ${p.file}`);
       }
       void this.persist();
     });
+    if (gen !== this.runGen) return un();
     const r = await api.backupRun(this.device?.serial, items, dest, this.backupDir || undefined);
     un();
     if (gen !== this.runGen) return; // 중단·처음으로
@@ -1260,6 +1312,7 @@ export class Wizard {
     }
     this.backupDir = r.value.dir;
     this.backupSummary = r.value;
+    for (const item of r.value.items) if (item.status === "done") markItemDone(item.id);
     cur.logs.push(`[백업] ${r.value.dir} — 파일 ${r.value.files.toLocaleString()}개, ${(r.value.bytes / 1024 ** 3).toFixed(2)} GiB`);
     if (!this.needSmsie(items)) return this.finishRealBackup(cur);
     // 문자·통화 기록(smsie) — 앱 설치·권한은 자동, 내보내기 2탭은 수동 개입
@@ -1316,6 +1369,7 @@ export class Wizard {
       cur.progress = Math.min(0.99, (idx + ratio) / Math.max(1, itemOrder.length));
       void this.persist();
     });
+    if (gen !== this.runGen) return un();
     const r = await api.restoreRun(this.device?.serial, this.backupDir, items);
     un();
     if (gen !== this.runGen) return; // 중단·처음으로
@@ -1325,6 +1379,7 @@ export class Wizard {
     }
     for (const line of r.value.logs) cur.logs.push(`[복구] ${line}`);
     for (const fail of r.value.failures) cur.logs.push(`[실패] ${fail}`);
+    if (r.value.failures.length > 0) return this.failStep(`복구 미완료 — ${r.value.failures.join(" / ")}`);
     cur.progress = 0.99;
     void this.persist(true);
     // 폰에서 직접 해야 하는 복원 — 연락처 가져오기, 문자·통화 기록 순서
@@ -1443,12 +1498,14 @@ export class Wizard {
 
   /** smsie 수동 복원 마무리 — 기본 문자 앱 역할 원복 + 안내 로그 */
   private async finishRealRestore(cur: RunStep) {
+    const gen = this.runGen;
     if (this.needSmsie(this.checkedBackupItems())) {
       const r = await api.smsieRestoreFinish(this.device?.serial);
+      if (gen !== this.runGen) return;
       if (r.ok) {
         for (const line of r.value) cur.logs.push(`[마무리] ${line}`);
       } else {
-        cur.logs.push(`[마무리 실패] ${r.error}`);
+        return this.failStep(`문자 앱 원복 실패: ${r.error}`);
       }
     }
     cur.progress = 1;
@@ -1619,7 +1676,8 @@ export class Wizard {
     this.finished = true;
     this.setGuard(false);
     void this.persist(true);
-    if (this.journalKey) void api.journalArchive(this.journalKey, "done");
+    const key = this.journalKey;
+    if (key) void this.journalWrites.push(() => api.journalArchive(key, "done"));
   }
 
   get overall(): number {

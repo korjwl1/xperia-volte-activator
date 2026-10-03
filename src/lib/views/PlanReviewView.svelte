@@ -6,7 +6,7 @@
   import { TriangleAlert, FolderOpen, LoaderCircle } from "@lucide/svelte/icons";
   import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "$lib/components/ui/tooltip";
   import { wizard } from "$lib/stores/wizard.svelte";
-  import { api } from "$lib/api";
+  import { api, inDesktop as desktopRuntime } from "$lib/api";
   import { simIssue, type BackupItem } from "$lib/types";
 
   // 선택 상태·실측 결과는 스토어에 보관 — 이전/다음으로 오가도 유지 (기기가 바뀔 때만 초기화)
@@ -64,6 +64,7 @@
   $effect(() => {
     const path = wizard.backupPath.trim();
     freeBytes = null;
+    freeLoading = false;
     if (!path) return;
     freeLoading = true;
     let stale = false;
@@ -80,7 +81,7 @@
   const usageRatio = $derived(freeBytes === null ? 0 : freeBytes === 0 ? Infinity : selectedBytes / freeBytes);
   const diskWarning = $derived(freeBytes !== null && usageRatio > 0.85);
   // 데스크톱 앱에서 여유 공간을 확인하지 못했으면(조회 중·실패) 실행하지 않는다 — 브라우저 개발 환경은 조회 수단이 없어 제외
-  const inDesktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  const inDesktop = desktopRuntime();
   const diskUnknown = $derived(inDesktop && wizard.backupPath.trim() !== "" && (freeLoading || freeBytes === null));
 
   async function pickBackupFolder() {

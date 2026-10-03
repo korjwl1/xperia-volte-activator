@@ -3,8 +3,8 @@
 //! 이 파일은 cfg(test)에서만 컴파일된다(제품 빌드에 포함되지 않음).
 
 use adb_client::{
-    ADBDeviceExt, ADBListItem, ADBListItemType, ADBStatExtendedResponse, ADBStatMapping, AdbStatResponse,
-    RebootType, RemountInfo, RustADBError,
+    ADBDeviceExt, ADBListItem, ADBListItemType, ADBStatExtendedResponse, ADBStatMapping,
+    AdbStatResponse, RebootType, RemountInfo, RustADBError,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
@@ -53,7 +53,10 @@ pub struct FakeADBDevice {
 
 impl FakeADBDevice {
     pub fn new() -> Self {
-        Self { now: 1_700_000_000, ..Default::default() }
+        Self {
+            now: 1_700_000_000,
+            ..Default::default()
+        }
     }
 
     pub fn add_dir(&mut self, path: &str) {
@@ -69,7 +72,11 @@ impl FakeADBDevice {
     pub fn add_file(&mut self, path: &str, data: &[u8], mtime: u32, perm: u32) {
         self.files.insert(
             path.to_string(),
-            FileRec { data: data.to_vec(), mtime, perm },
+            FileRec {
+                data: data.to_vec(),
+                mtime,
+                perm,
+            },
         );
     }
 
@@ -87,7 +94,8 @@ impl FakeADBDevice {
 
     /// 명령 시작부가 prefix와 일치하면 stdout으로 answer 반환
     pub fn answer_shell(&mut self, prefix: &str, answer: &str) {
-        self.shell_answers.push((prefix.to_string(), answer.to_string()));
+        self.shell_answers
+            .push((prefix.to_string(), answer.to_string()));
     }
 
     fn parent_of(path: &str) -> &str {
@@ -108,7 +116,11 @@ impl ADBDeviceExt for FakeADBDevice {
     ) -> Result<Option<u8>, RustADBError> {
         let cmd = command.as_ref();
         self.shell_calls.push(cmd.to_string());
-        if let Some((_, answer)) = self.shell_answers.iter().find(|(p, _)| cmd.starts_with(p.as_str())) {
+        if let Some((_, answer)) = self
+            .shell_answers
+            .iter()
+            .find(|(p, _)| cmd.starts_with(p.as_str()))
+        {
             if let Some(out) = stdout.as_deref_mut() {
                 out.write_all(answer.as_bytes())?;
             }
@@ -120,7 +132,11 @@ impl ADBDeviceExt for FakeADBDevice {
         Ok(Some(1))
     }
 
-    fn shell(&mut self, reader: &mut dyn Read, mut writer: Box<dyn Write + Send>) -> Result<(), RustADBError> {
+    fn shell(
+        &mut self,
+        reader: &mut dyn Read,
+        mut writer: Box<dyn Write + Send>,
+    ) -> Result<(), RustADBError> {
         // 마지막 셸 명령을 스트림 대상으로 간주 — 엔진은 "tar -xf - ..."를 shell로 흘린다
         let cmd = self.shell_calls.last().cloned().unwrap_or_default();
         let mut buf = Vec::new();
@@ -149,7 +165,11 @@ impl ADBDeviceExt for FakeADBDevice {
         // stdin으로 받은 바이트를 기록(tar 스트리밍·install-write 검증용)
         self.shell_calls.push(command.to_string());
         // 기록은 표식을 뗀 원래 명령으로 (검증 편의)
-        let base = command.split(" 2>&1; echo __XV_RC=").next().unwrap_or(command).to_string();
+        let base = command
+            .split(" 2>&1; echo __XV_RC=")
+            .next()
+            .unwrap_or(command)
+            .to_string();
         if let Some(dir) = &self.spool_dir {
             let path = dir.join(format!("stream-{:05}.bin", self.spooled.len()));
             let mut f = std::fs::File::create(&path)?;
@@ -175,7 +195,9 @@ impl ADBDeviceExt for FakeADBDevice {
                 file_size: rec.data.len() as u32,
                 mod_time: rec.mtime,
             }),
-            None => Err(RustADBError::ADBRequestFailed(format!("stat failed for {path}"))),
+            None => Err(RustADBError::ADBRequestFailed(format!(
+                "stat failed for {path}"
+            ))),
         }
     }
 
@@ -187,7 +209,10 @@ impl ADBDeviceExt for FakeADBDevice {
         let path = remote_path.as_ref();
         match self.files.get(path) {
             Some(rec) => {
-                let mk = || ADBStatMapping { id: 1023, name: "media_rw".into() };
+                let mk = || ADBStatMapping {
+                    id: 1023,
+                    name: "media_rw".into(),
+                };
                 Ok(Some(ADBStatExtendedResponse {
                     path: path.to_string(),
                     size: rec.data.len() as u64,
@@ -207,17 +232,25 @@ impl ADBDeviceExt for FakeADBDevice {
         }
     }
 
-    fn pull(&mut self, source: &dyn AsRef<str>, output: &mut dyn Write) -> Result<(), RustADBError> {
+    fn pull(
+        &mut self,
+        source: &dyn AsRef<str>,
+        output: &mut dyn Write,
+    ) -> Result<(), RustADBError> {
         let path = source.as_ref();
         if self.fail_pull.contains(path) {
-            return Err(RustADBError::ADBRequestFailed(format!("pull failed for {path}")));
+            return Err(RustADBError::ADBRequestFailed(format!(
+                "pull failed for {path}"
+            )));
         }
         match self.files.get(path) {
             Some(rec) => {
                 output.write_all(&rec.data)?;
                 Ok(())
             }
-            None => Err(RustADBError::ADBRequestFailed(format!("no such file {path}"))),
+            None => Err(RustADBError::ADBRequestFailed(format!(
+                "no such file {path}"
+            ))),
         }
     }
 
@@ -231,7 +264,9 @@ impl ADBDeviceExt for FakeADBDevice {
     fn list(&mut self, path: &dyn AsRef<str>) -> Result<Vec<ADBListItemType>, RustADBError> {
         let dir = path.as_ref();
         if self.fail_list.contains(dir) {
-            return Err(RustADBError::ADBRequestFailed(format!("list failed for {dir}")));
+            return Err(RustADBError::ADBRequestFailed(format!(
+                "list failed for {dir}"
+            )));
         }
         if !self.dirs.contains(dir) {
             return Err(RustADBError::ADBRequestFailed(format!("no such dir {dir}")));
@@ -287,16 +322,28 @@ impl ADBDeviceExt for FakeADBDevice {
     }
 
     fn root(&mut self) -> Result<(), RustADBError> {
-        Err(RustADBError::ADBRequestFailed("adbd cannot root in fake".into()))
+        Err(RustADBError::ADBRequestFailed(
+            "adbd cannot root in fake".into(),
+        ))
     }
 
-    fn install(&mut self, apk_path: &dyn AsRef<Path>, _user: Option<&str>) -> Result<(), RustADBError> {
-        self.installs.push(apk_path.as_ref().to_string_lossy().to_string());
+    fn install(
+        &mut self,
+        apk_path: &dyn AsRef<Path>,
+        _user: Option<&str>,
+    ) -> Result<(), RustADBError> {
+        self.installs
+            .push(apk_path.as_ref().to_string_lossy().to_string());
         Ok(())
     }
 
-    fn uninstall(&mut self, package: &dyn AsRef<str>, _user: Option<&str>) -> Result<(), RustADBError> {
-        self.shell_calls.push(format!("uninstall {}", package.as_ref()));
+    fn uninstall(
+        &mut self,
+        package: &dyn AsRef<str>,
+        _user: Option<&str>,
+    ) -> Result<(), RustADBError> {
+        self.shell_calls
+            .push(format!("uninstall {}", package.as_ref()));
         Ok(())
     }
 

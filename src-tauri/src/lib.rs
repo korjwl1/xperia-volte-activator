@@ -1,11 +1,15 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod adb;
+mod app_paths;
 mod backup;
+mod device_io;
 mod fastboot;
 mod firmware;
-mod host;
 mod guard;
+mod host;
 mod journal;
+mod storage;
+mod tasks;
 mod usbmode;
 
 use tauri::Manager;
@@ -18,7 +22,7 @@ pub fn run() {
         .setup(|app| {
             // USB 직접 연결용 ADB 인증 키 보관 위치
             if let Ok(dir) = app.path().app_local_data_dir() {
-                adb::set_key_dir(dir);
+                app_paths::init(dir);
             }
             // 작업 중 Windows 종료 메시지 가로채기 (보호는 run_guard로 켤 때만 동작)
             guard::init(app.handle());

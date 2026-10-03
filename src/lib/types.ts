@@ -1,4 +1,6 @@
 // 도메인 타입 — .plans/03-data/mock-schema.md 참조
+export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string };
+export type Unsubscribe = () => void;
 export type DeviceMode = "android" | "bootloader-fastboot" | "fastbootd" | "flashmode";
 
 export type TriState = boolean | "unknown";
@@ -219,7 +221,7 @@ export interface BackupSummary {
 export interface BackupProgress {
   itemId: string;
   phase: string;
-  file?: string;
+  file?: string | null;
   filesDone: number;
   filesTotal: number;
   bytesDone: number;

@@ -34,19 +34,25 @@ pub struct RusbTransport {
 impl RusbTransport {
     /// fastboot 모드 Sony 장치를 정확히 1대 찾아 연다(§9-3 — 여러 대면 거부, 없으면 안내)
     pub fn open() -> Result<Self, String> {
-        let devices =
-            rusb::devices().map_err(|e| format!("USB 장치 목록 조회 실패: {e}"))?;
+        let devices = rusb::devices().map_err(|e| format!("USB 장치 목록 조회 실패: {e}"))?;
         let mut matches: Vec<rusb::Device<rusb::GlobalContext>> = Vec::new();
         for dev in devices.iter() {
-            let Ok(desc) = dev.device_descriptor() else { continue };
+            let Ok(desc) = dev.device_descriptor() else {
+                continue;
+            };
             if desc.vendor_id() == SONY_VID && has_fastboot_interface(&dev, &desc) {
                 matches.push(dev);
             }
         }
         match matches.len() {
-            0 => Err("fastboot 모드 기기를 찾을 수 없습니다 — 폰을 부트로더 모드로 진입시켜 주세요".into()),
+            0 => Err(
+                "fastboot 모드 기기를 찾을 수 없습니다 — 폰을 부트로더 모드로 진입시켜 주세요"
+                    .into(),
+            ),
             1 => Self::claim(&matches[0]),
-            n => Err(format!("fastboot 모드 장치가 {n}대 연결되어 있습니다 — 작업할 폰만 남겨 주세요")),
+            n => Err(format!(
+                "fastboot 모드 장치가 {n}대 연결되어 있습니다 — 작업할 폰만 남겨 주세요"
+            )),
         }
     }
 
@@ -60,7 +66,9 @@ impl RusbTransport {
         let mut configuration = None;
         let mut alternate = None;
         'outer: for cfg_idx in 0..desc.num_configurations() {
-            let Ok(cfg) = dev.config_descriptor(cfg_idx) else { continue };
+            let Ok(cfg) = dev.config_descriptor(cfg_idx) else {
+                continue;
+            };
             for iface in cfg.interfaces() {
                 for alt in iface.descriptors() {
                     if alt.class_code() == FB_CLASS
@@ -70,14 +78,18 @@ impl RusbTransport {
                         let mut out = None;
                         let mut input = None;
                         for ep in alt.endpoint_descriptors() {
-                            if ep.transfer_type() != rusb::TransferType::Bulk { continue; }
+                            if ep.transfer_type() != rusb::TransferType::Bulk {
+                                continue;
+                            }
                             if ep.direction() == rusb::Direction::Out {
                                 out = Some(ep.address());
                             } else {
                                 input = Some(ep.address());
                             }
                         }
-                        if out.is_none() || input.is_none() { continue; }
+                        if out.is_none() || input.is_none() {
+                            continue;
+                        }
                         iface_no = Some(iface.number());
                         ep_out = out;
                         ep_in = input;
@@ -91,11 +103,13 @@ impl RusbTransport {
         let iface_no = iface_no.ok_or("fastboot 인터페이스를 찾지 못했습니다")?;
         let configuration = configuration.ok_or("fastboot USB 설정을 찾지 못했습니다")?;
         if handle.active_configuration().map_err(|e| e.to_string())? != configuration {
-            handle.set_active_configuration(configuration).map_err(|e| e.to_string())?;
+            handle
+                .set_active_configuration(configuration)
+                .map_err(|e| e.to_string())?;
         }
         // 지원하는 플랫폼에서는 release 시 커널 드라이버도 자동 복구한다.
         match handle.set_auto_detach_kernel_driver(true) {
-            Ok(()) | Err(rusb::Error::NotSupported) => {},
+            Ok(()) | Err(rusb::Error::NotSupported) => {}
             Err(e) => return Err(format!("USB 드라이버 분리 설정 실패: {e}")),
         }
         handle
@@ -119,11 +133,15 @@ impl FastbootTransport for RusbTransport {
         if !cmd.is_ascii() || cmd.is_empty() || cmd.len() > 64 {
             return Err(format!("fastboot 명령이 너무 깁니다({}바이트)", cmd.len()));
         }
-        let written = self.handle
+        let written = self
+            .handle
             .write_bulk(self.ep_out, cmd.as_bytes(), RESPONSE_TIMEOUT)
             .map_err(|e| format!("명령 전송 실패: {e}"))?;
         if written != cmd.len() {
-            return Err(format!("명령 일부만 전송되었습니다({written}/{})", cmd.len()));
+            return Err(format!(
+                "명령 일부만 전송되었습니다({written}/{})",
+                cmd.len()
+            ));
         }
         Ok(())
     }
@@ -141,7 +159,8 @@ impl FastbootTransport for RusbTransport {
         const CHUNK: usize = 512 * 1024; // fastboot 표준 max chunk
         for piece in data.chunks(CHUNK) {
             write_all_data(piece, |remaining| {
-                self.handle.write_bulk(self.ep_out, remaining, Duration::from_secs(60))
+                self.handle
+                    .write_bulk(self.ep_out, remaining, Duration::from_secs(60))
                     .map_err(|e| format!("데이터 전송 실패: {e}"))
             })?;
         }
@@ -155,7 +174,10 @@ impl Drop for RusbTransport {
     }
 }
 
-fn write_all_data(mut data: &[u8], mut write: impl FnMut(&[u8]) -> Result<usize, String>) -> Result<(), String> {
+fn write_all_data(
+    mut data: &[u8],
+    mut write: impl FnMut(&[u8]) -> Result<usize, String>,
+) -> Result<(), String> {
     while !data.is_empty() {
         let n = write(data)?;
         if n == 0 || n > data.len() {
@@ -177,19 +199,28 @@ mod tests {
             let n = data.len().min(2);
             sent.extend_from_slice(&data[..n]);
             Ok(n)
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(sent, b"abcdefg");
         assert!(write_all_data(b"x", |_| Ok(0)).is_err());
         assert!(write_all_data(b"x", |_| Err("timeout".into())).is_err());
     }
 }
 
-fn has_fastboot_interface(dev: &rusb::Device<rusb::GlobalContext>, desc: &rusb::DeviceDescriptor) -> bool {
+fn has_fastboot_interface(
+    dev: &rusb::Device<rusb::GlobalContext>,
+    desc: &rusb::DeviceDescriptor,
+) -> bool {
     for cfg_idx in 0..desc.num_configurations() {
-        let Ok(cfg) = dev.config_descriptor(cfg_idx) else { continue };
+        let Ok(cfg) = dev.config_descriptor(cfg_idx) else {
+            continue;
+        };
         for iface in cfg.interfaces() {
             for alt in iface.descriptors() {
-                if alt.class_code() == FB_CLASS && alt.sub_class_code() == FB_SUBCLASS && alt.protocol_code() == FB_PROTOCOL {
+                if alt.class_code() == FB_CLASS
+                    && alt.sub_class_code() == FB_SUBCLASS
+                    && alt.protocol_code() == FB_PROTOCOL
+                {
                     return true;
                 }
             }

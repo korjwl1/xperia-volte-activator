@@ -20,21 +20,37 @@ pub struct Quarantine {
 
 impl Quarantine {
     pub fn new(backup_root: &Path) -> Result<Self, String> {
-        let dir = backup_root.join("quarantine");
+        let target = super::paths::write_target(backup_root, "quarantine/seg000.tar")?;
+        let dir = target.parent().expect("quarantine 부모").to_path_buf();
         std::fs::create_dir_all(&dir).map_err(|e| format!("quarantine 폴더 생성 실패: {e}"))?;
         // 이어서 백업할 때 이전 실행의 세그먼트(완료된 항목의 격리 파일)를 덮어쓰지 않도록 다음 번호부터
-        let segment = std::fs::read_dir(&dir)
-            .map(|rd| {
-                rd.filter_map(|e| e.ok())
-                    .filter_map(|e| {
-                        let n = e.file_name().to_string_lossy().to_string();
-                        n.strip_prefix("seg")?.strip_suffix(".tar")?.parse::<usize>().ok()
-                    })
-                    .max()
-                    .map_or(0, |m| m + 1)
-            })
-            .unwrap_or(0);
-        Ok(Self { dir, builder: None, segment, written: 0 })
+        let mut segment = 0;
+        for entry in
+            std::fs::read_dir(&dir).map_err(|e| format!("quarantine 목록 읽기 실패: {e}"))?
+        {
+            let name = entry
+                .map_err(|e| e.to_string())?
+                .file_name()
+                .to_string_lossy()
+                .to_string();
+            if let Some(number) = name
+                .strip_prefix("seg")
+                .and_then(|n| n.strip_suffix(".tar"))
+                .and_then(|n| n.parse::<usize>().ok())
+            {
+                segment = segment.max(
+                    number
+                        .checked_add(1)
+                        .ok_or("quarantine 세그먼트 번호가 너무 큽니다")?,
+                );
+            }
+        }
+        Ok(Self {
+            dir,
+            builder: None,
+            segment,
+            written: 0,
+        })
     }
 
     fn seg_path(&self) -> PathBuf {
@@ -44,7 +60,10 @@ impl Quarantine {
     /// 새 세그먼트를 연다(필요할 때)
     fn ensure_open(&mut self) -> Result<&mut tar::Builder<std::fs::File>, String> {
         if self.builder.is_none() {
-            let f = std::fs::File::create(self.seg_path())
+            let f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(self.seg_path())
                 .map_err(|e| format!("quarantine 세그먼트 생성 실패: {e}"))?;
             self.builder = Some(tar::Builder::new(f));
             self.written = 0;
@@ -55,7 +74,10 @@ impl Quarantine {
     /// 현재 세그먼트를 닫아 확정
     fn rotate(&mut self) -> Result<(), String> {
         if let Some(b) = self.builder.take() {
-            b.into_inner().map_err(|e| format!("quarantine 세그먼트 종료 실패: {e}"))?;
+            b.into_inner()
+                .map_err(|e| format!("quarantine 세그먼트 종료 실패: {e}"))?
+                .sync_all()
+                .map_err(|e| format!("quarantine 디스크 저장 실패: {e}"))?;
             self.segment += 1;
         }
         Ok(())
@@ -83,7 +105,11 @@ impl Quarantine {
         // 유닉스 절대경로 그대로 — 복원 시 tar -xf가 원 위치에 푼다(§6-3)
         let name = remote.trim_start_matches('/');
         builder
-            .append_data(&mut header, name, std::fs::File::open(tmp).map_err(|e| e.to_string())?)
+            .append_data(
+                &mut header,
+                name,
+                std::fs::File::open(tmp).map_err(|e| e.to_string())?,
+            )
             .map_err(|e| format!("quarantine 항목 추가 실패({remote}): {e}"))?;
         self.written += size;
         Ok(())
@@ -105,7 +131,11 @@ pub struct HashingWriter<W: Write> {
 
 impl<W: Write> HashingWriter<W> {
     pub fn new(inner: W) -> Self {
-        Self { inner, hasher: Sha256::new(), bytes: 0 }
+        Self {
+            inner,
+            hasher: Sha256::new(),
+            bytes: 0,
+        }
     }
     pub fn finish(self) -> (W, String, u64) {
         let digest = self.hasher.finalize();
@@ -127,7 +157,9 @@ impl<W: Write> Write for HashingWriter<W> {
 
 /// 비호환 파일용 임시 파일 경로 — 원본 이름이 Windows에 절대 나타나지 않게 생성명 사용
 pub fn quarantine_tmp_path(backup_root: &Path, nonce: u64) -> PathBuf {
-    backup_root.join("quarantine").join(format!(".qtmp-{nonce}"))
+    backup_root
+        .join("quarantine")
+        .join(format!(".qtmp-{nonce}"))
 }
 
 /// FileEntry를 quarantine 기록으로(성공 시)
@@ -157,7 +189,10 @@ mod tests {
         assert_eq!(buf, b"hello world");
         assert_eq!(n, 11);
         // sha256("hello world") 표준 검증 벡터
-        assert_eq!(hash, "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9");
+        assert_eq!(
+            hash,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
     }
 
     #[test]
@@ -167,7 +202,8 @@ mod tests {
         // 임시 파일 준비
         let tmp = dir.path().join(".qtmp-1");
         std::fs::write(&tmp, b"data-bytes").unwrap();
-        q.add("/sdcard/x/con:.jpg", 10, 1700000000, &tmp, "abc").unwrap();
+        q.add("/sdcard/x/con:.jpg", 10, 1700000000, &tmp, "abc")
+            .unwrap();
         std::fs::remove_file(&tmp).unwrap();
         let segments = q.finish().unwrap();
         assert_eq!(segments, 1);

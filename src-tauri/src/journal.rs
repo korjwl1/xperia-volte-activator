@@ -4,7 +4,7 @@
 //! - 끝난 작업은 <key>.done.json, 새로 시작해 버린 작업은 <key>.discarded.json으로 보관 (디버깅용, 마지막 1개)
 //! - 내용은 프론트가 만든 JSON 그대로 — 언락 코드·IMEI는 넣지 않는다
 
-use crate::adb::app_data_dir;
+use crate::app_paths::data_dir as app_data_dir;
 use std::path::PathBuf;
 
 fn valid_key(key: &str) -> bool {
@@ -12,7 +12,9 @@ fn valid_key(key: &str) -> bool {
 }
 
 fn journal_dir() -> Result<PathBuf, String> {
-    Ok(app_data_dir().ok_or("앱 데이터 폴더를 확인할 수 없습니다")?.join("journal"))
+    Ok(app_data_dir()
+        .ok_or("앱 데이터 폴더를 확인할 수 없습니다")?
+        .join("journal"))
 }
 
 fn path_for(key: &str, suffix: &str) -> Result<PathBuf, String> {
@@ -23,12 +25,16 @@ fn path_for(key: &str, suffix: &str) -> Result<PathBuf, String> {
 }
 
 fn save_work(key: &str, data: &str) -> Result<(), String> {
+    if data.len() > 8 * 1024 * 1024 {
+        return Err("진행 기록이 너무 큽니다".into());
+    }
     let path = path_for(key, "")?;
-    std::fs::create_dir_all(path.parent().expect("journal 폴더")).map_err(|e| format!("기록 폴더 생성 실패: {e}"))?;
+    std::fs::create_dir_all(path.parent().expect("journal 폴더"))
+        .map_err(|e| format!("기록 폴더 생성 실패: {e}"))?;
     // 쓰는 도중 꺼져도 이전 기록이 깨지지 않도록 임시 파일에 쓴 뒤 교체
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, data).map_err(|e| format!("진행 기록 저장 실패: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("진행 기록 저장 실패: {e}"))
+    serde_json::from_str::<serde_json::Value>(data)
+        .map_err(|e| format!("진행 기록 JSON 오류: {e}"))?;
+    crate::storage::atomic_write(&path, data.as_bytes())
 }
 
 fn load_work(key: &str) -> Result<Option<String>, String> {
@@ -55,20 +61,20 @@ fn archive_work(key: &str, tag: &str) -> Result<(), String> {
 
 /// 진행 기록 저장 (덮어쓰기)
 #[tauri::command]
-pub fn journal_save(key: String, data: String) -> Result<(), String> {
-    save_work(&key, &data)
+pub async fn journal_save(key: String, data: String) -> Result<(), String> {
+    crate::tasks::blocking("진행 기록 저장", move || save_work(&key, &data)).await
 }
 
 /// 끝나지 않은 진행 기록 (없으면 null)
 #[tauri::command]
-pub fn journal_load(key: String) -> Result<Option<String>, String> {
-    load_work(&key)
+pub async fn journal_load(key: String) -> Result<Option<String>, String> {
+    crate::tasks::blocking("진행 기록 읽기", move || load_work(&key)).await
 }
 
 /// 진행 기록 보관 — 끝난 작업(done) / 새로 시작해 버린 작업(discarded)
 #[tauri::command]
-pub fn journal_archive(key: String, tag: String) -> Result<(), String> {
-    archive_work(&key, &tag)
+pub async fn journal_archive(key: String, tag: String) -> Result<(), String> {
+    crate::tasks::blocking("진행 기록 보관", move || archive_work(&key, &tag)).await
 }
 
 #[cfg(test)]

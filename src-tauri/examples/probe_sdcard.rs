@@ -19,14 +19,18 @@ fn shell(dev: &mut dyn ADBDeviceExt, cmd: &str) -> String {
 
 fn main() {
     let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 5037);
-    let server_up = TcpStream::connect_timeout(&SocketAddr::V4(addr), Duration::from_millis(300)).is_ok();
+    let server_up =
+        TcpStream::connect_timeout(&SocketAddr::V4(addr), Duration::from_millis(300)).is_ok();
 
     let mut handled = false;
     if server_up {
         // 기존 adb 서버 재사용 — 바이너리 실행 차단용 가짜 경로
         let mut server = ADBServer::new_from_path(addr, Some(r"\\?\xvolte\no-adb-binary".into()));
         if let Ok(devices) = server.devices() {
-            let ready: Vec<_> = devices.into_iter().filter(|d| d.state.to_string().eq_ignore_ascii_case("device")).collect();
+            let ready: Vec<_> = devices
+                .into_iter()
+                .filter(|d| d.state.to_string().eq_ignore_ascii_case("device"))
+                .collect();
             if let Some(first) = ready.first() {
                 let mut dev = ADBServerDevice::new(first.identifier.clone(), Some(addr));
                 run(&mut dev, &format!("(adb 서버 모드: {})", first.identifier));
@@ -40,11 +44,18 @@ fn main() {
     // USB 직접 연결 폴백 — Sony VID만
     match find_all_connected_adb_devices() {
         Ok(list) if !list.is_empty() => {
-            let info = list.into_iter().find(|d| d.vendor_id == 0x0FCE).expect("Sony 기기만");
+            let info = list
+                .into_iter()
+                .find(|d| d.vendor_id == 0x0FCE)
+                .expect("Sony 기기만");
             let key = std::env::var_os("USERPROFILE")
                 .map(|h| std::path::PathBuf::from(h).join(".android").join("adbkey"))
                 .expect("USERPROFILE");
-            match adb_client::usb::ADBUSBDevice::new_with_custom_private_key(info.vendor_id, info.product_id, key) {
+            match adb_client::usb::ADBUSBDevice::new_with_custom_private_key(
+                info.vendor_id,
+                info.product_id,
+                key,
+            ) {
                 Ok(mut dev) => run(&mut dev, "(USB 직접 연결)"),
                 Err(RustADBError::ADBRequestFailed(e)) if e.contains("device unauthorized") => {
                     println!("기기가 승인 대기 중입니다 — 폰 화면에서 USB 디버깅을 허용해 주세요");
@@ -66,7 +77,10 @@ fn run(dev: &mut dyn ADBDeviceExt, via: &str) {
         ("심볼릭 링크", "ls -la /sdcard"),
         ("/storage 목록", "ls /storage/"),
         ("내장 용량", "df -h /storage/emulated/0 | tail -1"),
-        ("외장 SD 여부", "ls /storage/ | grep -E '^[0-9A-F]{4}-[0-9A-F]{4}$' || echo '(외장 SD 없음)'"),
+        (
+            "외장 SD 여부",
+            "ls /storage/ | grep -E '^[0-9A-F]{4}-[0-9A-F]{4}$' || echo '(외장 SD 없음)'",
+        ),
         ("sdcard 루트", "ls /sdcard/ | head -12"),
         ("Android/data 접근", "ls /sdcard/Android/data | head -4"),
     ] {

@@ -39,12 +39,20 @@ fn redact(line: &str, secret: Option<&str>) -> String {
         // 기기의 대소문자 변형도 처리한다. ASCII 일치 위치는 UTF-8 경계다.
         let lower = line.to_ascii_lowercase();
         let needle = secret.to_ascii_lowercase();
-        for (start, _) in lower.match_indices(&needle).collect::<Vec<_>>().into_iter().rev() {
+        for (start, _) in lower
+            .match_indices(&needle)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+        {
             line.replace_range(start..start + secret.len(), "[마스킹]");
         }
     }
     let lower = line.to_ascii_lowercase();
-    if ["imei", "meid", "serialno", "serial-number"].iter().any(|key| lower.contains(key)) {
+    if ["imei", "meid", "serialno", "serial-number"]
+        .iter()
+        .any(|key| lower.contains(key))
+    {
         // getvar:all의 기기 식별값이 journal 로그로 흘러가지 않게 한다.
         if let Some((name, _)) = line.split_once(':') {
             return format!("{name}: [마스킹]");
@@ -59,63 +67,102 @@ fn with_device<T>(
     secret: Option<String>,
     work: impl FnOnce(FastbootDevice<transport::RusbTransport>) -> Result<T, String>,
 ) -> Result<T, String> {
-    let _guard = DEVICE_OPERATION.try_lock().map_err(|_| "다른 fastboot 작업이 진행 중입니다")?;
+    let _guard = DEVICE_OPERATION
+        .try_lock()
+        .map_err(|_| "다른 fastboot 작업이 진행 중입니다")?;
     let t = transport::RusbTransport::open()?;
     let log_secret = secret.clone();
-    let dev = FastbootDevice::new(t, Box::new(move |line| {
-        let _ = app.emit("fastboot:log", redact(&line, log_secret.as_deref()));
-    }));
+    let dev = FastbootDevice::new(
+        t,
+        Box::new(move |line| {
+            let _ = app.emit("fastboot:log", redact(&line, log_secret.as_deref()));
+        }),
+    );
     work(dev).map_err(|e| redact(&e, secret.as_deref()))
 }
 
 /// getvar:all — 읽기 전용 프로브
 #[tauri::command]
-pub async fn fastboot_getvar(app: tauri::AppHandle) -> Result<std::collections::HashMap<String, String>, String> {
+pub async fn fastboot_getvar(
+    app: tauri::AppHandle,
+) -> Result<std::collections::HashMap<String, String>, String> {
     tauri::async_runtime::spawn_blocking(move || with_device(app, None, |mut d| d.getvar_all()))
-        .await.map_err(|e| format!("프로브 스레드 오류: {e}"))?
+        .await
+        .map_err(|e| format!("프로브 스레드 오류: {e}"))?
 }
 
 fn normalize_unlock_code(raw: &str) -> Result<String, String> {
     let raw = raw.trim();
-    let code = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")).unwrap_or(raw);
+    let code = raw
+        .strip_prefix("0x")
+        .or_else(|| raw.strip_prefix("0X"))
+        .unwrap_or(raw);
     protocol::validate_unlock_code(code)?;
     Ok(code.to_string())
 }
 
 #[tauri::command]
-pub async fn fastboot_unlock(app: tauri::AppHandle, code: String, confirm: bool) -> Result<UnlockResult, String> {
+pub async fn fastboot_unlock(
+    app: tauri::AppHandle,
+    code: String,
+    confirm: bool,
+) -> Result<UnlockResult, String> {
     ensure_write_enabled()?;
-    if !confirm { return Err("확인 없이는 실행하지 않습니다".into()); }
+    if !confirm {
+        return Err("확인 없이는 실행하지 않습니다".into());
+    }
     let code = normalize_unlock_code(&code)?;
     let secret = code.clone();
-    tauri::async_runtime::spawn_blocking(move || with_device(app, Some(secret), move |mut d| {
-        d.ensure_bootloader()?;
-        if !d.unlocked()? { d.oem_unlock(&code)?; }
-        let unlocked = d.unlocked()?;
-        if !unlocked { return Err("언락 후 unlocked=yes가 확인되지 않습니다".into()); }
-        Ok(UnlockResult { unlocked })
-    })).await.map_err(|e| format!("언락 스레드 오류: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        with_device(app, Some(secret), move |mut d| {
+            d.ensure_bootloader()?;
+            if !d.unlocked()? {
+                d.oem_unlock(&code)?;
+            }
+            let unlocked = d.unlocked()?;
+            if !unlocked {
+                return Err("언락 후 unlocked=yes가 확인되지 않습니다".into());
+            }
+            Ok(UnlockResult { unlocked })
+        })
+    })
+    .await
+    .map_err(|e| format!("언락 스레드 오류: {e}"))?
 }
 
 #[tauri::command]
 pub async fn fastboot_lock(app: tauri::AppHandle, confirm: bool) -> Result<UnlockResult, String> {
     ensure_write_enabled()?;
-    if !confirm { return Err("확인 없이는 실행하지 않습니다".into()); }
+    if !confirm {
+        return Err("확인 없이는 실행하지 않습니다".into());
+    }
     ensure_relock_verified()?;
-    tauri::async_runtime::spawn_blocking(move || with_device(app, None, |mut d| {
-        d.ensure_bootloader()?;
-        if d.unlocked()? { d.oem_lock()?; }
-        let unlocked = d.unlocked()?;
-        if unlocked { return Err("리락 후 unlocked=no가 확인되지 않습니다".into()); }
-        Ok(UnlockResult { unlocked })
-    })).await.map_err(|e| format!("리락 스레드 오류: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        with_device(app, None, |mut d| {
+            d.ensure_bootloader()?;
+            if d.unlocked()? {
+                d.oem_lock()?;
+            }
+            let unlocked = d.unlocked()?;
+            if unlocked {
+                return Err("리락 후 unlocked=no가 확인되지 않습니다".into());
+            }
+            Ok(UnlockResult { unlocked })
+        })
+    })
+    .await
+    .map_err(|e| format!("리락 스레드 오류: {e}"))?
 }
 
 /// 양쪽 슬롯을 대상으로 하는 기본 파티션명만 허용한다.
 fn validate_base_partition(partition: &str) -> Result<(), String> {
-    if partition.is_empty() || partition.len() > 48
-        || partition.ends_with("_a") || partition.ends_with("_b")
-        || !partition.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+    if partition.is_empty()
+        || partition.len() > 48
+        || partition.ends_with("_a")
+        || partition.ends_with("_b")
+        || !partition
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
     {
         return Err("슬롯 접미사 없는 기본 파티션명을 입력해 주세요".into());
     }
@@ -126,9 +173,13 @@ fn validate_base_partition(partition: &str) -> Result<(), String> {
 fn read_image(path: &str) -> Result<Vec<u8>, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("이미지 파일 열기 실패: {e}"))?;
     let size = file.metadata().map_err(|e| e.to_string())?.len();
-    if size == 0 || size > protocol::MAX_DOWNLOAD { return Err("이미지 크기가 허용 범위를 벗어났습니다".into()); }
+    if size == 0 || size > protocol::MAX_DOWNLOAD {
+        return Err("이미지 크기가 허용 범위를 벗어났습니다".into());
+    }
     let mut image = Vec::new();
-    file.take(protocol::MAX_DOWNLOAD + 1).read_to_end(&mut image).map_err(|e| e.to_string())?;
+    file.take(protocol::MAX_DOWNLOAD + 1)
+        .read_to_end(&mut image)
+        .map_err(|e| e.to_string())?;
     if image.is_empty() || image.len() as u64 > protocol::MAX_DOWNLOAD {
         return Err("이미지 크기가 허용 범위를 벗어났습니다".into());
     }
@@ -136,9 +187,16 @@ fn read_image(path: &str) -> Result<Vec<u8>, String> {
 }
 
 #[tauri::command]
-pub async fn fastboot_flash(app: tauri::AppHandle, partition: String, path: String, confirm: bool) -> Result<(), String> {
+pub async fn fastboot_flash(
+    app: tauri::AppHandle,
+    partition: String,
+    path: String,
+    confirm: bool,
+) -> Result<(), String> {
     ensure_write_enabled()?;
-    if !confirm { return Err("확인 없이는 실행하지 않습니다".into()); }
+    if !confirm {
+        return Err("확인 없이는 실행하지 않습니다".into());
+    }
     validate_base_partition(&partition)?;
     tauri::async_runtime::spawn_blocking(move || {
         let image = read_image(&path)?;
@@ -147,49 +205,97 @@ pub async fn fastboot_flash(app: tauri::AppHandle, partition: String, path: Stri
         let sha256 = hex::encode(Sha256::digest(&image));
         with_device(app, None, move |mut d| {
             d.ensure_bootloader()?;
-            let serial = d.getvar("serialno")?.filter(|s| !s.trim().is_empty())
+            let serial = d
+                .getvar("serialno")?
+                .filter(|s| !s.trim().is_empty())
                 .ok_or("플래시 이력에 연결할 기기 식별값을 확인할 수 없습니다")?;
             let device_key = hex::encode(Sha256::digest(serial.as_bytes()));
-            let slot = d.getvar("current-slot")?.ok_or("현재 슬롯을 확인할 수 없습니다")?;
-            if slot != "a" && slot != "b" { return Err("현재 슬롯이 올바르지 않습니다".into()); }
+            let slot = d
+                .getvar("current-slot")?
+                .ok_or("현재 슬롯을 확인할 수 없습니다")?;
+            if slot != "a" && slot != "b" {
+                return Err("현재 슬롯이 올바르지 않습니다".into());
+            }
             if d.getvar(&format!("has-slot:{partition}"))?.as_deref() != Some("yes") {
                 return Err("양쪽 슬롯이 있는 파티션인지 확인할 수 없습니다".into());
             }
-            let dir = crate::adb::app_data_dir().ok_or("앱 데이터 폴더를 찾지 못했습니다")?;
+            let dir = crate::app_paths::data_dir().ok_or("앱 데이터 폴더를 찾지 못했습니다")?;
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            let mut history = std::fs::OpenOptions::new().create(true).append(true)
-                .open(dir.join("flash-history.jsonl")).map_err(|e| format!("플래시 이력 열기 실패: {e}"))?;
+            let mut history = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("flash-history.jsonl"))
+                .map_err(|e| format!("플래시 이력 열기 실패: {e}"))?;
             for slot in ["_a", "_b"] {
                 let part = format!("{partition}{slot}");
                 // 미완료 시도도 남긴다. 하나의 슬롯만 완료된 경우 두 슬롯 성공으로 오인하지 않는다.
-                record_flash_history(&mut history, &device_key, &part, &path, image.len() as u64, &sha256, "started")?;
+                record_flash_history(
+                    &mut history,
+                    &device_key,
+                    &part,
+                    &path,
+                    image.len() as u64,
+                    &sha256,
+                    "started",
+                )?;
                 match d.flash(&part, &image) {
-                    Ok(()) => record_flash_history(&mut history, &device_key, &part, &path, image.len() as u64, &sha256, "done")?,
+                    Ok(()) => record_flash_history(
+                        &mut history,
+                        &device_key,
+                        &part,
+                        &path,
+                        image.len() as u64,
+                        &sha256,
+                        "done",
+                    )?,
                     Err(e) => {
-                        record_flash_history(&mut history, &device_key, &part, &path, image.len() as u64, &sha256, "failed")?;
+                        record_flash_history(
+                            &mut history,
+                            &device_key,
+                            &part,
+                            &path,
+                            image.len() as u64,
+                            &sha256,
+                            "failed",
+                        )?;
                         return Err(e);
                     }
                 }
             }
             Ok(())
         })
-    }).await.map_err(|e| format!("기록 스레드 오류: {e}"))?
+    })
+    .await
+    .map_err(|e| format!("기록 스레드 오류: {e}"))?
 }
 
 #[tauri::command]
 pub async fn fastboot_reboot(app: tauri::AppHandle, target: String) -> Result<(), String> {
     ensure_write_enabled()?;
-    tauri::async_runtime::spawn_blocking(move || with_device(app, None, move |mut d| d.reboot(&target)))
-        .await.map_err(|e| format!("재부팅 스레드 오류: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        with_device(app, None, move |mut d| d.reboot(&target))
+    })
+    .await
+    .map_err(|e| format!("재부팅 스레드 오류: {e}"))?
 }
 
-fn record_flash_history(file: &mut std::fs::File, device_key: &str, partition: &str, path: &str, bytes: u64, sha256: &str, status: &str) -> Result<(), String> {
+fn record_flash_history(
+    file: &mut std::fs::File,
+    device_key: &str,
+    partition: &str,
+    path: &str,
+    bytes: u64,
+    sha256: &str,
+    status: &str,
+) -> Result<(), String> {
     let entry = serde_json::json!({
         "deviceKey": device_key, "partition": partition, "image": path,
         "bytes": bytes, "sha256": sha256, "status": status,
         "at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     });
-    writeln!(file, "{entry}").and_then(|_| file.sync_data()).map_err(|e| format!("플래시 이력 저장 실패: {e}"))
+    writeln!(file, "{entry}")
+        .and_then(|_| file.sync_data())
+        .map_err(|e| format!("플래시 이력 저장 실패: {e}"))
 }
 
 #[cfg(test)]
@@ -198,7 +304,10 @@ mod tests {
 
     #[test]
     fn code_normalization_and_validation() {
-        assert_eq!(normalize_unlock_code(" 0X1234567890ABCDEF ").unwrap(), "1234567890ABCDEF");
+        assert_eq!(
+            normalize_unlock_code(" 0X1234567890ABCDEF ").unwrap(),
+            "1234567890ABCDEF"
+        );
         assert!(normalize_unlock_code("0x0x1234567890abcdef").is_err());
         assert!(normalize_unlock_code("0x 1234567890abcdef").is_err());
     }
@@ -206,7 +315,10 @@ mod tests {
     #[test]
     fn masks_code_in_events_and_errors_case_insensitively() {
         let secret = "1234567890abcdef";
-        for line in ["oem unlock 0x1234567890abcdef", "FAIL code=1234567890ABCDEF"] {
+        for line in [
+            "oem unlock 0x1234567890abcdef",
+            "FAIL code=1234567890ABCDEF",
+        ] {
             let masked = redact(line, Some(secret));
             assert!(!masked.to_ascii_lowercase().contains(secret));
             assert!(masked.contains("[마스킹]"));
@@ -230,7 +342,10 @@ mod tests {
         let image = tempfile::NamedTempFile::new().unwrap();
         assert!(read_image(image.path().to_str().unwrap()).is_err());
         std::fs::write(image.path(), b"image").unwrap();
-        assert_eq!(read_image(image.path().to_str().unwrap()).unwrap(), b"image");
+        assert_eq!(
+            read_image(image.path().to_str().unwrap()).unwrap(),
+            b"image"
+        );
     }
 
     #[test]
@@ -238,7 +353,16 @@ mod tests {
         use sha2::{Digest, Sha256};
         let mut file = tempfile::tempfile().unwrap();
         let digest = hex::encode(Sha256::digest(b"actual image"));
-        record_flash_history(&mut file, "hashed-device", "boot_a", "changed.img", 12, &digest, "done").unwrap();
+        record_flash_history(
+            &mut file,
+            "hashed-device",
+            "boot_a",
+            "changed.img",
+            12,
+            &digest,
+            "done",
+        )
+        .unwrap();
         use std::io::Seek;
         file.rewind().unwrap();
         let entry: serde_json::Value = serde_json::from_reader(file).unwrap();

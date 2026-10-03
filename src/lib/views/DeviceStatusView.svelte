@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
-  import { CircleCheck, TriangleAlert, Usb, Smartphone, ArrowRight } from "@lucide/svelte/icons";
+  import { onMount } from "svelte";
+  import { CircleCheck, TriangleAlert, Usb, Smartphone, ArrowRight, Lock, LockOpen } from "@lucide/svelte/icons";
   import { api } from "$lib/api";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { simStateLabel, type DeviceStatus, type EnvCheckItem } from "$lib/types";
@@ -40,8 +40,13 @@
       }
       devices = list ?? [];
       wizard.device = devices.length === 1 && devices[0].state === "device" ? devices[0] : null;
-      if (env.length === 0) env = await api.envCheck();
+      if (env.length === 0) {
+        const checks = await api.envCheck();
+        if (!alive) return;
+        env = checks;
+      }
       const st = await api.adbStatus();
+      if (!alive) return;
       linkError = st && !st.available ? (st.detail ?? "기기 연결 기능을 사용할 수 없습니다") : null;
     } finally {
       inFlight = false;
@@ -53,15 +58,17 @@
     refresh();
   }
 
-  onMount(async () => {
-    await refresh();
-    loading = false;
-    pollTimer = setInterval(refresh, 3000);
-  });
-
-  onDestroy(() => {
-    alive = false;
-    if (pollTimer) clearInterval(pollTimer);
+  onMount(() => {
+    alive = true;
+    void refresh().finally(() => {
+      if (!alive) return;
+      loading = false;
+      pollTimer = setInterval(refresh, 3000);
+    });
+    return () => {
+      alive = false;
+      if (pollTimer) clearInterval(pollTimer);
+    };
   });
 
   function start() {
@@ -115,7 +122,7 @@
               <p class="text-sm opacity-80">{device.firmware} · Android {device.android}</p>
               <div class="flex flex-wrap gap-2 pt-1">
                 <div class="rounded-lg bg-white/15 px-3 py-1.5 text-xs font-medium">
-                  {#if device.bootloader === "locked"}🔒 부트로더 잠김{:else if device.bootloader === "unlocked"}🔓 언락{:else}부트로더 확인 불가{/if}
+                  {#if device.bootloader === "locked"}<Lock size={12} class="inline mr-1" />부트로더 잠김{:else if device.bootloader === "unlocked"}<LockOpen size={12} class="inline mr-1" />언락{:else}부트로더 확인 불가{/if}
                 </div>
                 <div class="rounded-lg bg-white/15 px-3 py-1.5 text-xs font-medium">
                   {#if device.rooted === true}루팅됨{:else if device.rooted === false}루팅 미감지{:else}루팅 확인 불가{/if}
