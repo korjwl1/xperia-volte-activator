@@ -121,12 +121,19 @@ invoke('env_check') → EnvCheckItem[]            // WebView2/드라이버/adb�
 invoke('env_fix', { id }) → FixResult           // WebView2 부트스트래퍼, PNPUTIL 상승 등 자동 수리
 ```
 
-## plan (M2)
+## plan / fastboot (M2 — 설계 `.plans/04-engine/fastboot.md`, 사용자 승인 2026-10-03)
 
 ```ts
-invoke('plan_generate', { profile, toggles, deviceStatus }) → PlanStep[]   // §3-2 매트릭스 + §3-3 의존성
-invoke('fastboot_getvar', { serial }) → Record<string,string>              // read-only 프로브
-// 파괴적: fastboot_oem_unlock / fastboot_oem_lock — 실행 전 confirm 인자 필수
+invoke('fastboot_getvar') → Record<string,string>   // ✅ 읽기 전용 — rusb FF/42/03 open, getvar:all 파싱(unlocked·current-slot·slot-successful:_a/_b·max-download-size …)
+//   fastboot 모드 Sony 장치가 정확히 1대일 때만 open(다중 기기 거부 — §9-3)
+invoke('fastboot_unlock', { code, confirm }) → { unlocked: boolean }
+//   "oem unlock 0x{code}" — 16자리 hex 검증, 로그·이벤트에 코드 마스킹(§12.5). 실행 후 getvar로 이중 확인
+invoke('fastboot_lock', { confirm }) → { unlocked: boolean }       // "oem lock" — 최소 게이트(언루팅 완료·unlocked=yes)는 wizard가 판정
+invoke('fastboot_flash', { partition, path, confirm }) → void      // download(DATA 협상) → flash <partition>_a/_b — 플래시 이력 기록(§3-3 리락 게이트 입력)
+invoke('fastboot_reboot', { target: 'os'|'bootloader' }) → void
+// 이벤트 'fastboot:log': { line: string } — INFO 프레임·진행(민감값 마스킹)
+//   파괴 명령은 confirm=true 필수. 실행은 REAL_STEPS.fastboot 전환 시에만(기본 꺼짐 — 실기기 검증 전)
+invoke('plan_generate', { profile, toggles, deviceStatus }) → PlanStep[]   // §3-2 매트릭스 + §3-3 의존성 — 프론트 mock/plan.ts가 단일 공급원(유지)
 ```
 
 ## backup (M3 — 설계 `.plans/04-engine/backup-engine.md`, 사용자 승인 2026-10-03)
