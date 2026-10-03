@@ -106,16 +106,20 @@ pub fn collect_settings(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> ItemR
     rec
 }
 
-/// 백업된 설정 덤프에서 화이트리스트 키의 마지막 값을 찾는다
-fn dumped_value(backup_root: &Path, namespace: &str, key: &str) -> Option<String> {
-    let file = backup_root
-        .join("settings")
-        .join(format!("settings_{namespace}.txt"));
-    let raw = std::fs::read_to_string(file).ok()?;
-    // key=value (값에 '=' 포함 가능 — 첫 구분자만)
-    raw.lines()
-        .find_map(|l| l.split_once('=').filter(|(k, _)| k.trim() == key))
-        .map(|(_, v)| v.trim().to_string())
+/// 덤프를 한 번만 읽고 key=value를 해석한다. 중복 키는 마지막 값을 사용한다.
+fn read_settings(
+    backup_root: &Path,
+    namespace: &str,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let file =
+        super::paths::existing_file(backup_root, &format!("settings/settings_{namespace}.txt"))?;
+    let raw = std::fs::read_to_string(file)
+        .map_err(|e| format!("{namespace} 설정 덤프 읽기 실패: {e}"))?;
+    Ok(raw
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.trim().to_string(), value.trim().to_string()))
+        .collect())
 }
 
 /// 화이트리스트 복원 — 덤프에 있는 키만, 값이 있을 때만 적용. 결과 문구를 반환(진행 로그용)
@@ -124,10 +128,17 @@ pub fn restore_settings(
     backup_root: &Path,
 ) -> Result<Vec<String>, String> {
     let mut log = Vec::new();
+    // 모든 입력을 먼저 읽어, 뒤쪽 덤프 오류 때문에 일부 키만 적용되는 것을 막는다.
+    let mut dumps = std::collections::HashMap::new();
+    for (ns, _) in RESTORE_KEYS {
+        if !dumps.contains_key(ns) {
+            dumps.insert(*ns, read_settings(backup_root, ns)?);
+        }
+    }
     for (ns, key) in RESTORE_KEYS {
-        match dumped_value(backup_root, ns, key) {
+        match dumps.get(ns).and_then(|dump| dump.get(*key)) {
             Some(value) if !value.is_empty() => {
-                let cmd = format!("settings put {ns} {key} {}", shell_quote(&value));
+                let cmd = format!("settings put {ns} {key} {}", shell_quote(value));
                 run(dev, &cmd)?;
                 log.push(format!("{ns}/{key} 복원"));
             }
@@ -143,9 +154,7 @@ pub fn restore_deviceidle(
     dev: &mut dyn ADBDeviceExt,
     backup_root: &Path,
 ) -> Result<Vec<String>, String> {
-    let path = backup_root
-        .join("settings")
-        .join("deviceidle_whitelist.txt");
+    let path = super::paths::existing_file(backup_root, "settings/deviceidle_whitelist.txt")?;
     let raw =
         std::fs::read_to_string(path).map_err(|e| format!("whitelist 덤프 읽기 실패: {e}"))?;
     // 시스템 접두사는 제외(이미 시스템 예외) — 서드파티만 재적용
@@ -193,6 +202,43 @@ pub fn restore_deviceidle(
 mod tests {
     use super::*;
     use crate::backup::fake_device::FakeADBDevice;
+
+    #[test]
+    fn unreadable_dump_prevents_any_settings_write() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("settings")).unwrap();
+        std::fs::write(
+            root.path().join("settings/settings_secure.txt"),
+            b"sysui_qs_tiles=internet",
+        )
+        .unwrap();
+        std::fs::write(root.path().join("settings/settings_system.txt"), [255]).unwrap();
+        let mut dev = FakeADBDevice::new();
+        dev.answer_shell("settings put", "");
+        assert!(restore_settings(&mut dev, root.path()).is_err());
+        assert!(dev.shell_calls.is_empty());
+    }
+
+    #[test]
+    fn dump_last_value_and_embedded_equals_are_preserved() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("settings")).unwrap();
+        for ns in ["secure", "system", "global"] {
+            std::fs::write(root.path().join(format!("settings/settings_{ns}.txt")), "").unwrap();
+        }
+        std::fs::write(
+            root.path().join("settings/settings_secure.txt"),
+            "sysui_qs_tiles=old\nsysui_qs_tiles=new=with=equals\n",
+        )
+        .unwrap();
+        let mut dev = FakeADBDevice::new();
+        dev.answer_shell("settings put", "");
+        restore_settings(&mut dev, root.path()).unwrap();
+        assert_eq!(
+            dev.shell_calls,
+            vec!["settings put secure sysui_qs_tiles \"new=with=equals\""]
+        );
+    }
 
     #[test]
     fn shell_quote_escapes() {

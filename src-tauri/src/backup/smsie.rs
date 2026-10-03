@@ -16,13 +16,48 @@ pub const SMSIE_PKG: &str = "com.github.tmo1.sms_ie";
 pub const DEVICE_TMP_DIR: &str = "/sdcard/xvolte-smsie";
 const GH_RELEASES_API: &str = "https://api.github.com/repos/tmo1/sms-ie/releases/latest";
 const SMS_ROLE: &str = "android.app.role.SMS";
-/// 복원 전 기본 문자 앱 — 마무리 때 그 앱으로 되돌린다(앱 재시작으로 잊히면 역할 해제만)
-static PREV_SMS_HOLDER: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// 한 기기에서 기본 SMS 역할은 하나여야 한다. 오류/여러 응답을 빈 역할로 추측하지 않는다.
+fn current_holder(dev: &mut dyn ADBDeviceExt) -> Result<Option<String>, String> {
+    let raw = run(dev, &format!("cmd role get-role-holders {SMS_ROLE}"))?;
+    let holders: Vec<_> = raw
+        .split([';', '\n', ' ', '\r', '\t'])
+        .filter(|p| !p.is_empty())
+        .collect();
+    match holders.as_slice() {
+        [] => Ok(None),
+        [p] if super::sms_role::valid_package(p) => Ok(Some((*p).to_string())),
+        _ => Err("현재 기본 문자 앱 응답을 확인할 수 없습니다".into()),
+    }
+}
 
-fn valid_pkg(p: &str) -> bool {
-    p.contains('.')
-        && p.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
+fn stage_role(dev: &mut dyn ADBDeviceExt, state_dir: &Path) -> Result<(), String> {
+    let key = crate::device_io::identity_key(dev)?;
+    let record = super::sms_role::load(state_dir, &key)?;
+    let current = current_holder(dev)?;
+    if record
+        .as_ref()
+        .is_some_and(|r| current != r.previous_holder)
+        && current.as_deref() != Some(SMSIE_PKG)
+    {
+        return Err(
+            "기본 문자 앱이 복원 중 다른 앱으로 바뀌었습니다 — 설정에서 확인해 주세요".into(),
+        );
+    }
+    // 재시도/재시작 때 이미 전환된 역할에서 원래 앱 기록을 덮어쓰지 않는다.
+    if record.is_none() {
+        super::sms_role::save(state_dir, &key, current.clone())?;
+    }
+    if current.as_deref() != Some(SMSIE_PKG) {
+        run(
+            dev,
+            &format!("cmd role add-role-holder {SMS_ROLE} {SMSIE_PKG}"),
+        )
+        .map_err(|e| format!("기본 문자 앱 전환 실패: {e}"))?;
+    }
+    if current_holder(dev)?.as_deref() != Some(SMSIE_PKG) {
+        return Err("기본 문자 앱 전환 명령 후 실제 역할을 확인하지 못했습니다".into());
+    }
+    Ok(())
 }
 /// 내보내기 산출물 파일명 접두사(앱 규칙) — messages-*.zip / call-logs-*.json
 const MESSAGES_PREFIX: &str = "messages";
@@ -34,7 +69,9 @@ fn run(dev: &mut dyn ADBDeviceExt, cmd: &str) -> Result<String, String> {
 
 pub fn installed(dev: &mut dyn ADBDeviceExt) -> Result<bool, String> {
     let out = run(dev, &format!("pm list packages {SMSIE_PKG}"))?;
-    Ok(out.contains(SMSIE_PKG))
+    Ok(out
+        .lines()
+        .any(|line| line.trim().strip_prefix("package:") == Some(SMSIE_PKG)))
 }
 
 /// GitHub Releases에서 APK 다운로드(캐시) — standard flavor 우선, legacy 제외.
@@ -311,6 +348,7 @@ pub fn restore_stage(
     dev: &mut dyn ADBDeviceExt,
     backup_root: &Path,
     items: &[String],
+    state_dir: &Path,
 ) -> Result<String, String> {
     super::runner::validate_items(items)?;
     let mut manifest = super::model::load_manifest(backup_root)?;
@@ -356,27 +394,7 @@ pub fn restore_stage(
         dev.push(&mut reader, &remote)
             .map_err(|e| format!("{name} 전송 실패: {e}"))?;
     }
-    // 지금 기본 문자 앱을 기억 — restore_finish에서 되돌린다
-    let holders = run(dev, &format!("cmd role get-role-holders {SMS_ROLE}"))?;
-    let prev = holders
-        .split([';', '\n', ' '])
-        .map(str::trim)
-        .find(|p| valid_pkg(p) && *p != SMSIE_PKG)
-        .map(str::to_string);
-    let mut state = PREV_SMS_HOLDER
-        .lock()
-        .map_err(|_| "문자 앱 원복 상태 잠금 실패")?;
-    // 같은 복원 단계를 재시도할 때 sms-ie가 이미 기본 앱이어도 원래 앱을 잊지 않는다.
-    if prev.is_some() {
-        *state = prev;
-    }
-    drop(state);
-    // 기본 SMS 앱 역할 — 복원 권한의 핵심. 해제는 restore_finish에서
-    run(
-        dev,
-        &format!("cmd role add-role-holder {SMS_ROLE} {SMSIE_PKG}"),
-    )
-    .map_err(|e| format!("기본 문자 앱 전환 실패: {e}"))?;
+    stage_role(dev, state_dir)?;
     let list = names.join(", ");
     Ok(format!(
         "폰을 비행기 모드로 전환했는지 확인하세요(전환 중 수신 문자 유실 방지).\nSMS Import/Export 앱에서 Import → {DEVICE_TMP_DIR}의 파일({list})을 선택해 가져오세요. 끝나면 [완료]를 눌러주세요.",
@@ -384,19 +402,29 @@ pub fn restore_stage(
 }
 
 /// 복원 마무리 — 기본 SMS 앱 역할 원복 + 임시 정리. 원복 실패는 안내 문구로 반환
-pub fn restore_finish(dev: &mut dyn ADBDeviceExt) -> Result<Vec<String>, String> {
+pub fn restore_finish(dev: &mut dyn ADBDeviceExt, state_dir: &Path) -> Result<Vec<String>, String> {
     let mut log = Vec::new();
-    let prev = PREV_SMS_HOLDER
-        .lock()
-        .map_err(|_| "문자 앱 원복 상태 잠금 실패")?
-        .clone();
-    let result = match &prev {
-        // 원래 앱을 다시 기본으로 지정하면 sms-ie는 자동으로 역할을 잃는다
-        Some(p) => run(dev, &format!("cmd role add-role-holder {SMS_ROLE} {p}")),
-        None => run(
-            dev,
-            &format!("cmd role remove-role-holder {SMS_ROLE} {SMSIE_PKG}"),
-        ),
+    let key = crate::device_io::identity_key(dev)?;
+    let prev = super::sms_role::load(state_dir, &key)?
+        .ok_or("이 기기의 문자 앱 원복 기록이 없습니다 — 설정에서 기본 문자 앱을 확인해 주세요")?
+        .previous_holder;
+    let current = current_holder(dev)?;
+    if current != prev && current.as_deref() != Some(SMSIE_PKG) {
+        return Err(
+            "기본 문자 앱이 복원 중 다른 앱으로 바뀌었습니다 — 설정에서 확인해 주세요".into(),
+        );
+    }
+    let result = if current == prev {
+        Ok(String::new())
+    } else {
+        match &prev {
+            // 원래 앱을 다시 기본으로 지정하면 sms-ie는 자동으로 역할을 잃는다
+            Some(p) => run(dev, &format!("cmd role add-role-holder {SMS_ROLE} {p}")),
+            None => run(
+                dev,
+                &format!("cmd role remove-role-holder {SMS_ROLE} {SMSIE_PKG}"),
+            ),
+        }
     };
     match result {
         Ok(_) => log.push(match &prev {
@@ -405,9 +433,10 @@ pub fn restore_finish(dev: &mut dyn ADBDeviceExt) -> Result<Vec<String>, String>
         }),
         Err(e) => return Err(format!("기본 문자 앱 원복 실패 — 설정 > 앱 > 기본 앱에서 직접 바꿔주세요: {e}")),
     }
-    *PREV_SMS_HOLDER
-        .lock()
-        .map_err(|_| "문자 앱 원복 상태 잠금 실패")? = None;
+    if current_holder(dev)? != prev {
+        return Err("기본 문자 앱 원복 명령 후 실제 역할을 확인하지 못했습니다".into());
+    }
+    super::sms_role::remove(state_dir, &key)?;
     let _ = run(dev, &format!("rm -rf {DEVICE_TMP_DIR}"));
     log.push(
         "완전한 반영을 위해 문자 앱 설정에서 저장공간/캐시 삭제가 필요할 수 있습니다(앱 캐싱)"
@@ -422,7 +451,10 @@ mod tests {
 
     fn dev_ready() -> FakeADBDevice {
         let mut d = FakeADBDevice::new();
-        d.answer_shell(&format!("pm list packages {SMSIE_PKG}"), SMSIE_PKG);
+        d.answer_shell(
+            &format!("pm list packages {SMSIE_PKG}"),
+            &format!("package:{SMSIE_PKG}\n"),
+        );
         d.answer_shell("pm grant", ""); // 권한 부여 성공 응답
         d.answer_shell("mkdir", "");
         d.answer_shell("rm -rf", "");
@@ -466,16 +498,14 @@ mod tests {
 
     #[test]
     fn restore_role_goes_back_to_previous_holder() {
-        // 접두사 일치는 먼저 등록한 응답이 우선 — get-role-holders를 "cmd role"보다 먼저 등록
+        // 실제 상태가 바뀌는 가짜 역할 서비스로 원복까지 검사한다.
         let mut d = FakeADBDevice::new();
-        d.answer_shell(
-            "cmd role get-role-holders",
-            "com.google.android.apps.messaging\n",
-        );
-        d.answer_shell("cmd role", "");
+        d.answer_shell("getprop ro.serialno", "FAKE-A");
+        d.sms_role_holder = Some(Some("com.google.android.apps.messaging".into()));
         d.answer_shell("mkdir", "");
         d.answer_shell("rm -rf", "");
         let tmp = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("smsie")).unwrap();
         std::fs::write(tmp.path().join("smsie/messages-1.zip"), b"z").unwrap();
         let mut manifest = super::super::model::Manifest::new("XQ", "masked", "v", "15");
@@ -494,18 +524,121 @@ mod tests {
         manifest.record(item);
         super::super::model::save_manifest_atomic(&manifest, tmp.path()).unwrap();
         std::fs::write(tmp.path().join("smsie/unrecorded.zip"), b"extra").unwrap();
-        assert!(restore_stage(&mut d, tmp.path(), &["sms".into(), "calllog".into()]).is_err());
+        assert!(restore_stage(
+            &mut d,
+            tmp.path(),
+            &["sms".into(), "calllog".into()],
+            state.path()
+        )
+        .is_err());
         assert!(d.pushed.is_empty());
-        restore_stage(&mut d, tmp.path(), &["sms".into()]).unwrap();
+        restore_stage(&mut d, tmp.path(), &["sms".into()], state.path()).unwrap();
         assert_eq!(d.pushed.len(), 1);
         assert!(!d
             .pushed
             .contains_key(&format!("{DEVICE_TMP_DIR}/unrecorded.zip")));
         let mut disconnected = FakeADBDevice::new();
-        assert!(restore_finish(&mut disconnected).is_err());
-        restore_finish(&mut d).unwrap();
+        assert!(restore_finish(&mut disconnected, state.path()).is_err());
+        d.fail_shell.insert("cmd role add-role-holder".into());
+        assert!(restore_finish(&mut d, state.path()).is_err());
+        d.fail_shell.clear();
+        restore_finish(&mut d, state.path()).unwrap();
         assert!(d.shell_calls.iter().any(|c| c
             == "cmd role add-role-holder android.app.role.SMS com.google.android.apps.messaging"));
+    }
+
+    fn role_device(serial: &str, holder: Option<&str>) -> FakeADBDevice {
+        let mut d = dev_ready();
+        d.answer_shell("getprop ro.serialno", serial);
+        d.sms_role_holder = Some(holder.map(str::to_string));
+        d
+    }
+
+    #[test]
+    fn installation_check_requires_the_exact_package() {
+        for (output, expected) in [
+            (format!("package:{SMSIE_PKG}.other\n"), false),
+            (format!("package:{SMSIE_PKG}\n"), true),
+            ("Error: permission denied".into(), false),
+        ] {
+            let mut d = FakeADBDevice::new();
+            d.answer_shell("pm list packages", &output);
+            assert_eq!(installed(&mut d).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn missing_identity_prevents_role_mutation() {
+        let state = tempfile::tempdir().unwrap();
+        let mut d = role_device("", Some("com.original.sms"));
+        assert!(stage_role(&mut d, state.path()).is_err());
+        assert!(restore_finish(&mut d, state.path()).is_err());
+        assert!(!d.shell_calls.iter().any(|c| c.contains("role-holder")));
+        assert_eq!(std::fs::read_dir(state.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn role_journal_survives_reconnect_and_isolates_devices() {
+        let state = tempfile::tempdir().unwrap();
+        let mut a = role_device("FAKE-A", Some("com.original.sms"));
+        let mut b = role_device("FAKE-B", None);
+        stage_role(&mut a, state.path()).unwrap();
+        stage_role(&mut b, state.path()).unwrap();
+        // 새로운 연결에서 재시도해도 원래 앱을 유지한다.
+        let mut reconnected = role_device("FAKE-A", Some(SMSIE_PKG));
+        stage_role(&mut reconnected, state.path()).unwrap();
+        restore_finish(&mut reconnected, state.path()).unwrap();
+        assert_eq!(
+            reconnected.sms_role_holder,
+            Some(Some("com.original.sms".into()))
+        );
+        restore_finish(&mut b, state.path()).unwrap();
+        assert_eq!(b.sms_role_holder, Some(None));
+        assert_eq!(std::fs::read_dir(state.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn role_change_requires_persisted_record_and_confirmed_role() {
+        let state = tempfile::tempdir().unwrap();
+        let invalid_dir = state.path().join("file");
+        std::fs::write(&invalid_dir, b"x").unwrap();
+        let mut d = role_device("FAKE-A", Some("com.original.sms"));
+        assert!(stage_role(&mut d, &invalid_dir).is_err());
+        assert!(!d.shell_calls.iter().any(|c| c.contains("add-role-holder")));
+        d.ignore_role_changes = true;
+        assert!(stage_role(&mut d, state.path()).is_err());
+        let key = crate::device_io::identity_key(&mut d).unwrap();
+        assert!(super::super::sms_role::load(state.path(), &key)
+            .unwrap()
+            .is_some());
+        d.ignore_role_changes = false;
+        stage_role(&mut d, state.path()).unwrap();
+        d.ignore_role_changes = true;
+        assert!(restore_finish(&mut d, state.path()).is_err());
+        assert!(super::super::sms_role::load(state.path(), &key)
+            .unwrap()
+            .is_some());
+        d.ignore_role_changes = false;
+        restore_finish(&mut d, state.path()).unwrap();
+    }
+
+    #[test]
+    fn role_missing_record_or_changed_user_choice_is_not_overridden() {
+        let state = tempfile::tempdir().unwrap();
+        let mut d = role_device("FAKE-A", Some(SMSIE_PKG));
+        assert!(restore_finish(&mut d, state.path()).is_err());
+        // 원래 sms-ie를 쓰는 사용자의 기본 앱은 해제하지 않는다.
+        stage_role(&mut d, state.path()).unwrap();
+        restore_finish(&mut d, state.path()).unwrap();
+        assert_eq!(d.sms_role_holder, Some(Some(SMSIE_PKG.into())));
+        d.sms_role_holder = Some(Some("com.original.sms".into()));
+        stage_role(&mut d, state.path()).unwrap();
+        d.sms_role_holder = Some(Some("com.changed.sms".into()));
+        assert!(stage_role(&mut d, state.path()).is_err());
+        assert!(restore_finish(&mut d, state.path()).is_err());
+        assert_eq!(d.sms_role_holder, Some(Some("com.changed.sms".into())));
+        d.sms_role_holder = Some(Some("unknown output".into()));
+        assert!(stage_role(&mut d, state.path()).is_err());
     }
 
     #[test]

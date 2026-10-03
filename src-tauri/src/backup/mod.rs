@@ -10,6 +10,7 @@ pub mod quarantine;
 pub mod restore;
 pub mod runner;
 pub mod settings;
+pub mod sms_role;
 pub mod smsie;
 pub mod verify;
 pub mod walker;
@@ -313,11 +314,14 @@ pub async fn smsie_restore_stage(
     items: Vec<String>,
 ) -> Result<String, String> {
     let backup_dir = PathBuf::from(&dir);
+    let state_dir = crate::app_paths::data_dir()
+        .ok_or("앱 데이터 폴더를 확인할 수 없습니다")?
+        .join("sms-role");
     let operation = Operation::acquire()?;
     let work = move || {
         let _operation = operation;
         crate::adb::with_first_device(&serial, |dev| {
-            smsie::restore_stage(dev, &backup_dir, &items)
+            smsie::restore_stage(dev, &backup_dir, &items, &state_dir)
         })
     };
     crate::tasks::blocking("준비", work).await
@@ -326,10 +330,13 @@ pub async fn smsie_restore_stage(
 /// 문자·통화 기록 복원 마무리 — 기본 문자 앱 역할 원복 + 임시 정리(안내 로그 반환)
 #[tauri::command]
 pub async fn smsie_restore_finish(serial: Option<String>) -> Result<Vec<String>, String> {
+    let state_dir = crate::app_paths::data_dir()
+        .ok_or("앱 데이터 폴더를 확인할 수 없습니다")?
+        .join("sms-role");
     let operation = Operation::acquire()?;
     let work = move || {
         let _operation = operation;
-        crate::adb::with_first_device(&serial, smsie::restore_finish)
+        crate::adb::with_first_device(&serial, |dev| smsie::restore_finish(dev, &state_dir))
     };
     crate::tasks::blocking("마무리", work).await
 }

@@ -7,6 +7,8 @@
 use crate::app_paths::data_dir as app_data_dir;
 use std::path::PathBuf;
 
+const MAX_JOURNAL_BYTES: usize = 8 * 1024 * 1024;
+
 fn valid_key(key: &str) -> bool {
     (16..=64).contains(&key.len()) && key.bytes().all(|b| b.is_ascii_hexdigit())
 }
@@ -25,7 +27,7 @@ fn path_for(key: &str, suffix: &str) -> Result<PathBuf, String> {
 }
 
 fn save_work(key: &str, data: &str) -> Result<(), String> {
-    if data.len() > 8 * 1024 * 1024 {
+    if data.len() > MAX_JOURNAL_BYTES {
         return Err("진행 기록이 너무 큽니다".into());
     }
     let path = path_for(key, "")?;
@@ -39,11 +41,13 @@ fn save_work(key: &str, data: &str) -> Result<(), String> {
 
 fn load_work(key: &str) -> Result<Option<String>, String> {
     let path = path_for(key, "")?;
-    match std::fs::read_to_string(&path) {
-        Ok(s) => Ok(Some(s)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("진행 기록 읽기 실패: {e}")),
-    }
+    load_file(&path)
+}
+
+fn load_file(path: &std::path::Path) -> Result<Option<String>, String> {
+    crate::storage::read_bounded(path, MAX_JOURNAL_BYTES)?
+        .map(|raw| String::from_utf8(raw).map_err(|e| format!("진행 기록 UTF-8 오류: {e}")))
+        .transpose()
 }
 
 fn archive_work(key: &str, tag: &str) -> Result<(), String> {
@@ -80,6 +84,18 @@ pub async fn journal_archive(key: String, tag: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn load_rejects_oversized_and_non_utf8_disk_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("journal.json");
+        assert!(load_file(&file).unwrap().is_none());
+        std::fs::write(&file, b"{}").unwrap();
+        assert_eq!(load_file(&file).unwrap().as_deref(), Some("{}"));
+        std::fs::write(&file, [255]).unwrap();
+        assert!(load_file(&file).is_err());
+        std::fs::write(&file, vec![b' '; MAX_JOURNAL_BYTES + 1]).unwrap();
+        assert!(load_file(&file).is_err());
+    }
 
     #[test]
     fn key_validation() {

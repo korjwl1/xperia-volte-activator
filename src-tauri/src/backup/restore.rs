@@ -218,7 +218,7 @@ fn restore_quarantined(
             tar::Archive::new(std::fs::File::open(&segment).map_err(|e| e.to_string())?);
         let mut output = tar::Builder::new(writer);
         let mut included = vec![];
-        for entry in archive.entries().map_err(|e| e.to_string())? {
+        for entry in archive.entries_with_seek().map_err(|e| e.to_string())? {
             let mut entry = entry.map_err(|e| e.to_string())?;
             let name = entry
                 .path()
@@ -274,13 +274,18 @@ fn install_apk_dir(
         return;
     }
     // install-create → 세션 id
-    let mut out = Vec::new();
-    if let Err(e) = dev.shell_command(&"pm install-create -r -t", Some(&mut out), None) {
-        failures.push(format!("{pkg}: 설치 세션 생성 실패({e})"));
-        return;
-    }
-    let text = String::from_utf8_lossy(&out);
-    let Some(sid) = text.split('[').nth(1).and_then(|r| r.split(']').next()) else {
+    let text = match crate::device_io::shell(dev, "pm install-create -r -t") {
+        Ok(text) => text,
+        Err(e) => {
+            failures.push(format!("{pkg}: 설치 세션 생성 실패({e})"));
+            return;
+        }
+    };
+    let Some(sid) = text
+        .trim()
+        .strip_prefix("Success: created install session [")
+        .and_then(|r| r.strip_suffix(']'))
+    else {
         failures.push(format!(
             "{}: 설치 세션 번호를 못 얻었습니다({})",
             pkg,
@@ -301,35 +306,47 @@ fn install_apk_dir(
             failures.push(format!(
                 "{pkg}: APK 파일 이름이 올바르지 않아 건너뜀({name})"
             ));
-            let _ = dev.shell_command(&format!("pm install-abandon {sid}"), None, None);
+            abandon_install(dev, sid, logs);
             return;
         }
-        let size = std::fs::metadata(apk).map(|m| m.len()).unwrap_or(0);
-        let cmd = format!("pm install-write -S {size} {sid} {name} -");
         let result = std::fs::File::open(apk)
             .map_err(|e| format!("파일 열기 실패({e})"))
-            .and_then(|mut f| exec_checked(dev, &cmd, &mut f));
+            .and_then(|mut f| {
+                let size = f
+                    .metadata()
+                    .map_err(|e| format!("파일 크기 조회 실패({e})"))?
+                    .len();
+                if size == 0 {
+                    return Err("빈 APK 파일".into());
+                }
+                let cmd = format!("pm install-write -S {size} {sid} {name} -");
+                exec_checked(dev, &cmd, &mut f)
+            });
         if let Err(e) = result {
             failures.push(format!("{pkg}/{name}: 전송 실패({e})"));
-            let _ = dev.shell_command(&format!("pm install-abandon {sid}"), None, None);
+            abandon_install(dev, sid, logs);
             return;
         }
     }
-    let mut cout = Vec::new();
-    match dev.shell_command(&format!("pm install-commit {sid}"), Some(&mut cout), None) {
-        Ok(_) => {
-            let t = String::from_utf8_lossy(&cout);
-            if t.contains("Success") {
+    match crate::device_io::shell(dev, &format!("pm install-commit {sid}")) {
+        Ok(t) => {
+            if t.trim() == "Success" {
                 logs.push(format!("{pkg} 재설치"));
             } else {
                 failures.push(format!("{pkg}: 설치 실패({})", t.trim()));
-                let _ = dev.shell_command(&format!("pm install-abandon {sid}"), None, None);
+                abandon_install(dev, sid, logs);
             }
         }
         Err(e) => {
             failures.push(format!("{pkg}: 설치 확정 실패({e})"));
-            let _ = dev.shell_command(&format!("pm install-abandon {sid}"), None, None);
+            abandon_install(dev, sid, logs);
         }
+    }
+}
+
+fn abandon_install(dev: &mut dyn ADBDeviceExt, sid: &str, logs: &mut Vec<String>) {
+    if let Err(error) = crate::device_io::shell(dev, &format!("pm install-abandon {sid}")) {
+        logs.push(format!("[경고] 설치 세션 {sid} 정리 실패: {error}"));
     }
 }
 
@@ -599,6 +616,97 @@ pub fn run_restore(
 mod tests {
     use super::*;
     use crate::backup::fake_device::FakeADBDevice;
+
+    #[test]
+    fn apk_creation_nonzero_status_cannot_start_a_session() {
+        let root = tempfile::tempdir().unwrap();
+        let apk = root.path().join("base.apk");
+        std::fs::write(&apk, b"apk").unwrap();
+        let mut dev = FakeADBDevice::new();
+        dev.answer_shell(
+            "pm install-create",
+            "Success: created install session [42]\n",
+        );
+        dev.shell_exit_codes
+            .insert("pm install-create -r -t".into(), 1);
+        let (mut logs, mut failures) = (vec![], vec![]);
+        install_apk_dir(
+            &mut dev,
+            "com.example.app",
+            vec![apk],
+            &mut logs,
+            &mut failures,
+        );
+        assert_eq!(failures.len(), 1);
+        assert!(logs.is_empty());
+        assert!(!dev
+            .shell_calls
+            .iter()
+            .any(|cmd| cmd.contains("install-write") || cmd.contains("install-commit")));
+    }
+
+    #[test]
+    fn apk_commit_requires_success_status_and_exact_success_response() {
+        for (response, status) in [("Success\n", 1), ("Failure [Success text]\n", 0)] {
+            let root = tempfile::tempdir().unwrap();
+            let apk = root.path().join("base.apk");
+            std::fs::write(&apk, b"apk").unwrap();
+            let mut dev = FakeADBDevice::new();
+            dev.answer_shell(
+                "pm install-create",
+                "Success: created install session [42]\n",
+            );
+            dev.answer_shell("pm install-commit", response);
+            dev.shell_exit_codes
+                .insert("pm install-commit 42".into(), status);
+            let (mut logs, mut failures) = (vec![], vec![]);
+            install_apk_dir(
+                &mut dev,
+                "com.example.app",
+                vec![apk],
+                &mut logs,
+                &mut failures,
+            );
+            assert_eq!(failures.len(), 1);
+            assert!(!logs.iter().any(|line| line.contains("재설치")));
+            assert!(dev
+                .shell_calls
+                .iter()
+                .any(|cmd| cmd == "pm install-abandon 42"));
+            assert!(logs.iter().any(|line| line.contains("정리 실패")));
+        }
+    }
+
+    #[test]
+    fn apk_missing_or_empty_file_abandons_before_streaming() {
+        for bytes in [None, Some(b"".as_slice())] {
+            let root = tempfile::tempdir().unwrap();
+            let apk = root.path().join("base.apk");
+            if let Some(bytes) = bytes {
+                std::fs::write(&apk, bytes).unwrap();
+            }
+            let mut dev = FakeADBDevice::new();
+            dev.answer_shell(
+                "pm install-create",
+                "Success: created install session [42]\n",
+            );
+            dev.answer_shell("pm install-abandon", "Success\n");
+            let (mut logs, mut failures) = (vec![], vec![]);
+            install_apk_dir(
+                &mut dev,
+                "com.example.app",
+                vec![apk],
+                &mut logs,
+                &mut failures,
+            );
+            assert_eq!(failures.len(), 1);
+            assert!(dev.shell_streams.is_empty());
+            assert!(dev
+                .shell_calls
+                .iter()
+                .any(|cmd| cmd == "pm install-abandon 42"));
+        }
+    }
     use crate::backup::model::{ItemKind, ItemStatus};
     fn noop_progress() -> RestoreSink {
         Arc::new(|_| {})
@@ -1004,7 +1112,11 @@ mod tests {
         b.append_data(&mut h, "system/evil", &b"x"[..]).unwrap();
         b.finish().unwrap();
         drop(b);
-        assert!(super::super::verify::quarantine_hashes(tmp.path()).is_err());
+        assert!(super::super::verify::quarantine_hashes(
+            tmp.path(),
+            &std::collections::HashSet::new()
+        )
+        .is_err());
     }
 
     #[test]

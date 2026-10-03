@@ -1,6 +1,17 @@
 //! 기기 I/O 결과를 공통 규칙으로 해석한다. Tauri와 연결 선택에 의존하지 않는다.
 use adb_client::ADBDeviceExt;
 
+/// 원본 시리얼을 파일 이름이나 기록에 남기지 않고 기기를 구분한다.
+pub fn identity_key(dev: &mut dyn ADBDeviceExt) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let serial = shell(dev, "getprop ro.serialno")?;
+    let serial = serial.trim();
+    if serial.is_empty() {
+        return Err("기기 식별 정보를 확인할 수 없습니다".into());
+    }
+    Ok(hex::encode(Sha256::digest(serial.as_bytes())))
+}
+
 pub fn shell(dev: &mut dyn ADBDeviceExt, command: &str) -> Result<String, String> {
     let mut stdout = vec![];
     let mut stderr = vec![];

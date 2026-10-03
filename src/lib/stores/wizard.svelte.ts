@@ -551,12 +551,10 @@ export class Wizard {
 
   /** 창 닫기 — 멈춘 사유를 남기고 기록을 확실히 저장 (사용자가 이미 중단한 경우 그 사유 유지) */
   async closeForExit(): Promise<boolean> {
-    this.runGen++;
-    void api.backupCancel();
+    if (this.runInDanger) return false;
     const cur = this.runSteps[this.cursor];
     const wasWaiting = cur?.status === "manual-wait";
-    this.pause();
-    this.stopWatch();
+    this.stopRun(false);
     if (!this.stopInfo && cur) {
       this.stopInfo = {
         stepId: cur.id,
@@ -566,9 +564,11 @@ export class Wizard {
       };
       cur.logs.push(`[종료] ${this.stopInfo.reason}`);
     }
-    const saved = await this.persist(true);
-    this.setGuard(false);
-    return saved;
+    try {
+      return await this.persist(true);
+    } finally {
+      this.setGuard(false);
+    }
   }
 
   /** 명시적으로 멈춘 사유를 기록 */
@@ -1572,9 +1572,9 @@ export class Wizard {
     this.begin();
   }
 
-  abort() {
+  /** 실행을 멈춘 뒤 돌아오더라도 running/manual-wait가 남아 단계를 건너뛰지 않게 한다. */
+  private stopRun(resetFailed: boolean) {
     this.runGen++;
-    this.stepError = "";
     this.pause();
     this.stopWatch();
     // 진행 중인 실전 백업이 있으면 백엔드에도 취소 전달
@@ -1584,7 +1584,7 @@ export class Wizard {
       if (s.status === "running" || s.status === "manual-wait") {
         s.status = "pending";
         s.manualDone = 0;
-      } else if (s.status === "failed") {
+      } else if (resetFailed && s.status === "failed") {
         // 실패한 단계는 다시 시작할 때 처음부터
         s.status = "pending";
         s.progress = 0;
@@ -1595,6 +1595,11 @@ export class Wizard {
     this.manualCurrent = null;
     this.usbError = false;
     this.backupNoticeAck = false;
+  }
+
+  abort() {
+    this.stepError = "";
+    this.stopRun(true);
     this.markStop("사용자가 작업을 중단했습니다");
   }
 

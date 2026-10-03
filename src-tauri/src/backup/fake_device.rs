@@ -33,6 +33,11 @@ pub struct FakeADBDevice {
     shell_answers: Vec<(String, String)>,
     /// 실행된 셸 명령 전체 기록
     pub shell_calls: Vec<String>,
+    /// Some이면 SMS 역할 변경을 모의한다(내부 None은 기본 앱 없음).
+    pub sms_role_holder: Option<Option<String>>,
+    pub ignore_role_changes: bool,
+    pub fail_shell: BTreeSet<String>,
+    pub shell_exit_codes: BTreeMap<String, u8>,
     /// 인터랙티브 셸(shell(reader, writer)) 기록 — 명령 → stdin으로 받은 바이트
     pub shell_streams: Vec<(String, Vec<u8>)>,
     /// 대화형 셸이 stdin을 소비하는 최대 바이트(기본 무제한)
@@ -116,6 +121,34 @@ impl ADBDeviceExt for FakeADBDevice {
     ) -> Result<Option<u8>, RustADBError> {
         let cmd = command.as_ref();
         self.shell_calls.push(cmd.to_string());
+        if self.fail_shell.iter().any(|prefix| cmd.starts_with(prefix)) {
+            if let Some(err) = stderr.as_deref_mut() {
+                err.write_all(b"injected shell failure")?;
+            }
+            return Ok(Some(1));
+        }
+        if let Some(holder) = &mut self.sms_role_holder {
+            if cmd == "cmd role get-role-holders android.app.role.SMS" {
+                if let Some(out) = stdout.as_deref_mut() {
+                    out.write_all(holder.as_deref().unwrap_or("").as_bytes())?;
+                }
+                return Ok(Some(0));
+            }
+            if let Some(package) =
+                cmd.strip_prefix("cmd role add-role-holder android.app.role.SMS ")
+            {
+                if !self.ignore_role_changes {
+                    *holder = Some(package.into());
+                }
+                return Ok(Some(0));
+            }
+            if cmd.starts_with("cmd role remove-role-holder android.app.role.SMS ") {
+                if !self.ignore_role_changes {
+                    *holder = None;
+                }
+                return Ok(Some(0));
+            }
+        }
         if let Some((_, answer)) = self
             .shell_answers
             .iter()
@@ -124,7 +157,7 @@ impl ADBDeviceExt for FakeADBDevice {
             if let Some(out) = stdout.as_deref_mut() {
                 out.write_all(answer.as_bytes())?;
             }
-            return Ok(Some(0));
+            return Ok(Some(self.shell_exit_codes.get(cmd).copied().unwrap_or(0)));
         }
         if let Some(err) = stderr.as_deref_mut() {
             write!(err, "unknown command: {cmd}")?;

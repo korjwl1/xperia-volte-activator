@@ -3,7 +3,7 @@ use super::model::{BackupSummary, ItemRecord, ItemStatus, Manifest};
 use super::paths;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
 pub fn hash_reader(mut reader: impl Read) -> Result<(String, u64), String> {
@@ -43,28 +43,43 @@ pub fn segments(root: &Path) -> Result<Vec<PathBuf>, String> {
 // 재시도로 같은 원본 이름이 여러 세그먼트에 있을 수 있다. 일치하는 내용만 검증에 사용한다.
 pub(super) fn quarantine_hashes(
     root: &Path,
+    wanted: &HashSet<String>,
 ) -> Result<HashMap<String, Vec<(String, u64)>>, String> {
     let mut hashes: HashMap<String, Vec<(String, u64)>> = HashMap::new();
     for segment in segments(root)? {
-        let mut archive =
-            tar::Archive::new(std::fs::File::open(segment).map_err(|e| e.to_string())?);
-        for entry in archive
-            .entries()
-            .map_err(|e| format!("격리 tar 해석 실패: {e}"))?
-        {
-            let entry = entry.map_err(|e| format!("격리 tar 항목 오류: {e}"))?;
-            let remote = format!(
-                "/{}",
-                entry
-                    .path()
-                    .map_err(|e| e.to_string())?
-                    .to_string_lossy()
-                    .replace('\\', "/")
-            );
-            paths::sdcard_relative(&remote)?;
-            if !entry.header().entry_type().is_file() {
-                return Err("격리 tar에 일반 파일이 아닌 항목이 있습니다".into());
-            }
+        let file = std::fs::File::open(segment).map_err(|e| e.to_string())?;
+        for (remote, versions) in archive_hashes(file, wanted)? {
+            hashes.entry(remote).or_default().extend(versions);
+        }
+    }
+    Ok(hashes)
+}
+
+fn archive_hashes(
+    reader: impl Read + Seek,
+    wanted: &HashSet<String>,
+) -> Result<HashMap<String, Vec<(String, u64)>>, String> {
+    let mut hashes: HashMap<String, Vec<(String, u64)>> = HashMap::new();
+    let mut archive = tar::Archive::new(reader);
+    for entry in archive
+        .entries_with_seek()
+        .map_err(|e| format!("격리 tar 해석 실패: {e}"))?
+    {
+        let entry = entry.map_err(|e| format!("격리 tar 항목 오류: {e}"))?;
+        let remote = format!(
+            "/{}",
+            entry
+                .path()
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .replace('\\', "/")
+        );
+        paths::sdcard_relative(&remote)?;
+        if !entry.header().entry_type().is_file() {
+            return Err("격리 tar에 일반 파일이 아닌 항목이 있습니다".into());
+        }
+        // 모든 헤더의 경로/유형을 검사하되, 선택하지 않은 본문은 seek로 건너뛴다.
+        if wanted.contains(&remote) {
             hashes.entry(remote).or_default().push(hash_reader(entry)?);
         }
     }
@@ -112,12 +127,16 @@ pub fn item_problems(root: &Path, item: &ItemRecord) -> Vec<String> {
 }
 
 pub fn verify_manifest(root: &Path, manifest: &mut Manifest) -> Vec<String> {
-    let needs_quarantine = manifest
+    let wanted: HashSet<String> = manifest
         .items
         .iter()
-        .any(|i| i.status != ItemStatus::Skipped && i.entries.iter().any(|e| e.quarantined));
-    let quarantine = if needs_quarantine {
-        quarantine_hashes(root)
+        .filter(|item| item.status != ItemStatus::Skipped)
+        .flat_map(|item| item.entries.iter())
+        .filter(|entry| entry.quarantined && entry.error.is_none())
+        .map(|entry| entry.remote.clone())
+        .collect();
+    let quarantine = if !wanted.is_empty() {
+        quarantine_hashes(root, &wanted)
     } else {
         Ok(HashMap::new())
     };
@@ -171,6 +190,43 @@ pub fn backup_summary(root: &Path) -> Result<BackupSummary, String> {
 mod tests {
     use super::super::model::{FileEntry, ItemKind};
     use super::*;
+    #[test]
+    fn unselected_tar_payload_is_skipped_without_reading() {
+        use std::io::{Cursor, SeekFrom};
+        struct GuardedReader(Cursor<Vec<u8>>);
+        impl Read for GuardedReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                if (512..512 + 1024 * 1024).contains(&self.0.position()) {
+                    return Err(std::io::Error::other("unselected payload was read"));
+                }
+                self.0.read(buffer)
+            }
+        }
+        impl Seek for GuardedReader {
+            fn seek(&mut self, offset: SeekFrom) -> std::io::Result<u64> {
+                self.0.seek(offset)
+            }
+        }
+        let mut builder = tar::Builder::new(Vec::new());
+        for (name, bytes) in [
+            ("sdcard/DCIM/unselected.jpg", vec![0; 1024 * 1024]),
+            ("sdcard/DCIM/selected.jpg", vec![42]),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, name, bytes.as_slice())
+                .unwrap();
+        }
+        let bytes = builder.into_inner().unwrap();
+        let key = "/sdcard/DCIM/selected.jpg".to_string();
+        let wanted = HashSet::from([key.clone()]);
+        let hashes = archive_hashes(GuardedReader(Cursor::new(bytes)), &wanted).unwrap();
+        assert_eq!(hashes.len(), 1);
+        assert_eq!(hashes[&key], vec![hash_reader([42].as_slice()).unwrap()]);
+    }
     fn entry(name: &str, bytes: &[u8]) -> FileEntry {
         FileEntry {
             remote: format!("/sdcard/DCIM/{name}"),

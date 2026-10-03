@@ -202,6 +202,42 @@ test("stale event registration cannot start a restore after reset", async () => 
   assert.equal(off, 1);
 });
 
+test("failed exit save leaves a resumable pending step and invalidates late work", async () => {
+  const w = wizard(), registration = deferred();
+  w.backupDir = "backup";
+  w.journalKey = "a".repeat(64);
+  w.runSteps[0].manualDone = 1;
+  w.manualCurrent = { id: "smsie-import" };
+  let started = 0, off = 0, cancelled = 0;
+  api.onRestoreProgress = () => registration.promise;
+  api.restoreRun = async () => { started++; };
+  api.backupCancel = async () => { cancelled++; };
+  api.journalSave = async () => false;
+  const pending = w.runRealRestore(w.runSteps[0]);
+  assert.equal(await w.closeForExit(), false);
+  registration.resolve(() => off++);
+  await pending;
+  assert.equal(started, 0);
+  assert.equal(off, 1);
+  assert.equal(cancelled, 1);
+  assert.equal(w.runSteps[0].status, "pending");
+  assert.equal(w.runSteps[0].manualDone, 0);
+  assert.equal(w.manualCurrent, null);
+  assert.equal(w.running, false);
+  assert.ok(w.stopInfo);
+});
+
+test("exit rejects a running destructive step before cancelling or saving", async () => {
+  const w = wizard();
+  w.runSteps[0].id = "unlock";
+  w.steps = [{ id: "unlock", risk: "danger" }];
+  let touched = 0;
+  api.backupCancel = api.journalSave = async () => { touched++; return true; };
+  assert.equal(await w.closeForExit(), false);
+  assert.equal(touched, 0);
+  assert.equal(w.runSteps[0].status, "running");
+});
+
 test("views and domain keep desktop IPC behind the API boundary", () => {
   const root = path.resolve("src");
   const walk = dir => fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry =>

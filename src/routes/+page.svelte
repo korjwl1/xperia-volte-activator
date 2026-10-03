@@ -43,16 +43,21 @@
   });
 
   let saveFailed = $state(false);
+  let closeError = $state("");
   async function confirmClose() {
+    if (closing || wizard.runInDanger) return;
     closing = true;
-    // 기록 저장에 실패하면 바로 닫지 않고 알린다 (다시 시도 / 기록 없이 종료)
-    if (!(await wizard.closeForExit()) && !saveFailed) {
-      saveFailed = true;
-      closing = false;
-      return;
-    }
+    closeError = "";
     try {
-      await closeWindow?.();
+      // 기록 저장에 실패하면 바로 닫지 않고 알린다 (다시 시도 / 기록 없이 종료)
+      if (!(await wizard.closeForExit()) && !saveFailed) {
+        saveFailed = true;
+        return;
+      }
+      if (!closeWindow) throw new Error("창 종료 기능을 사용할 수 없습니다");
+      await closeWindow();
+    } catch (error) {
+      closeError = error instanceof Error ? error.message : String(error);
     } finally {
       closing = false;
     }
@@ -155,13 +160,18 @@
               진행 기록을 저장하지 못했습니다 — 지금 종료하면 다음에 이어서 진행할 수 없습니다. 그래도 종료하려면 [종료]를 한 번 더 누르세요.
             </div>
           {/if}
+          {#if closeError}
+            <div class="rounded-lg bg-danger-container/60 px-4 py-2 text-xs text-destructive">
+              종료하지 못했습니다 — {closeError}
+            </div>
+          {/if}
           {#if wizard.runInDanger}
             <div class="rounded-lg bg-danger-container/60 px-4 py-2 text-xs text-destructive">
               되돌리기 어려운 작업이 진행 중입니다. 중간에 끊기면 폰이 정상적으로 켜지지 않을 수 있습니다.
             </div>
           {/if}
           <div class="flex justify-end gap-2">
-            <Button variant="outline" size="sm" disabled={closing} onclick={() => { closeAsk = false; saveFailed = false; }}>계속 작업</Button>
+            <Button variant="outline" size="sm" disabled={closing} onclick={() => { closeAsk = false; saveFailed = false; closeError = ""; }}>작업 화면으로 돌아가기</Button>
             {#if !wizard.runInDanger}
               <Button variant="destructive" size="sm" disabled={closing} onclick={confirmClose}>{closing ? "기록 저장 중…" : "종료"}</Button>
             {/if}
