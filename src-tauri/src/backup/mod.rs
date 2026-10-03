@@ -75,7 +75,8 @@ impl Emitter50ms {
     }
 }
 
-/// 기존 백업 폴더 검사(완결 게이트용) — manifest 로드 + 파일 존재·크기 확인 + 항목당 최대 3파일 해시 대조
+/// 기존 백업 폴더 검사(완결 게이트용) — manifest 로드 + 파일 존재·크기 확인 + 항목당 최대 3파일 해시 대조.
+/// 검사만 한다 — 사용자 백업 폴더의 manifest는 바꾸지 않는다
 fn verify_backup_dir(dir: &std::path::Path) -> Result<BackupSummary, String> {
     let mut manifest = model::load_manifest(dir)?;
     let mut problems: Vec<String> = Vec::new();
@@ -85,6 +86,7 @@ fn verify_backup_dir(dir: &std::path::Path) -> Result<BackupSummary, String> {
             continue;
         }
         let mut hashed = 0u32;
+        let mut item_bad = false;
         for e in item.entries.iter_mut() {
             if e.error.is_some() {
                 continue;
@@ -112,10 +114,12 @@ fn verify_backup_dir(dir: &std::path::Path) -> Result<BackupSummary, String> {
                 hashed += 1;
             }
             if let Some(err) = &e.error {
+                item_bad = true;
                 problems.push(format!("{}: {err}", e.remote));
             }
         }
-        if !problems.is_empty() && item.status == model::ItemStatus::Done {
+        // 이 항목에서 문제가 있을 때만 (앞 항목의 문제가 뒤 항목을 미완결로 만들지 않게)
+        if item_bad && item.status == model::ItemStatus::Done {
             item.status = model::ItemStatus::Partial;
         }
         if !item.artifacts.is_empty() {
@@ -137,8 +141,6 @@ fn verify_backup_dir(dir: &std::path::Path) -> Result<BackupSummary, String> {
             problems.push("quarantine 세그먼트가 비었거나 손상되었습니다".into());
         }
     }
-    manifest.touch();
-    let _ = model::save_manifest_atomic(&manifest, dir);
     let mut summary = BackupSummary::from(&manifest);
     if !problems.is_empty() {
         summary.complete = false;
@@ -254,7 +256,7 @@ pub struct RestoreOutcomeOut {
     pub logs: Vec<String>,
     pub failures: Vec<String>,
     /// 문자·통화 기록(smsie) 수동 복원이 남아 있는지 — 프론트 수동 개입 표시용
-    pub smsiePending: bool,
+    pub smsie_pending: bool,
 }
 
 /// 자동 복구 실행 — APK 재설치 → tar 스트리밍 → 설정 → 연락처 전송 (smsie는 수동 단계로)
@@ -282,7 +284,7 @@ pub async fn restore_run(
             Ok(RestoreOutcomeOut {
                 logs: out.logs,
                 failures: out.failures,
-                smsiePending: smsie_selected,
+                smsie_pending: smsie_selected,
             })
         })
     };

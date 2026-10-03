@@ -43,6 +43,8 @@ pub struct FakeADBDevice {
     pub installs: Vec<String>,
     /// 현재 시각(unix 초) — mtime 기본값
     pub now: u32,
+    /// exec 명령의 종료 코드(종료 코드 표식을 붙인 명령에만 반영)
+    pub exec_rc: i32,
 }
 
 impl FakeADBDevice {
@@ -148,8 +150,13 @@ impl ADBDeviceExt for FakeADBDevice {
         self.shell_calls.push(command.to_string());
         let mut buf = Vec::new();
         reader.read_to_end(&mut buf)?;
-        self.shell_streams.push((command.to_string(), buf));
+        // 기록은 표식을 뗀 원래 명령으로 (검증 편의)
+        let base = command.split(" 2>&1; echo __XV_RC=").next().unwrap_or(command).to_string();
+        self.shell_streams.push((base, buf));
         writer.write_all(b"Success\n")?;
+        if command.contains("echo __XV_RC=") {
+            writer.write_all(format!("__XV_RC={}\n", self.exec_rc).as_bytes())?;
+        }
         Ok(())
     }
 

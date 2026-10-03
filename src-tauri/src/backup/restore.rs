@@ -11,7 +11,60 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+/// exec 명령의 종료 코드 표식 — exec 서비스는 종료 코드를 돌려주지 않으므로 셸에서 덧붙여 확인한다
+const RC_MARK: &str = "__XV_RC=";
+
+/// exec 출력 수집기 (Box<dyn Write + Send>로 넘기고 끝난 뒤 내용을 읽는다)
+#[derive(Clone, Default)]
+struct Capture(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Capture {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Ok(mut v) = self.0.lock() {
+            v.extend_from_slice(buf);
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// stdin을 흘리는 기기 명령 실행 + 종료 코드 확인 — 0이 아니거나 확인할 수 없으면 오류(위장 성공 금지)
+fn exec_checked(dev: &mut dyn ADBDeviceExt, cmd: &str, reader: &mut dyn Read) -> Result<String, String> {
+    let cap = Capture::default();
+    let full = format!("{cmd} 2>&1; echo {RC_MARK}$?");
+    dev.exec(&full, reader, Box::new(cap.clone())).map_err(|e| format!("기기 명령 실패: {e}"))?;
+    let out = cap.0.lock().map(|v| String::from_utf8_lossy(&v).to_string()).unwrap_or_default();
+    let tail = |s: &str| s.trim().chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect::<String>();
+    match out.rsplit_once(RC_MARK) {
+        Some((body, rc)) if rc.trim() == "0" => Ok(body.trim().to_string()),
+        Some((body, rc)) => Err(format!("종료 코드 {}: {}", rc.trim(), tail(body))),
+        None => Err(format!("종료 상태를 확인할 수 없습니다: {}", tail(&out))),
+    }
+}
+
+/// 백업 폴더에서 읽은 이름을 셸 명령에 넣기 전 검사 — 영문·숫자·. _ - 만 허용
+fn safe_token(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// quarantine 세그먼트 검사 — 모든 항목이 sdcard/ 아래 상대 경로이고 ..가 없어야 / 에 풀 수 있다
+fn quarantine_segment_safe(path: &Path) -> Result<(), String> {
+    let f = std::fs::File::open(path).map_err(|e| format!("열기 실패: {e}"))?;
+    let mut ar = tar::Archive::new(f);
+    for e in ar.entries().map_err(|e| format!("tar 해석 실패: {e}"))? {
+        let e = e.map_err(|e| format!("tar 해석 실패: {e}"))?;
+        let p = e.path().map_err(|e| format!("tar 경로 해석 실패: {e}"))?.to_string_lossy().to_string();
+        let ok = p.starts_with("sdcard/") && !p.split('/').any(|c| c == "..") && e.header().entry_type().is_file();
+        if !ok {
+            return Err(format!("허용되지 않는 항목: {p}"));
+        }
+    }
+    Ok(())
+}
 
 /// 복구 진행 콜백 — tar 빌더 스레드에서도 호출되므로 공유 가능해야 한다
 pub type RestoreSink = Arc<dyn Fn(StepProgress) + Send + Sync>;
@@ -98,9 +151,11 @@ fn stream_tar(
     });
 
     // exec가 스트림을 끝까지 소비한다(블로킹) — 진행 보고는 시작/종료 시점으로
-    let exec_result = dev.exec(cmd, &mut reader, Box::new(Vec::new())).map_err(|e| format!("기기 스트리밍 실패: {e}"));
+    let exec_result = exec_checked(dev, cmd, &mut reader);
+    // 기기 tar가 먼저 끝나면(오류 등) 읽는 쪽을 닫아 빌더 스레드의 send가 막히지 않게 한다
+    drop(reader);
     let build_result = builder.join().map_err(|_| "tar 빌드 스레드 패닉".to_string())?;
-    exec_result?;
+    exec_result.map_err(|e| format!("기기 tar 실패 — {e}"))?;
     build_result?;
     on_bytes(total);
     Ok(())
@@ -131,19 +186,24 @@ fn install_apk_dir(dev: &mut dyn ADBDeviceExt, pkg: &str, dir: &Path, logs: &mut
         failures.push(format!("{}: 설치 세션 번호를 못 얻었습니다({})", pkg, text.trim()));
         return;
     };
+    if !sid.chars().all(|c| c.is_ascii_digit()) {
+        failures.push(format!("{pkg}: 설치 세션 번호가 올바르지 않습니다({sid})"));
+        return;
+    }
     for apk in &apks {
         let name = apk.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        if !safe_token(&name) {
+            failures.push(format!("{pkg}: APK 파일 이름이 올바르지 않아 건너뜀({name})"));
+            let _ = dev.shell_command(&format!("pm install-abandon {sid}"), None, None);
+            return;
+        }
         let size = std::fs::metadata(apk).map(|m| m.len()).unwrap_or(0);
         let cmd = format!("pm install-write -S {size} {sid} {name} -");
-        if let Ok(bytes) = std::fs::read(apk) {
-            let mut reader = &bytes[..];
-            if let Err(e) = dev.exec(&cmd, &mut reader, Box::new(Vec::new())) {
-                failures.push(format!("{pkg}/{name}: 전송 실패({e})"));
-                let _ = dev.shell_command(&format!("pm install-abandon {sid}"), None, None);
-                return;
-            }
-        } else {
-            failures.push(format!("{pkg}/{name}: 파일 읽기 실패"));
+        let result = std::fs::File::open(apk)
+            .map_err(|e| format!("파일 열기 실패({e})"))
+            .and_then(|mut f| exec_checked(dev, &cmd, &mut f));
+        if let Err(e) = result {
+            failures.push(format!("{pkg}/{name}: 전송 실패({e})"));
             let _ = dev.shell_command(&format!("pm install-abandon {sid}"), None, None);
             return;
         }
@@ -274,14 +334,17 @@ pub fn run_restore(
             segs.sort();
             for seg in &segs {
                 let name = seg.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                // 항목 이름은 원본 절대경로(sdcard/...) — 루트 -C / 로 푼다
-                if let Ok(bytes) = std::fs::read(seg) {
-                    let mut reader = &bytes[..];
-                    if let Err(e) = dev.exec("tar -xf - -C /", &mut reader, Box::new(Vec::new())) {
-                        out.failures.push(format!("quarantine {name}: {e}"));
-                    } else {
-                        out.logs.push(format!("quarantine {name} 복원"));
-                    }
+                // 항목 이름은 원본 절대경로(sdcard/...) — 루트 -C / 로 푼다. 그 전에 sdcard/ 밖 항목이 없는지 검사
+                if let Err(e) = quarantine_segment_safe(seg) {
+                    out.failures.push(format!("quarantine {name}: 복원하지 않음 — {e}"));
+                    continue;
+                }
+                let result = std::fs::File::open(seg)
+                    .map_err(|e| format!("열기 실패: {e}"))
+                    .and_then(|mut f| exec_checked(dev, "tar -xf - -C /", &mut f));
+                match result {
+                    Ok(_) => out.logs.push(format!("quarantine {name} 복원")),
+                    Err(e) => out.failures.push(format!("quarantine {name}: {e}")),
                 }
             }
         }
@@ -417,6 +480,31 @@ mod tests {
         assert!(d.pushed.contains_key("/sdcard/contacts-restore.vcf"));
 
         assert!(out.failures.is_empty(), "failures: {failures:?}", failures = out.failures);
+    }
+
+    #[test]
+    fn exec_checked_reports_nonzero_exit() {
+        let mut d = FakeADBDevice::new();
+        d.exec_rc = 1;
+        let mut r: &[u8] = b"";
+        let e = exec_checked(&mut d, "tar -xf - -C /sdcard", &mut r).unwrap_err();
+        assert!(e.contains("종료 코드 1"), "{e}");
+        d.exec_rc = 0;
+        assert!(exec_checked(&mut d, "tar -xf - -C /sdcard", &mut r).is_ok());
+    }
+
+    #[test]
+    fn quarantine_rejects_entries_outside_sdcard() {
+        let tmp = tempfile::tempdir().unwrap();
+        let seg = tmp.path().join("seg000.tar");
+        let mut b = tar::Builder::new(std::fs::File::create(&seg).unwrap());
+        let mut h = tar::Header::new_gnu();
+        h.set_size(1);
+        h.set_cksum();
+        b.append_data(&mut h, "system/evil", &b"x"[..]).unwrap();
+        b.finish().unwrap();
+        drop(b);
+        assert!(quarantine_segment_safe(&seg).is_err());
     }
 
     #[test]

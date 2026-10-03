@@ -15,6 +15,13 @@ pub const SMSIE_PKG: &str = "com.github.tmo1.sms_ie";
 /// 기기 측 임시 폴더 — 고정 경로만 rm -rf 한다(그 외 삭제 금지)
 pub const DEVICE_TMP_DIR: &str = "/sdcard/xvolte-smsie";
 const GH_RELEASES_API: &str = "https://api.github.com/repos/tmo1/sms-ie/releases/latest";
+const SMS_ROLE: &str = "android.app.role.SMS";
+/// 복원 전 기본 문자 앱 — 마무리 때 그 앱으로 되돌린다(앱 재시작으로 잊히면 역할 해제만)
+static PREV_SMS_HOLDER: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn valid_pkg(p: &str) -> bool {
+    p.contains('.') && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
+}
 /// 내보내기 산출물 파일명 접두사(앱 규칙) — messages-*.zip / call-logs-*.json
 const MESSAGES_PREFIX: &str = "messages";
 const CALLLOG_PREFIX: &str = "call-logs";
@@ -88,7 +95,18 @@ pub fn prepare(dev: &mut dyn ADBDeviceExt, cache_dir: &Path, download: bool) -> 
         }
         let apk = download_apk(cache_dir)?;
         dev.install(&apk, None).map_err(|e| format!("앱 설치 실패: {e}"))?;
-        log.push(format!("설치: {}", apk.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
+        // 받은 APK의 해시를 기록 — 버전 고정·검증 정책을 정하기 전까지 최소한 무엇을 설치했는지 남긴다
+        let sha = std::fs::read(&apk)
+            .map(|b| {
+                use sha2::Digest;
+                hex::encode(sha2::Sha256::digest(&b))
+            })
+            .unwrap_or_default();
+        log.push(format!(
+            "설치: {} (sha256 {})",
+            apk.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+            sha.get(..16).unwrap_or(&sha)
+        ));
     } else {
         log.push("이미 설치됨".into());
     }
@@ -247,8 +265,15 @@ pub fn restore_stage(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> Result<S
         let mut reader = &bytes[..];
         dev.push(&mut reader, &remote).map_err(|e| format!("{name} 전송 실패: {e}"))?;
     }
+    // 지금 기본 문자 앱을 기억 — restore_finish에서 되돌린다
+    if let Ok(holders) = run(dev, &format!("cmd role get-role-holders {SMS_ROLE}")) {
+        let prev = holders.split([';', '\n', ' ']).map(str::trim).find(|p| valid_pkg(p) && *p != SMSIE_PKG).map(str::to_string);
+        if let Ok(mut g) = PREV_SMS_HOLDER.lock() {
+            *g = prev;
+        }
+    }
     // 기본 SMS 앱 역할 — 복원 권한의 핵심. 해제는 restore_finish에서
-    run(dev, &format!("cmd role add-role-holder android.app.role.SMS {SMSIE_PKG}"))
+    run(dev, &format!("cmd role add-role-holder {SMS_ROLE} {SMSIE_PKG}"))
         .map_err(|e| format!("기본 문자 앱 전환 실패: {e}"))?;
     let list = names.join(", ");
     Ok(format!(
@@ -259,8 +284,17 @@ pub fn restore_stage(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> Result<S
 /// 복원 마무리 — 기본 SMS 앱 역할 원복 + 임시 정리. 원복 실패는 안내 문구로 반환
 pub fn restore_finish(dev: &mut dyn ADBDeviceExt) -> Result<Vec<String>, String> {
     let mut log = Vec::new();
-    match run(dev, &format!("cmd role remove-role-holder android.app.role.SMS {SMSIE_PKG}")) {
-        Ok(_) => log.push("기본 문자 앱을 원래 앱으로 되돌렸습니다 — 문자 앱을 한 번 열어 확인하세요".into()),
+    let prev = PREV_SMS_HOLDER.lock().ok().and_then(|mut g| g.take());
+    let result = match &prev {
+        // 원래 앱을 다시 기본으로 지정하면 sms-ie는 자동으로 역할을 잃는다
+        Some(p) => run(dev, &format!("cmd role add-role-holder {SMS_ROLE} {p}")),
+        None => run(dev, &format!("cmd role remove-role-holder {SMS_ROLE} {SMSIE_PKG}")),
+    };
+    match result {
+        Ok(_) => log.push(match &prev {
+            Some(p) => format!("기본 문자 앱을 원래 앱({p})으로 되돌렸습니다 — 문자 앱을 한 번 열어 확인하세요"),
+            None => "기본 문자 앱 역할을 해제했습니다 — 문자 앱을 열어 기본 앱으로 지정됐는지 확인하세요".into(),
+        }),
         Err(e) => log.push(format!("기본 문자 앱 원복 실패 — 설정 > 앱 > 기본 앱에서 직접 바꿔주세요: {e}")),
     }
     let _ = run(dev, &format!("rm -rf {DEVICE_TMP_DIR}"));
@@ -301,6 +335,22 @@ mod tests {
             }
             _ => panic!("records 여야 함"),
         }
+    }
+
+    #[test]
+    fn restore_role_goes_back_to_previous_holder() {
+        // 접두사 일치는 먼저 등록한 응답이 우선 — get-role-holders를 "cmd role"보다 먼저 등록
+        let mut d = FakeADBDevice::new();
+        d.answer_shell("cmd role get-role-holders", "com.google.android.apps.messaging\n");
+        d.answer_shell("cmd role", "");
+        d.answer_shell("mkdir", "");
+        d.answer_shell("rm -rf", "");
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("smsie")).unwrap();
+        std::fs::write(tmp.path().join("smsie/messages-1.zip"), b"z").unwrap();
+        restore_stage(&mut d, tmp.path()).unwrap();
+        restore_finish(&mut d).unwrap();
+        assert!(d.shell_calls.iter().any(|c| c == "cmd role add-role-holder android.app.role.SMS com.google.android.apps.messaging"));
     }
 
     #[test]

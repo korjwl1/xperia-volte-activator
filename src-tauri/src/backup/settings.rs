@@ -137,7 +137,8 @@ pub fn restore_deviceidle(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> Res
             .unwrap_or("")
             .trim()
             .to_string();
-        if pkg.is_empty() || !pkg.contains('.') || pkg.ends_with(':') {
+        // 백업 파일에서 읽은 값이 셸 명령에 들어가므로 패키지 이름 형식만 허용
+        if pkg.is_empty() || !pkg.contains('.') || !pkg.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_') {
             continue;
         }
         if SYSTEM_PREFIXES.iter().any(|p| pkg.starts_with(p)) {
