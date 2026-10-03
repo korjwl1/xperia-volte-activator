@@ -1,9 +1,12 @@
 //! 백업·복구 엔진 (M3) — plan.md §6, 설계 .plans/04-engine/backup-engine.md
 //! 사용자 승인 2026-10-03: 실전 코드 작성 허용, 실기기 테스트 금지(FakeADBDevice 단위 테스트로 검증).
 
+pub mod contacts;
 pub mod model;
 pub mod puller;
 pub mod quarantine;
+pub mod settings;
+pub mod smsie;
 pub mod walker;
 pub mod winname;
 
