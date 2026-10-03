@@ -240,6 +240,14 @@ export interface RestoreOutcome {
   smsiePending: boolean;
 }
 
+/** fastboot getvar 결과 — unlocked·current-slot·slot-successful:_a/_b·max-download-size … */
+export type FastbootVars = Record<string, string>;
+
+/** 언락/리락 실행 결과 — getvar로 이중 확인한 값 */
+export interface UnlockResult {
+  unlocked: boolean;
+}
+
 export type RunStatus =
   | "pending" | "running" | "done" | "failed" | "skipped" | "manual-wait";
 

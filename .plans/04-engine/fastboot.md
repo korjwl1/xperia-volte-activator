@@ -1,6 +1,6 @@
 # fastboot 엔진 (M2) — 언락/리락·플래시 프로토콜 구현 설계
 
-status: draft (사용자 승인 2026-10-03 — 실전 코드 작성, 실기기 테스트 금지, REAL_STEPS.fastboot 기본 꺼짐)
+status: implemented (실기기 검증 대기 — FakeTransport 단위 테스트 15통과, REAL_STEPS.fastboot 기본 꺼짐)
 
 - 상위 정책: `tasks/plan.md` §2(기술 스택)·§3-3(리락 게이트)·§9-3(유한 처리)·§10-2(fastboot 게이트), M2 마일스톤
 - 근거 조사: `tasks/research-unlock-firmware.md` A절 (언락 코드는 공식 페이지 수동 발급 — 앱은 `oem unlock 0x<code>` 실행만)
@@ -83,8 +83,8 @@ invoke('fastboot_reboot', { target: 'os'|'bootloader' }) → void
 
 ## 구현 순서 (커밋 단위)
 
-1. `docs(plans)`: 이 문서 + 02-contracts fastboot 절 정정
-2. `feat(fastboot)`: transport(트레이트+rusb) + 프로토콜 상태머신 + Fake 테스트
-3. `feat(fastboot)`: getvar/unlock/lock/flash/reboot 명령·이벤트 + facade
-4. `feat(front)`: wizard 언락/리락 실전 연결(REAL_STEPS.fastboot 기본 꺼짐) + 최소 리락 게이트
-5. `docs(plans)`: 상태 배지 갱신
+1. ✅ `docs(plans)`: 이 문서 + 02-contracts fastboot 절 정정
+2. ✅ `feat(fastboot)`: transport(트레이트+rusb) + 프로토콜 상태머신 + Fake 테스트
+3. ✅ `feat(fastboot)`: getvar/unlock/lock/flash/reboot 명령·이벤트 + facade
+4. ✅ `feat(front)`: wizard 언락/리락 실전 연결(REAL_STEPS.fastboot 기본 꺼짐) + 최소 리락 게이트(언루팅 완료 검사)
+5. ✅ `docs(plans)`: 상태 배지 갱신

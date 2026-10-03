@@ -3,7 +3,7 @@
 // 실쓰기(백업/플래싱/EFS)는 항상 mock — 실기기에는 영향 없음
 // 컴포넌트에서 @tauri-apps/api 직접 import 금지.
 
-import type { AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FirmwareResult, FirmwareVersions, RestoreOutcome, SettingsOverview, SmsIeOutcome } from "$lib/types";
+import type { AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FastbootVars, FirmwareResult, FirmwareVersions, RestoreOutcome, SettingsOverview, SmsIeOutcome, UnlockResult } from "$lib/types";
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
 import { classifyApp, SAMPLE_FLAGS, type AppFlag } from "$lib/data/appRules";
 
@@ -93,6 +93,16 @@ export interface Api {
   /** 백엔드 이벤트 구독 — unlisten 반환 (데스크톱 전용, 브라우저 dev은 즉시 no-op) */
   onBackupProgress(cb: (p: BackupProgress) => void): Promise<() => void>;
   onRestoreProgress(cb: (p: BackupProgress) => void): Promise<() => void>;
+  /** fastboot getvar:all — 읽기 전용 프로브 (unlocked·슬롯·헬스), 실패·미설치 시 null */
+  fastbootGetvar(): Promise<FastbootVars | null>;
+  /** 부트로더 언락 — oem unlock 0x{code} 후 getvar 이중 확인 (로그에 코드 마스킹) */
+  fastbootUnlock(code: string, confirm: boolean): Promise<{ ok: true; value: UnlockResult } | { ok: false; error: string }>;
+  /** 부트로더 리락 — oem lock 후 확인 */
+  fastbootLock(confirm: boolean): Promise<{ ok: true; value: UnlockResult } | { ok: false; error: string }>;
+  /** fastboot 재부팅 — os | bootloader (응답 없음=USB 끊김은 성공 간주) */
+  fastbootReboot(target: "os" | "bootloader"): Promise<boolean>;
+  /** fastboot 로그 이벤트 구독 (INFO 프레임·명령·민감값 마스킹) */
+  onFastbootLog(cb: (line: string) => void): Promise<() => void>;
 }
 
 const hybridApi: Api = {
@@ -252,6 +262,33 @@ const hybridApi: Api = {
     try {
       const { listen } = await import("@tauri-apps/api/event");
       const un = await listen<BackupProgress>("restore:progress", (e) => cb(e.payload));
+      return un;
+    } catch {
+      return () => {};
+    }
+  },
+
+  async fastbootGetvar() {
+    return await invokeBackend<FastbootVars>("fastboot_getvar");
+  },
+
+  async fastbootUnlock(code, confirm) {
+    return await invokeResult<UnlockResult>("fastboot_unlock", { code, confirm });
+  },
+
+  async fastbootLock(confirm) {
+    return await invokeResult<UnlockResult>("fastboot_lock", { confirm });
+  },
+
+  async fastbootReboot(target) {
+    return (await invokeResult<null>("fastboot_reboot", { target })).ok;
+  },
+
+  async onFastbootLog(cb) {
+    if (!inTauri()) return () => {};
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      const un = await listen<string>("fastboot:log", (e) => cb(e.payload));
       return un;
     } catch {
       return () => {};

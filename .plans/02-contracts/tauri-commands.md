@@ -123,6 +123,8 @@ invoke('env_fix', { id }) → FixResult           // WebView2 부트스트래퍼
 
 ## plan / fastboot (M2 — 설계 `.plans/04-engine/fastboot.md`, 사용자 승인 2026-10-03)
 
+**구현 상태**: 5 명령 전부 ✅ 구현(src-tauri/src/fastboot/ — FakeTransport 단위 테스트, 실기기 미검증). wizard 언락/리락 실전 연결 + 최소 리락 게이트(언루팅 완료 검사) 포함.
+
 ```ts
 invoke('fastboot_getvar') → Record<string,string>   // ✅ 읽기 전용 — rusb FF/42/03 open, getvar:all 파싱(unlocked·current-slot·slot-successful:_a/_b·max-download-size …)
 //   fastboot 모드 Sony 장치가 정확히 1대일 때만 open(다중 기기 거부 — §9-3)
