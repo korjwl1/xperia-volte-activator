@@ -12,7 +12,7 @@ status: implemented (읽기 전용 실측 + 쓰기 작업 mock)
 [src/lib/api/]         facade — 데스크톱은 Rust 명령(읽기 전용 실측), 브라우저 dev는 mock
 [src/lib/mock/]        plan.ts(실행 계획 단일 생성기) · apps.ts(백업 항목·앱 큐레이션) · device.ts(브라우저 dev용)
 [src/lib/data/]        omd.ts(OMD 안내, 임시값) · links.ts(외부 링크·마스킹) · devices.ts(기종별 파티션)
-[src-tauri/src]        adb.rs(기기 읽기 전용 질의) · host.rs(PC 읽기 전용 질의) — 계약은 02-contracts
+[src-tauri/src]        adb.rs(기기 읽기 전용 질의) · host.rs(PC 읽기 전용 질의) · backup/(M3 백업·복구 엔진 — REAL_STEPS 전환 전까지 실행은 시뮬레이션) — 계약은 02-contracts
 ```
 
 ## 앱 셸 (routes/+page.svelte)

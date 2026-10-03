@@ -5,7 +5,7 @@
 
 use crate::backup::model::FileEntry;
 use sha2::{Digest, Sha256};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// 세그먼트 하나의 크기 상한 — 큰 파일 여러 개를 한 아카이브에 무한정 쌓지 않는다
@@ -134,6 +134,7 @@ pub fn quarantined_entry(remote: &str, size: u64, mtime: u32, sha256: &str) -> F
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
 
     #[test]
     fn hashing_writer_counts_and_hashes() {

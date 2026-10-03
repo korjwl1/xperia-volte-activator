@@ -1,6 +1,6 @@
 # 백업·복구 엔진 (M3) — 구현 설계
 
-status: approved (사용자 승인 2026-10-03 — 결정 사항 하단)
+status: implemented (실기기 검증 대기 — 단위 테스트 52통과, REAL_STEPS 기본 꺼짐)
 
 - 상위 정책: `../tasks/plan.md`(v4) §5·§6·§9·§12.5, `../tasks/recovery.md` 전체
 - 승인 배경 (사용자 승인 2026-10-03): **실전 Rust 코드 작성 허용. 단 실기기 테스트는 계속 금지** —
@@ -124,14 +124,14 @@ APK 재설치(`install()`) → 파일 tar 스트리밍(fs-rest → 기명 폴더
 
 ## 구현 순서 (커밋 단위)
 
-1. `docs(plans)`: 이 설계 문서 + AGENTS.md 예외 기록 + 02-contracts 정정
-2. `feat(backup)`: model·winname·walker + FakeADBDevice 테스트 기반
-3. `feat(backup)`: puller(해시·mtime)·manifest 원자 저장·quarantine 격리
-4. `feat(backup)`: settings·providers 수집
-5. `feat(backup)`: backup_run·backup_manifest_check 명령·이벤트 + facade + wizard 연결(플래그 기본 꺼짐)
-6. `feat(restore)`: tar 스트리밍 복원·화이트리스트·APK 재설치·providers 복원 + restore_run
-7. `feat(front)`: 완결 게이트(언락/리락 전) + 재개 프로브 연결
-8. `docs(plans)`: 상태 배지 갱신 + 검증 대기 항목 표
+1. ✅ `docs(plans)`: 이 설계 문서 + AGENTS.md 예외 기록 + 02-contracts 정정
+2. ✅ `feat(backup)`: model·winname·walker + FakeADBDevice 테스트 기반
+3. ✅ `feat(backup)`: puller(해시·mtime·4GiB wrap 재확인)·manifest 원자 저장·quarantine 격리
+4. ✅ `feat(backup)`: settings·contacts(vCard)·smsie 수집기
+5. ✅ `feat(backup)`: backup_run·backup_manifest_check·이벤트 + facade + wizard 연결(플래그 기본 꺼짐)
+6. ✅ `feat(restore)`: tar 스트리밍 복원·화이트리스트·APK 세션 설치·smsie 복원 + restore_run·게이트
+7. ✅ `feat(front)`: 완결 게이트(언락/리락 전 — REAL_STEPS.backup 켜졌을 때) + journal backupDir 재개
+8. ✅ `docs(plans)`: 상태 배지 갱신 + 검증 대기 항목 표
 
 ## 리스크·검증 대기 (실기기 확인 필요 항목)
 
@@ -140,7 +140,7 @@ APK 재설치(`install()`) → 파일 tar 스트리밍(fs-rest → 기명 폴더
 | ~~/sdcard/Android/data 셸 접근 (Android 11+)~~ | **실측 해소(2026-10-03)** — XQ-DQ44·Android 15에서 셸 열거 확인 | (예비 대응 유지) 실패 시 manifest 오류 + UI 경고 |
 | content query 셸 권한(연락처)·smsie 권한(pm grant·cmd role) | 미실측 | 연락처 실패는 항목 partial(위장 성공 금지), smsie 권한 실패는 로그만 |
 | toybox tar 스트리밍 복원 호환(ustar 긴 경로) | 미실측 | GNU longname 헤더 사용, 단위 테스트로 아카이브 구조 검증 |
-| tar 스트리밍 백분률 산정 | 설계 | 파이프 누적 바이트로 실시간 진행률 제공(restore.rs 구현) |
+| tar 스트리밍 백분률 산정 | 설계 | 항목 시작/종료 시점 보고(exec 블로킹) — 스트리밍 중 실시간은 후속 개선 |
 | 백업 폴더 ACL(현재 사용자 한정, §12.5) | 미결정 | windows-sys로 직접 구현 시 범위 증가 — 1차 생략하고 문서 기록, 2차 선택 구현 |
 | 대용량(수십 GB) 이벤트 빈도 | 설계 | 파일 단위 이벤트 + 50ms 쓰로틀(구현 완료) |
 

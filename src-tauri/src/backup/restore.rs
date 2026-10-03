@@ -3,7 +3,7 @@
 //! tar 스트리밍: adb_client `exec`(명령 stdin)으로 `tar -xf - -C <dst>`에 아카이브를 흘린다 —
 //! Windows 파일시스템을 거치지 않고 기기 셸 tar가 mtime·원본 이름을 복원한다(§6-3).
 
-use crate::backup::model::{ItemKind, ItemStatus, Manifest};
+use crate::backup::model::{ItemKind, ItemStatus};
 use crate::backup::runner::StepProgress;
 use crate::backup::{contacts, settings, smsie};
 use adb_client::ADBDeviceExt;
@@ -97,20 +97,8 @@ fn stream_tar(
         Ok(())
     });
 
-    // 전송 — 진행 콜백에 누적 바이트 반영(빌더 스레드와 병렬)
-    let mut last_report = 0u64;
-    let mut scratch = [0u8; 64 * 1024];
-    let exec_result = loop {
-        let cur = bytes.load(Ordering::Relaxed);
-        if cur != last_report {
-            on_bytes(cur);
-            last_report = cur;
-        }
-        // reader에 데이터가 있으면 exec가 소비한다 — 논블로킹 확인은 불가하므로
-        // exec를 한 번 호출하고, 그동안 on_bytes 주기 갱신은 exec 반환 후 한 번만 한다.
-        break dev.exec(cmd, &mut reader, Box::new(Vec::new())).map_err(|e| format!("기기 스트리밍 실패: {e}"));
-    };
-    let _ = &mut scratch;
+    // exec가 스트림을 끝까지 소비한다(블로킹) — 진행 보고는 시작/종료 시점으로
+    let exec_result = dev.exec(cmd, &mut reader, Box::new(Vec::new())).map_err(|e| format!("기기 스트리밍 실패: {e}"));
     let build_result = builder.join().map_err(|_| "tar 빌드 스레드 패닉".to_string())?;
     exec_result?;
     build_result?;

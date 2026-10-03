@@ -593,6 +593,12 @@ export class Wizard {
       cur.logs.push(`[시작] ${cur.title}`);
       const list = this.subtasksFor(cur.id);
       if (list.length > 0 && !cur.sub) cur.sub = { list, done: 0 };
+      // 완결 게이트 (§3-3) — 파괴 단계(언락/리락) 직전, 실전 모드에서만 백업 완결을 강제한다
+      if ((cur.id === "unlock" || cur.id === "relock") && REAL_STEPS.backup) {
+        this.pause();
+        void this.enforceBackupGate(cur);
+        return;
+      }
       if (cur.id === "efs") {
         for (const t of this.volteConfig.sims.filter((x) => x.carrier !== null)) {
           const p = efsPreset(t.carrier!, t.slot);
@@ -1282,6 +1288,37 @@ export class Wizard {
       return;
     }
     this.stepDone(cur);
+  }
+
+  /** 완결 게이트 — 백업을 선택한 계획에서 파괴 단계(언락/리락)는 완결(전수+오류0) 없이 진행하지 않는다 (§3-3)
+   *  백업을 선택하지 않은 계획은 실행 전 이중 확인 모달(기존)으로 통과한다 */
+  private async enforceBackupGate(cur: RunStep) {
+    const gen = this.runGen;
+    const resume = () => {
+      cur.status = "running";
+      this.begin();
+    };
+    if (!this.runSteps.some((s) => s.id === "backup")) {
+      cur.logs.push("[게이트] 백업 선택 없음 — 실행 전 이중 확인으로 진행");
+      return resume();
+    }
+    if (this.backupSummary?.complete) {
+      cur.logs.push("[게이트] 이번 실행의 백업 완결 확인 — 진행");
+      return resume();
+    }
+    if (this.backupDir) {
+      // 재개·이어받기 등: 기존 폴더를 파일 존재·크기·해시 대조로 재검사
+      const s = await api.backupManifestCheck(this.backupDir);
+      if (gen !== this.runGen) return; // 그사이 중단됨
+      if (s?.complete) {
+        this.backupSummary = s;
+        cur.logs.push("[게이트] 기존 백업 완결 재검사 통과(파일·해시 대조)");
+        return resume();
+      }
+      const errs = s?.errors.length ? s.errors.join(" / ") : "완결 아님";
+      return this.failStep(`백업 완결 게이트 실패 — ${errs}. 백업 단계를 다시 진행해 주세요`);
+    }
+    this.failStep("백업이 완결되지 않아 파괴 단계를 진행할 수 없습니다 — 백업 단계를 먼저 끝내주세요");
   }
 
   /** smsie 수동 복원 마무리 — 기본 문자 앱 역할 원복 + 안내 로그 */
