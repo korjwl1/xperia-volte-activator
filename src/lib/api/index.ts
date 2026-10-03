@@ -3,7 +3,7 @@
 // 실쓰기(백업/플래싱/EFS)는 항상 mock — 실기기에는 영향 없음
 // 컴포넌트에서 @tauri-apps/api 직접 import 금지.
 
-import type { AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FirmwareResult, FirmwareVersions, SettingsOverview, SmsIeOutcome } from "$lib/types";
+import type { AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FirmwareResult, FirmwareVersions, RestoreOutcome, SettingsOverview, SmsIeOutcome } from "$lib/types";
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
 import { classifyApp, SAMPLE_FLAGS, type AppFlag } from "$lib/data/appRules";
 
@@ -84,8 +84,15 @@ export interface Api {
   smsiePrepare(serial: string | undefined, download: boolean): Promise<{ ok: true; value: string[] } | { ok: false; error: string }>;
   /** SMS Import/Export 산출물 수집 — ready=false면 앱에서 아직 내보내지 않음 */
   smsieCollect(serial: string | undefined, backupDir: string): Promise<SmsIeOutcome | null>;
+  /** 복구 실행(APK·파일 tar 스트리밍·설정·연락처 전송) — 진행은 onRestoreProgress */
+  restoreRun(serial: string | undefined, dir: string, items: string[]): Promise<{ ok: true; value: RestoreOutcome } | { ok: false; error: string }>;
+  /** 문자·통화 기록 수동 복원 준비 — 파일 전송 + 기본 문자 앱 역할 (안내 문구 반환) */
+  smsieRestoreStage(serial: string | undefined, dir: string): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
+  /** 문자·통화 기록 수동 복원 마무리 — 기본 문자 앱 원복·임시 정리 (안내 로그 반환) */
+  smsieRestoreFinish(serial: string | undefined): Promise<{ ok: true; value: string[] } | { ok: false; error: string }>;
   /** 백엔드 이벤트 구독 — unlisten 반환 (데스크톱 전용, 브라우저 dev은 즉시 no-op) */
   onBackupProgress(cb: (p: BackupProgress) => void): Promise<() => void>;
+  onRestoreProgress(cb: (p: BackupProgress) => void): Promise<() => void>;
 }
 
 const hybridApi: Api = {
@@ -222,6 +229,29 @@ const hybridApi: Api = {
     try {
       const { listen } = await import("@tauri-apps/api/event");
       const un = await listen<BackupProgress>("backup:progress", (e) => cb(e.payload));
+      return un;
+    } catch {
+      return () => {};
+    }
+  },
+
+  async restoreRun(serial, dir, items) {
+    return await invokeResult<RestoreOutcome>("restore_run", { serial: serial ?? null, dir, items });
+  },
+
+  async smsieRestoreStage(serial, dir) {
+    return await invokeResult<string>("smsie_restore_stage", { serial: serial ?? null, dir });
+  },
+
+  async smsieRestoreFinish(serial) {
+    return await invokeResult<string[]>("smsie_restore_finish", { serial: serial ?? null });
+  },
+
+  async onRestoreProgress(cb) {
+    if (!inTauri()) return () => {};
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      const un = await listen<BackupProgress>("restore:progress", (e) => cb(e.payload));
       return un;
     } catch {
       return () => {};

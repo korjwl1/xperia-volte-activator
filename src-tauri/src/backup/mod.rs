@@ -6,6 +6,7 @@ pub mod contacts;
 pub mod model;
 pub mod puller;
 pub mod quarantine;
+pub mod restore;
 pub mod runner;
 pub mod settings;
 pub mod smsie;
@@ -244,6 +245,71 @@ pub async fn smsie_collect(serial: Option<String>, backup_dir: String) -> Result
     match tauri::async_runtime::spawn_blocking(work).await {
         Ok(r) => r,
         Err(e) => Err(format!("수집 스레드 오류: {e}")),
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreOutcomeOut {
+    pub logs: Vec<String>,
+    pub failures: Vec<String>,
+    /// 문자·통화 기록(smsie) 수동 복원이 남아 있는지 — 프론트 수동 개입 표시용
+    pub smsiePending: bool,
+}
+
+/// 자동 복구 실행 — APK 재설치 → tar 스트리밍 → 설정 → 연락처 전송 (smsie는 수동 단계로)
+#[tauri::command]
+pub async fn restore_run(
+    app: tauri::AppHandle,
+    serial: Option<String>,
+    dir: String,
+    items: Vec<String>,
+) -> Result<RestoreOutcomeOut, String> {
+    let backup_dir = PathBuf::from(&dir);
+    if !backup_dir.is_dir() {
+        return Err("백업 폴더를 찾을 수 없습니다".into());
+    }
+    let emitter = std::sync::Mutex::new(Emitter50ms::new(app.clone(), "restore:progress"));
+    let sink: restore::RestoreSink = std::sync::Arc::new(move |p| {
+        if let Ok(mut e) = emitter.lock() {
+            e.emit(p);
+        }
+    });
+    let smsie_selected = items.iter().any(|i| i == "sms" || i == "calllog");
+    let work = move || {
+        crate::adb::with_first_device(&serial, |dev| {
+            let out = restore::run_restore(dev, &backup_dir, &items, &sink);
+            Ok(RestoreOutcomeOut {
+                logs: out.logs,
+                failures: out.failures,
+                smsiePending: smsie_selected,
+            })
+        })
+    };
+    match tauri::async_runtime::spawn_blocking(work).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("복구 스레드 오류: {e}")),
+    }
+}
+
+/// 문자·통화 기록 복원 준비 — 파일 전송 + 기본 문자 앱 역할(비행기 모드 안내 문구 반환)
+#[tauri::command]
+pub async fn smsie_restore_stage(serial: Option<String>, dir: String) -> Result<String, String> {
+    let backup_dir = PathBuf::from(&dir);
+    let work = move || crate::adb::with_first_device(&serial, |dev| smsie::restore_stage(dev, &backup_dir));
+    match tauri::async_runtime::spawn_blocking(work).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("준비 스레드 오류: {e}")),
+    }
+}
+
+/// 문자·통화 기록 복원 마무리 — 기본 문자 앱 역할 원복 + 임시 정리(안내 로그 반환)
+#[tauri::command]
+pub async fn smsie_restore_finish(serial: Option<String>) -> Result<Vec<String>, String> {
+    let work = move || crate::adb::with_first_device(&serial, smsie::restore_finish);
+    match tauri::async_runtime::spawn_blocking(work).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("마무리 스레드 오류: {e}")),
     }
 }
 

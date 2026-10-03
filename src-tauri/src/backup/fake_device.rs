@@ -144,8 +144,12 @@ impl ADBDeviceExt for FakeADBDevice {
         reader: &mut dyn Read,
         mut writer: Box<dyn Write + Send>,
     ) -> Result<(), RustADBError> {
-        self.shell_command(&command.to_string(), Some(writer.as_mut()), None)?;
-        let _ = reader;
+        // stdin으로 받은 바이트를 기록(tar 스트리밍·install-write 검증용)
+        self.shell_calls.push(command.to_string());
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf)?;
+        self.shell_streams.push((command.to_string(), buf));
+        writer.write_all(b"Success\n")?;
         Ok(())
     }
 

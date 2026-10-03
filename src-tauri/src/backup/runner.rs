@@ -82,6 +82,20 @@ pub fn backup_dir_name(model: &str) -> String {
     format!("backup-{ts}-{safe}")
 }
 
+/// 열거 결과를 풀 결과에 병합 — 열거 오류·스킵 기록도 항목 완결 판정에 들어간다(§6-2 전수 열거)
+fn merge_walk(rec: &mut ItemRecord, w: &walker::WalkResult) {
+    if !w.errors.is_empty() {
+        rec.errors.extend(w.errors.iter().cloned());
+        rec.status = ItemStatus::Partial;
+    }
+    for s in &w.skipped {
+        rec.errors.push(format!("{}: 백업 제외({})", s.remote, s.reason));
+    }
+    if !rec.errors.is_empty() {
+        rec.status = ItemStatus::Partial;
+    }
+}
+
 fn copy_progress(item_id: &str, p: &PullProgress) -> StepProgress {
     StepProgress {
         item_id: item_id.to_string(),
@@ -160,15 +174,17 @@ pub fn run_backup_items(
             "apk" => {
                 let dirs = package_install_dirs(dev)?;
                 let mut files: Vec<PullFile> = Vec::new();
+                let mut walk_errors: Vec<String> = Vec::new();
                 for (pkg, dir) in &dirs {
                     let w = walker::walk(dev, dir, &|_| false);
+                    walk_errors.extend(w.errors.iter().cloned());
                     for f in w.files {
                         if f.remote.ends_with(".apk") {
                             files.push(PullFile { entry: f, tag: pkg.clone() });
                         }
                     }
                 }
-                pull_item_files(
+                let mut rec = pull_item_files(
                     dev,
                     id,
                     ItemKind::Files,
@@ -182,12 +198,17 @@ pub fn run_backup_items(
                     &mut quarantine,
                     cancel,
                     |p| on_progress(copy_progress(id, &p)),
-                )
+                );
+                rec.errors.extend(walk_errors);
+                if !rec.errors.is_empty() {
+                    rec.status = ItemStatus::Partial;
+                }
+                rec
             }
             "app-data" => {
                 let w = walker::walk(dev, walker::ANDROID_DATA_ROOT, &|_| false);
-                let files: Vec<PullFile> = w.files.into_iter().map(PullFile::plain).collect();
-                pull_item_files(
+                let files: Vec<PullFile> = w.files.iter().cloned().map(|e| PullFile::plain(e)).collect();
+                let mut rec = pull_item_files(
                     dev,
                     id,
                     ItemKind::Files,
@@ -201,12 +222,14 @@ pub fn run_backup_items(
                     &mut quarantine,
                     cancel,
                     |p| on_progress(copy_progress(id, &p)),
-                )
+                );
+                merge_walk(&mut rec, &w);
+                rec
             }
             "fs-rest" => {
                 let w = walker::walk(dev, walker::FS_REST_ROOT, &walker::fs_rest_skip);
-                let files: Vec<PullFile> = w.files.into_iter().map(PullFile::plain).collect();
-                pull_item_files(
+                let files: Vec<PullFile> = w.files.iter().cloned().map(|e| PullFile::plain(e)).collect();
+                let mut rec = pull_item_files(
                     dev,
                     id,
                     ItemKind::Files,
@@ -220,7 +243,9 @@ pub fn run_backup_items(
                     &mut quarantine,
                     cancel,
                     |p| on_progress(copy_progress(id, &p)),
-                )
+                );
+                merge_walk(&mut rec, &w);
+                rec
             }
             named => {
                 let Some((_, dir)) = walker::NAMED_FILE_ITEMS.iter().find(|(nid, _)| *nid == named) else {
@@ -228,8 +253,8 @@ pub fn run_backup_items(
                 };
                 let root_path = format!("/sdcard/{dir}");
                 let w = walker::walk(dev, &root_path, &|_| false);
-                let files: Vec<PullFile> = w.files.into_iter().map(PullFile::plain).collect();
-                pull_item_files(
+                let files: Vec<PullFile> = w.files.iter().cloned().map(|e| PullFile::plain(e)).collect();
+                let mut rec = pull_item_files(
                     dev,
                     named,
                     ItemKind::Files,
@@ -243,7 +268,9 @@ pub fn run_backup_items(
                     &mut quarantine,
                     cancel,
                     |p| on_progress(copy_progress(named, &p)),
-                )
+                );
+                merge_walk(&mut rec, &w);
+                rec
             }
         };
         manifest.record(rec);

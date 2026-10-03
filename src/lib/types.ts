@@ -232,6 +232,14 @@ export interface SmsIeOutcome {
   summary: BackupSummary | null;
 }
 
+/** 복구 실행 결과 — 자동 복구 로그·실패 목록(실패가 있어도 나머지는 진행) */
+export interface RestoreOutcome {
+  logs: string[];
+  failures: string[];
+  /** 문자·통화 기록(smsie) 수동 복원이 남아 있음 — 수동 개입 단계로 진행 */
+  smsiePending: boolean;
+}
+
 export type RunStatus =
   | "pending" | "running" | "done" | "failed" | "skipped" | "manual-wait";
 

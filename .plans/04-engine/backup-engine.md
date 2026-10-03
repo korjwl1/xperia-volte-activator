@@ -137,12 +137,12 @@ APK 재설치(`install()`) → 파일 tar 스트리밍(fs-rest → 기명 폴더
 
 | 항목 | 상태 | 대응 |
 |---|---|---|
-| /sdcard/Android/data 셸 접근 (Android 11+) | 미실측 | 실패 시 manifest 오류 + UI 경고(백업 자체는 계속) |
-| content query 셸 권한(통화·문자·연락처) | 미실측 | providers 실패는 전체 실패 아님 — 경고만, "미검증" 배지 유지 |
-| toybox tar 스트리밍 복원 호환(ustar 긴 경로) | 미실측 | tar 크레이트 Pax/GNU longname 사용, 단위 테스트로 구조 검증 |
-| tar 스트리밍 백분률 산정 | 설계 | 아카이브 크기 사전 계산(항목 단위)으로 bytes 진행률 제공 |
+| ~~/sdcard/Android/data 셸 접근 (Android 11+)~~ | **실측 해소(2026-10-03)** — XQ-DQ44·Android 15에서 셸 열거 확인 | (예비 대응 유지) 실패 시 manifest 오류 + UI 경고 |
+| content query 셸 권한(연락처)·smsie 권한(pm grant·cmd role) | 미실측 | 연락처 실패는 항목 partial(위장 성공 금지), smsie 권한 실패는 로그만 |
+| toybox tar 스트리밍 복원 호환(ustar 긴 경로) | 미실측 | GNU longname 헤더 사용, 단위 테스트로 아카이브 구조 검증 |
+| tar 스트리밍 백분률 산정 | 설계 | 파이프 누적 바이트로 실시간 진행률 제공(restore.rs 구현) |
 | 백업 폴더 ACL(현재 사용자 한정, §12.5) | 미결정 | windows-sys로 직접 구현 시 범위 증가 — 1차 생략하고 문서 기록, 2차 선택 구현 |
-| 대용량(수십 GB) 이벤트 빈도 | 설계 | 파일 단위 이벤트 + 50ms 쓰로틀 |
+| 대용량(수십 GB) 이벤트 빈도 | 설계 | 파일 단위 이벤트 + 50ms 쓰로틀(구현 완료) |
 
 ## 통신 데이터 접근 조사 (2026-10-03, 웹·GitHub)
 
@@ -163,6 +163,14 @@ APK 재설치(`install()`) → 파일 tar 스트리밍(fs-rest → 기명 폴더
 → [자동] 산출 파일 pull → manifest 해시 기록 → 기기 측 임시 삭제
 복구: [자동] 파일 push → pm grant(쓰기 권한) → [수동 개입: 비행기 모드 안내 + "Import"] → [자동] 역할 원복 안내·완료 검증(문자 개수 `content query --uri content://sms`…는 권한 차단이므로 앱 화면 표시 수치 사용자 확인)
 — 수동 개입은 기존 ManualPrompt 프레임워크(magisk-patch와 같은 패턴)로 단계화. 완결 게이트는 "파일 수신+해시 일치"까지만 보증(내용 검증은 앱 책임).
+
+## 경로 기준 (실측 2026-10-03, XQ-DQ44 · Android 15 — examples/probe_sdcard.rs 읽기 전용 조회)
+
+- `/sdcard` = `/storage/emulated/0` (내장 공유 저장소, 사용자 0) — adb 셸·SYNC 표준 경로. **기기 실측 확인**
+- **`/sdcard/Android/data` 셸 접근 가능 실측** — Android 15에서도 shell로 열거됨(아래 리스크 표에서 해소)
+- **외장 microSD 제외 (사용자 확인 2026-10-03)** — 기기에 `/storage/439F-190E` 감지됐으나 백업 범위에서 제외.
+  외장 SD에 중요 파일을 둔 경우 이 백업에 포함되지 않는다는 점을 UI 안내에 남긴다(향후 항목 추가 가능)
+- 직장 프로필(work profile, `/storage/emulated/10` 등) 제외 — 사용자 0만
 
 ## 의사결정 기록 (사용자 승인 2026-10-03)
 

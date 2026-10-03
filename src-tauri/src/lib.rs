@@ -45,7 +45,10 @@ pub fn run() {
             backup::backup_cancel,
             backup::backup_manifest_check,
             backup::smsie_prepare,
-            backup::smsie_collect
+            backup::smsie_collect,
+            backup::restore_run,
+            backup::smsie_restore_stage,
+            backup::smsie_restore_finish
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

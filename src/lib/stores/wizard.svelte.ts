@@ -644,10 +644,16 @@ export class Wizard {
       return;
     }
     if (cur.id === "restore" && REAL_STEPS.restore) {
-      if (cur.status === "running" && this.restoreRanGen !== this.runGen) {
-        this.restoreRanGen = this.runGen;
-        this.pause();
-        void this.runRealRestore(cur);
+      if (cur.status === "running") {
+        if (this.restoreRanGen !== this.runGen) {
+          this.restoreRanGen = this.runGen;
+          this.pause();
+          void this.runRealRestore(cur);
+        } else {
+          // smsie 수동 복원 완료 후 재진입 — 역할 원복·마무리
+          this.pause();
+          void this.finishRealRestore(cur);
+        }
       }
       return;
     }
@@ -848,7 +854,23 @@ export class Wizard {
     } else if (id === "smsie-export") {
       // 앱 설치·권한·임시 폴더를 백그라운드로 준비 (사용자는 폰에서 내보내기만)
       void this.smsiePrepare();
+    } else if (id === "smsie-import") {
+      // 백업 파일 전송 + 기본 문자 앱 역할(가져오기 권한) — 비행기 모드 안내 문구 반환
+      void this.smsieRestoreStage();
     }
+  }
+
+  /** smsie 수동 복원 준비 */
+  async smsieRestoreStage() {
+    const cur = this.runSteps[this.cursor];
+    if (!this.backupDir) return;
+    const r = await api.smsieRestoreStage(this.device?.serial, this.backupDir);
+    if (r.ok) {
+      cur?.logs.push(`[준비] ${r.value.split("\n")[0]}`);
+    } else {
+      cur?.logs.push(`[실패] 문자·통화 기록 복원 준비: ${r.error}`);
+    }
+    void this.persist(true);
   }
 
   /** SMS Import/Export 앱 준비 — 설치(필요 시 GitHub 다운로드)·권한·임시 폴더 */
@@ -1222,14 +1244,57 @@ export class Wizard {
     else this.begin();
   }
 
-  /** 실전 복구 러너 — restore 엔진 연동은 restore 커밋에서 채운다 (플래그 기본 꺼짐) */
-  private async runRealRestore(_cur: RunStep) {
+  /** 실전 복구 러너 — APK 재설치 → tar 스트리밍 → 설정 → 연락처 전송 후, 문자·통화(smsie)는 수동 개입 */
+  private async runRealRestore(cur: RunStep) {
+    const gen = this.runGen;
     if (!this.backupDir) {
       this.failStep("복구할 백업 폴더가 없습니다");
       return;
     }
-    // TODO(restore): restore_run 이벤트 구독·연결 — 복구 엔진 커밋에서 구현
-    this.failStep("복구 엔진이 아직 연결되지 않았습니다");
+    const items = this.checkedBackupItems();
+    cur.logs.push(`[실전] 복구 시작 — ${this.backupDir}`);
+    const itemOrder = items.slice();
+    const un = await api.onRestoreProgress((p) => {
+      if (gen !== this.runGen) return;
+      const ratio = p.bytesTotal > 0 ? p.bytesDone / p.bytesTotal : p.filesTotal > 0 ? p.filesDone / p.filesTotal : 0;
+      const idx = Math.max(0, itemOrder.indexOf(p.itemId));
+      cur.progress = Math.min(0.99, (idx + ratio) / Math.max(1, itemOrder.length));
+      void this.persist();
+    });
+    const r = await api.restoreRun(this.device?.serial, this.backupDir, items);
+    un();
+    if (gen !== this.runGen) return; // 중단·처음으로
+    if (!r.ok) {
+      this.failStep(`복구 실패: ${r.error}`);
+      return;
+    }
+    for (const line of r.value.logs) cur.logs.push(`[복구] ${line}`);
+    for (const fail of r.value.failures) cur.logs.push(`[실패] ${fail}`);
+    cur.progress = 0.99;
+    void this.persist(true);
+    if (r.value.smsiePending && this.needSmsie(items)) {
+      const stepDef = this.steps.find((s) => s.id === "restore");
+      if (stepDef && !stepDef.manual?.includes("smsie-import")) stepDef.manual = [...(stepDef.manual ?? []), "smsie-import"];
+      cur.manualDone = 0;
+      cur.status = "manual-wait";
+      this.pause();
+      void this.openManual(cur, "smsie-import");
+      return;
+    }
+    this.stepDone(cur);
+  }
+
+  /** smsie 수동 복원 마무리 — 기본 문자 앱 역할 원복 + 안내 로그 */
+  private async finishRealRestore(cur: RunStep) {
+    const r = await api.smsieRestoreFinish(this.device?.serial);
+    if (r.ok) {
+      for (const line of r.value) cur.logs.push(`[마무리] ${line}`);
+    } else {
+      cur.logs.push(`[마무리 실패] ${r.error}`);
+    }
+    cur.progress = 1;
+    void this.persist(true);
+    this.stepDone(cur);
   }
 
   // ── 단계 실패 — 실패 상태를 유지하고 다음 단계(리락 포함)로 넘어가지 않는다. 다시 시도 또는 중단만 허용
