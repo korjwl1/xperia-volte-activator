@@ -3,6 +3,8 @@
 // 프리셋 이름("for V" 등)이 적용 가능 기종을 보장하지 않는다 — 검증된 기종은 실제 패치 결과로만 추가한다.
 import type { CarrierId } from "$lib/types";
 
+// 2026-10-03 게시자 기준 전수 추적(운영진·패치 작성자 11개 계정, 글 2,112개): 20250901 이후 공통·기종별 EFS 후속 배포 없음.
+//   이후 자료는 속성 모듈·IMS 앱·APN·아이콘 등 EFS가 아닌 것 — 날짜·제목만으로 EFS 후속으로 보지 않는다
 // 데이터(EFS) 버전은 도구 버전과 별개 — 도구 beta9~beta11은 모두 이 세트를 담고 있음 (tasks/research-efs-preset-versions.md, 2026-10-03)
 export const EFS_PRESET_VERSION = "20250901"; // Config.json efs.patchVer — 조사 시점 확인된 최신 공통 세트
 export const EFS_PRESET_MODE = "balance";

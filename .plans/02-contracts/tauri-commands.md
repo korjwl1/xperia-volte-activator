@@ -223,3 +223,6 @@ invoke('firmware_dir_check', { dir, partition }) → { file, imageBytes }  // PC
 - EFS 프리셋 버전 조사(tasks/research-efs-preset-versions.md, 2026-10-03): 20250901 balance = 확인된 최신 공통 세트(도구 beta9~beta11 동일, 카페 재첨부 ZIP과 SHA-256 동일).
   manifest에 원본 출처·ZIP 해시, 이전 성공 후보(KT/LGU beta7, 자동 롤백 금지) 기록. performance 세트는 배포 구성 문제로 사용하지 않음.
   갱신 판정은 데이터 해시 기준, 새 세트는 격리 → 차이·XML·슬롯 경로 검토 → 실물 확인 → 승격
+- env_check 항목 추가 필요: 번들 EfsTools(util/EfsTools)는 runtimeconfig 기준 Microsoft.NETCore.App 5.0(net5.0)을 요구 — 설치 여부 확인·안내.
+  카페의 .NET 9 대응 빌드(612904)는 제목과 달리 실제 runtimeconfig가 net8.0. 런타임 안내는 게시글 제목이 아니라 실제 runtimeconfig.json 기준
+- 게시자 기준 추적(tasks/research-efs-preset-versions.md "게시자 기준 추적"): 20250901 이후 EFS 후속 배포 없음. 1 VII 등의 속성 모듈·IMS 앱·APN·eSIM 모뎀 패키지는 EFS와 별개 자료로 분리 관리
