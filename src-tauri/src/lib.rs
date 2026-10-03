@@ -1,6 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod adb;
 mod backup;
+mod fastboot;
 mod firmware;
 mod host;
 mod guard;
@@ -41,6 +42,11 @@ pub fn run() {
             journal::journal_load,
             journal::journal_archive,
             guard::run_guard,
+            fastboot::fastboot_getvar,
+            fastboot::fastboot_unlock,
+            fastboot::fastboot_lock,
+            fastboot::fastboot_flash,
+            fastboot::fastboot_reboot,
             backup::backup_run,
             backup::backup_cancel,
             backup::backup_manifest_check,
