@@ -161,3 +161,14 @@ invoke('session_save' | 'session_load' | 'session_resume')  // §9-1/9-2 상태+
 ```ts
 type StepEvent = { stepId: string; phase: 'start'|'progress'|'done'|'fail'|'manual-wait'; progress?: number; log?: string }
 ```
+
+
+## journal (작업 진행 기록 — 사용자 승인 2026-10-03)
+
+```ts
+invoke('journal_save', { key, data }) → void        // <앱 데이터>/journal/<key>.json (임시 파일에 쓴 뒤 교체)
+invoke('journal_load', { key }) → string | null     // 끝나지 않은 작업 기록 JSON
+invoke('journal_archive', { key, tag: 'done'|'discarded' }) → void  // <key>.<tag>.json으로 보관(마지막 1개, 디버깅용)
+// key = SHA-256(모델|시리얼) 앞 16바이트 hex — 파일 이름에 시리얼을 그대로 쓰지 않음, Rust에서 16~64자 hex만 허용
+// data = RunJournal (types.ts): 선택 옵션·계획·단계별 상태/로그(단계당 최근 300줄)·멈춘 사유. 언락 코드·IMEI 없음
+```

@@ -11,6 +11,7 @@ Xperia VoLTE 활성화 통합 도구. Tauri 2 + SvelteKit 2 + Svelte 5 + TypeScr
 - Rust 설치 완료 — `pnpm.cmd tauri dev`로 데스크톱 윈도우 테스트 가능하다.
 - 예외(사용자 승인 2026-10-02): USB 직접 연결용 ADB 인증 키를 앱 데이터 폴더에 1회 생성·저장한다 (표준 ~/.android/adbkey가 있으면 그것을 사용).
 - 예외(사용자 승인 2026-10-03): 폰에 설정 화면(개발자 옵션/휴대전화 정보)을 띄우는 것 — 설정 값은 바꾸지 않음.
+- 예외(사용자 승인 2026-10-03): 작업 진행 기록(journal) — 실행 상태를 앱 데이터 폴더 journal/<기기 해시>.json에 저장해 끊긴 작업을 이어서 진행 (src-tauri/src/journal.rs). 언락 코드·IMEI는 기록하지 않음.
 - 예외(사용자 승인 2026-10-03): 순정 펌웨어 부트 이미지(init_boot/boot)를 Sony 서버에서 부분 다운로드해 앱 데이터 폴더 firmware/ 캐시에 저장한다 — 저장 공간이 부족하면 사용자가 고른 다른 폴더에 저장 (src-tauri/src/firmware.rs, 재배포 금지).
 - 기기 통신은 `adb_client` 크레이트(ADB 프로토콜 순수 Rust) — 실행 중인 adb 서버 재사용 → USB 직접 연결 폴백. adb 바이너리 설치/PATH 탐색 불필요. adb 바이너리를 직접 실행하는 코드는 금지.
 

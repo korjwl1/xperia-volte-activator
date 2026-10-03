@@ -1,0 +1,85 @@
+//! 작업 진행 기록 (PC 앱 데이터 폴더, 사용자 승인 2026-10-03)
+//! 실행 중 상태를 기기별 JSON으로 남겨, 연결이 끊기거나 앱이 꺼진 뒤 같은 폰을 다시 연결하면 이어서 진행할 수 있게 한다.
+//! - 위치: <앱 데이터>/journal/<key>.json (key = 기기 식별 해시, 프론트에서 생성)
+//! - 끝난 작업은 <key>.done.json, 새로 시작해 버린 작업은 <key>.discarded.json으로 보관 (디버깅용, 마지막 1개)
+//! - 내용은 프론트가 만든 JSON 그대로 — 언락 코드·IMEI는 넣지 않는다
+
+use crate::adb::app_data_dir;
+use std::path::PathBuf;
+
+fn valid_key(key: &str) -> bool {
+    (16..=64).contains(&key.len()) && key.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn journal_dir() -> Result<PathBuf, String> {
+    Ok(app_data_dir().ok_or("앱 데이터 폴더를 확인할 수 없습니다")?.join("journal"))
+}
+
+fn path_for(key: &str, suffix: &str) -> Result<PathBuf, String> {
+    if !valid_key(key) {
+        return Err("잘못된 기록 키입니다".into());
+    }
+    Ok(journal_dir()?.join(format!("{key}{suffix}.json")))
+}
+
+fn save_work(key: &str, data: &str) -> Result<(), String> {
+    let path = path_for(key, "")?;
+    std::fs::create_dir_all(path.parent().expect("journal 폴더")).map_err(|e| format!("기록 폴더 생성 실패: {e}"))?;
+    // 쓰는 도중 꺼져도 이전 기록이 깨지지 않도록 임시 파일에 쓴 뒤 교체
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, data).map_err(|e| format!("진행 기록 저장 실패: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("진행 기록 저장 실패: {e}"))
+}
+
+fn load_work(key: &str) -> Result<Option<String>, String> {
+    let path = path_for(key, "")?;
+    match std::fs::read_to_string(&path) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("진행 기록 읽기 실패: {e}")),
+    }
+}
+
+fn archive_work(key: &str, tag: &str) -> Result<(), String> {
+    if tag != "done" && tag != "discarded" {
+        return Err("잘못된 보관 구분입니다".into());
+    }
+    let from = path_for(key, "")?;
+    if !from.exists() {
+        return Ok(());
+    }
+    let to = path_for(key, &format!(".{tag}"))?;
+    let _ = std::fs::remove_file(&to);
+    std::fs::rename(&from, &to).map_err(|e| format!("진행 기록 보관 실패: {e}"))
+}
+
+/// 진행 기록 저장 (덮어쓰기)
+#[tauri::command]
+pub fn journal_save(key: String, data: String) -> Result<(), String> {
+    save_work(&key, &data)
+}
+
+/// 끝나지 않은 진행 기록 (없으면 null)
+#[tauri::command]
+pub fn journal_load(key: String) -> Result<Option<String>, String> {
+    load_work(&key)
+}
+
+/// 진행 기록 보관 — 끝난 작업(done) / 새로 시작해 버린 작업(discarded)
+#[tauri::command]
+pub fn journal_archive(key: String, tag: String) -> Result<(), String> {
+    archive_work(&key, &tag)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_validation() {
+        assert!(valid_key("0123456789abcdef0123456789abcdef"));
+        assert!(!valid_key("short"));
+        assert!(!valid_key("../../etc/passwd/aaaaaaaaaaaaaaa"));
+        assert!(!valid_key("0123456789abcdeg0123456789abcdef"));
+    }
+}

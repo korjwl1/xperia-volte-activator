@@ -62,6 +62,12 @@ export interface Api {
   diskFree(path: string): Promise<number | null>;
   envCheck(): Promise<EnvCheckItem[]>;
   envFix(id: string): Promise<{ ok: boolean; message: string }>;
+  /** 작업 진행 기록 저장 (기기별, 앱 데이터 폴더) */
+  journalSave(key: string, data: string): Promise<boolean>;
+  /** 끝나지 않은 진행 기록 (없거나 실패 시 null) */
+  journalLoad(key: string): Promise<string | null>;
+  /** 진행 기록 보관 — done(끝남) / discarded(새로 시작) */
+  journalArchive(key: string, tag: "done" | "discarded"): Promise<boolean>;
 }
 
 const hybridApi: Api = {
@@ -147,6 +153,18 @@ const hybridApi: Api = {
 
   async adbStatus() {
     return await invokeBackend<AdbStatus>("adb_status");
+  },
+
+  async journalSave(key, data) {
+    return (await invokeResult<null>("journal_save", { key, data })).ok;
+  },
+
+  async journalLoad(key) {
+    return await invokeBackend<string>("journal_load", { key });
+  },
+
+  async journalArchive(key, tag) {
+    return (await invokeResult<null>("journal_archive", { key, tag })).ok;
   },
 
   async openExternal(url) {

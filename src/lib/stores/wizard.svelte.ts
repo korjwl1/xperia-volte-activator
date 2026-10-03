@@ -1,5 +1,5 @@
 // 위자드 상태 머신 + 실행 시뮬레이션 러너 (mock)
-import type { AppItem, FirmwareResult, FirmwareVersions, SettingsOverview, SimInfo, BackupGroup, DeviceStatus, EnvCheckItem, ManualId, ManualPrompt, PlanStep, RunStep, VolteConfig } from "$lib/types";
+import type { AppItem, FirmwareResult, FirmwareVersions, SettingsOverview, SimInfo, BackupGroup, DeviceStatus, EnvCheckItem, ManualId, ManualPrompt, PlanStep, RunJournal, RunStep, VolteConfig } from "$lib/types";
 import { api } from "$lib/api";
 import { LINKS, maskSecret } from "$lib/data/links";
 import { bootPartition } from "$lib/data/devices";
@@ -242,7 +242,168 @@ export class Wizard {
     this.steps = this.plan;
     this.view = "step3";
     this.prepareRun();
+    this.journalStarted = new Date().toISOString();
+    void this.journalKeyReady().then(() => this.persist(true));
     this.begin();
+  }
+
+  // ── 작업 진행 기록 (끊긴 작업 이어서 진행) ───────────────────
+  /** 경고 페이지 다음에 보여줄, 같은 폰의 끝나지 않은 작업 */
+  pendingJournal: RunJournal | null = $state(null);
+  private journalKey: string | null = null;
+  private journalStarted = "";
+  private lastJournalSave = 0;
+  private stopInfo: RunJournal["stop"] = null;
+
+  /** 기기 식별 키 — 모델+시리얼의 SHA-256 앞 16바이트 (파일 이름에 시리얼을 그대로 쓰지 않음) */
+  private async journalKeyReady(): Promise<string | null> {
+    const d = this.device;
+    if (!d?.serial) return (this.journalKey = null);
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${d.model}|${d.serial}`));
+    this.journalKey = [...new Uint8Array(buf)].slice(0, 16).map((b) => b.toString(16).padStart(2, "0")).join("");
+    return this.journalKey;
+  }
+
+  /** 경고 페이지 [다음] — 같은 폰의 끝나지 않은 작업이 있으면 pendingJournal에 두고 true */
+  async checkJournal(): Promise<boolean> {
+    const key = await this.journalKeyReady();
+    if (!key) return false;
+    const raw = await api.journalLoad(key);
+    if (!raw) return false;
+    try {
+      const j = JSON.parse(raw) as RunJournal;
+      if (j.version !== 1 || !j.runSteps?.length) return false;
+      this.pendingJournal = j;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** [새로 시작] — 이전 기록은 discarded로 보관하고 1단계부터 */
+  discardJournal() {
+    if (this.journalKey) void api.journalArchive(this.journalKey, "discarded");
+    this.pendingJournal = null;
+    this.view = "step1";
+  }
+
+  /** [이어서 진행] — 선택했던 옵션·진행 상황을 되살리고 실행 화면으로 (자동 시작하지 않음) */
+  resumeJournal() {
+    const j = this.pendingJournal;
+    if (!j) return;
+    this.volteConfig = { ...defaultVolteConfig(), ...j.config };
+    this.ensureOptions();
+    for (const g of this.groups) for (const i of g.items) i.checked = j.backupItems.includes(i.id);
+    this.opts = { ...j.opts };
+    this.backupPath = j.backupPath;
+    this.firmware = j.firmware;
+    this.firmwareState = j.firmware ? "done" : "idle";
+    this.firmwareDir = j.firmwareDir;
+    this.steps = j.steps;
+    // 끊긴 단계는 처음부터 다시 — 실제 구현은 단계 시작 시 기기 상태를 먼저 확인해 이미 끝난 작업은 건너뛴다
+    const runSteps: RunStep[] = j.runSteps.map((st) =>
+      st.status === "done" || st.status === "skipped"
+        ? st
+        : {
+            ...st,
+            status: "pending",
+            // 끝낸 세부 작업까지는 진행된 것으로 — 실제 구현은 기기 상태로 한 번 더 확인 후 건너뜀
+            progress: st.sub && st.sub.list.length > 0 ? st.sub.done / st.sub.list.length : 0,
+            manualDone: 0,
+          },
+    );
+    // 언락 코드는 기록하지 않으므로, 언락이 아직이면 사전 준비(언락 코드 입력)를 다시
+    const prep = runSteps.find((st) => st.id === "prep");
+    const unlockLeft = runSteps.some((st) => st.id === "unlock" && st.status !== "done");
+    if (prep && unlockLeft && j.steps.find((st) => st.id === "prep")?.manual?.includes("unlock-code")) {
+      prep.status = "pending";
+      prep.progress = 0;
+      prep.manualDone = 0;
+    }
+    const first = runSteps.findIndex((st) => st.status !== "done" && st.status !== "skipped");
+    if (first >= 0) {
+      const sub = runSteps[first].sub;
+      runSteps[first].logs.push(
+        sub && sub.done > 0
+          ? `[재개] 이전 진행 기록을 불러왔습니다 — '${sub.list[sub.done - 1]}'까지 끝났으므로 '${sub.list[sub.done] ?? "마무리"}'부터 진행합니다`
+          : "[재개] 이전 진행 기록을 불러왔습니다 — 이 단계부터 다시 진행합니다",
+      );
+    }
+    this.runSteps = runSteps;
+    this.cursor = first >= 0 ? first : runSteps.length;
+    this.journalStarted = j.startedAt;
+    this.stopInfo = null;
+    this.finished = false;
+    this.usbError = false;
+    this.erroredOnce = false;
+    this.pendingJournal = null;
+    this.view = "step3";
+    void this.persist(true);
+  }
+
+  /** 진행 기록 저장 — 상태 변화 시 즉시, 진행률·로그는 2초 간격 */
+  private persist(force = false): Promise<boolean> {
+    const key = this.journalKey;
+    const d = this.device;
+    if (!key || !d || this.runSteps.length === 0) return Promise.resolve(false);
+    const now = Date.now();
+    if (!force && now - this.lastJournalSave < 2000) return Promise.resolve(false);
+    this.lastJournalSave = now;
+    const j: RunJournal = {
+      version: 1,
+      model: d.model,
+      productName: d.productName,
+      serialMasked: d.serialMasked,
+      startedAt: this.journalStarted || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      config: $state.snapshot(this.volteConfig),
+      opts: { ...this.opts },
+      backupPath: this.backupPath,
+      backupItems: this.groups.flatMap((g) => g.items.filter((i) => i.checked).map((i) => i.id)),
+      steps: $state.snapshot(this.steps),
+      runSteps: this.runSteps.map((st) => ({ ...$state.snapshot(st), logs: st.logs.slice(-300) })),
+      cursor: this.cursor,
+      firmware: this.firmware ? { ...this.firmware } : null,
+      firmwareDir: this.firmwareDir,
+      stop: this.stopInfo,
+    };
+    return api.journalSave(key, JSON.stringify(j));
+  }
+
+  /** 끝나지 않은 실행이 있는지 — 창을 닫을 때 확인 */
+  get runUnfinished(): boolean {
+    return this.view === "step3" && this.runSteps.length > 0 && !this.finished;
+  }
+
+  /** 지금 진행 중인 단계가 되돌리기 어려운 작업인지 (창 닫기 경고용) */
+  get runInDanger(): boolean {
+    const cur = this.runSteps[this.cursor];
+    return !!cur && cur.status === "running" && this.steps.find((s) => s.id === cur.id)?.risk === "danger";
+  }
+
+  /** 창 닫기 — 멈춘 사유를 남기고 기록을 확실히 저장 (사용자가 이미 중단한 경우 그 사유 유지) */
+  async closeForExit() {
+    const cur = this.runSteps[this.cursor];
+    const wasWaiting = cur?.status === "manual-wait";
+    this.pause();
+    this.stopWatch();
+    if (!this.stopInfo && cur) {
+      this.stopInfo = {
+        stepId: cur.id,
+        stepTitle: cur.title,
+        reason: wasWaiting ? "폰 확인을 기다리는 중에 프로그램을 종료했습니다" : "작업 중에 프로그램을 종료했습니다",
+        at: new Date().toISOString(),
+      };
+      cur.logs.push(`[종료] ${this.stopInfo.reason}`);
+    }
+    await this.persist(true);
+  }
+
+  /** 명시적으로 멈춘 사유를 기록 */
+  private markStop(reason: string) {
+    const cur = this.runSteps[this.cursor];
+    this.stopInfo = cur ? { stepId: cur.id, stepTitle: cur.title, reason, at: new Date().toISOString() } : null;
+    void this.persist(true);
   }
 
   // ── 실행 시뮬레이션 ───────────────────
@@ -259,6 +420,7 @@ export class Wizard {
   begin() {
     if (this.running || this.usbError) return;
     this.running = true;
+    this.stopInfo = null;
     this.timer = setInterval(() => this.tick(), 140);
   }
 
@@ -269,11 +431,15 @@ export class Wizard {
   }
 
   private tick() {
+    while (this.runSteps[this.cursor] && ["done", "skipped"].includes(this.runSteps[this.cursor].status)) this.cursor++;
     const cur = this.runSteps[this.cursor];
     if (!cur) return this.complete();
     if (cur.status === "pending") {
       cur.status = "running";
       cur.logs.push(`[시작] ${cur.title}`);
+      const list = this.subtasksFor(cur.id);
+      if (list.length > 0 && !cur.sub) cur.sub = { list, done: 0 };
+      void this.persist(true);
     }
     if (this.simulateUsbError && !this.erroredOnce && (cur.id === "backup" || cur.id === "efs")) {
       this.erroredOnce = true;
@@ -281,6 +447,7 @@ export class Wizard {
       this.usbError = true;
       this.pause();
       cur.logs.push("[오류] DIAG 전송 타임아웃 — USB 연결이 불안정합니다 (재시도 카운트 3/3)");
+      this.markStop("USB 연결 오류 — DIAG 전송 타임아웃");
       return;
     }
     const step = this.steps.find((s) => s.id === cur.id);
@@ -294,11 +461,38 @@ export class Wizard {
     }
     cur.progress = Math.min(1, cur.progress + 0.04 + Math.random() * 0.05);
     if (Math.random() < 0.35) cur.logs.push(this.mockLog(cur.id, cur.progress));
+    if (cur.sub) {
+      const reached = Math.min(cur.sub.list.length, Math.floor(cur.progress * cur.sub.list.length + 1e-9));
+      if (reached > cur.sub.done) {
+        for (let k = cur.sub.done; k < reached; k++) cur.logs.push(`[체크포인트] ${cur.sub.list[k]} 완료`);
+        cur.sub.done = reached;
+        void this.persist(true);
+      }
+    }
     if (cur.progress >= 1) {
       cur.status = "done";
       cur.logs.push("[완료]");
       this.cursor++;
-      if (this.cursor >= this.runSteps.length) this.complete();
+      if (this.cursor >= this.runSteps.length) return this.complete();
+      void this.persist(true);
+      return;
+    }
+    void this.persist();
+  }
+
+  /** 단계별 세부 작업 — 끝날 때마다 체크포인트로 기록 (실제 구현도 같은 단위로 기록·재개) */
+  private subtasksFor(id: string): string[] {
+    const items = this.groups.flatMap((g) => g.items.filter((i) => i.checked).map((i) => i.label));
+    switch (id) {
+      case "backup": return items.map((l) => `${l} 백업`);
+      case "restore": return items.map((l) => `${l} 복원`);
+      case "root": return ["Magisk 받기", "부트 이미지·패치 도구 전송", "Magisk 패치", "패치 결과 확인", "패치 이미지 기록", "Magisk 앱 설치"];
+      case "efs-preflight": return ["USB 연결 확인", "드라이버 확인", "전원 관리 해제", "연결 안정성 테스트"];
+      case "efs": return this.volteConfig.sims.filter((s) => s.carrier !== null).map((s) => `SIM${s.slot} 프로파일 적용`);
+      case "volte-props": return ["VoLTE 설정", "영상통화 설정", "Wi-Fi 통화 설정", "재부팅"];
+      case "fw-verify": return ["재부팅", "버전 확인", "지문 확인"];
+      case "final-verify": return ["재부팅", "네트워크 등록", "VoLTE 활성 확인"];
+      default: return [];
     }
   }
 
@@ -405,6 +599,7 @@ export class Wizard {
     this.manualCurrent = { id, ...MANUAL_TEXT[id] };
     this.onManualOpen(id);
     cur.logs.push(`[대기] 수동 개입: ${this.manualCurrent.title}`);
+    void this.persist(true);
     if (id === "usb-debug") this.watchManual(cur, id, "USB 디버깅 연결 확인", () => this.usbDebugReady(), 2000);
     if (id === "mode-wait") this.watchManual(cur, id, "부트로더(fastboot) 모드 진입 확인", () => this.usbModeIs("fastboot"), 1500);
     if (id === "flash-mode") this.watchManual(cur, id, "플래시 모드 진입 확인", () => this.usbModeIs("flashmode"), 1500);
@@ -532,6 +727,7 @@ export class Wizard {
     }
     this.manualCurrent = null;
     this.begin();
+    void this.persist(true);
   }
 
   dismissUsbError() {
@@ -554,6 +750,7 @@ export class Wizard {
     this.manualCurrent = null;
     this.usbError = false;
     this.backupNoticeAck = false;
+    this.markStop("사용자가 작업을 중단했습니다");
   }
 
   goFinish() {
@@ -602,11 +799,17 @@ export class Wizard {
     this.simulateUsbError = false;
     this.erroredOnce = false;
     this.cursor = 0;
+    this.pendingJournal = null;
+    this.journalKey = null;
+    this.journalStarted = "";
+    this.stopInfo = null;
   }
 
   private complete() {
     this.pause();
     this.finished = true;
+    void this.persist(true);
+    if (this.journalKey) void api.journalArchive(this.journalKey, "done");
   }
 
   get overall(): number {

@@ -208,6 +208,31 @@ export interface RunStep {
   logs: string[];
   /** 완료한 수동 개입 수 (PlanStep.manual 기준) */
   manualDone: number;
+  /** 세부 작업 체크포인트 — 이어서 진행 시 끝낸 세부 작업은 건너뛴다 */
+  sub?: { list: string[]; done: number };
+}
+
+/** 작업 진행 기록 — 끊긴 작업을 같은 폰에서 이어서 진행 (journal.rs, 앱 데이터 폴더)
+ *  언락 코드·IMEI는 넣지 않는다 (이어서 진행할 때 다시 입력) */
+export interface RunJournal {
+  version: 1;
+  model: string;
+  productName: string;
+  serialMasked: string;
+  startedAt: string; // ISO
+  updatedAt: string;
+  config: VolteConfig;
+  opts: { unroot: boolean; relock: boolean; restore: boolean };
+  backupPath: string;
+  /** 선택한 백업 항목 id */
+  backupItems: string[];
+  steps: PlanStep[];
+  runSteps: RunStep[];
+  cursor: number;
+  firmware: FirmwareResult | null;
+  firmwareDir: string;
+  /** 명시적으로 멈춘 경우의 사유 (없으면 진행 중 앱 종료·연결 끊김으로 본다) */
+  stop: { stepId: string; stepTitle: string; reason: string; at: string } | null;
 }
 
 export const RISK_LABEL: Record<PlanStep["risk"], string> = {

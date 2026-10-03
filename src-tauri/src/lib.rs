@@ -2,6 +2,7 @@
 mod adb;
 mod firmware;
 mod host;
+mod journal;
 mod usbmode;
 
 use tauri::Manager;
@@ -29,7 +30,10 @@ pub fn run() {
             usbmode::usb_modes,
             host::disk_free,
             firmware::firmware_fetch,
-            firmware::firmware_versions
+            firmware::firmware_versions,
+            journal::journal_save,
+            journal::journal_load,
+            journal::journal_archive
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
