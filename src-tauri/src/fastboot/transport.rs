@@ -28,6 +28,7 @@ pub struct RusbTransport {
     handle: rusb::DeviceHandle<rusb::GlobalContext>,
     ep_out: u8,
     ep_in: u8,
+    iface_no: u8,
 }
 
 impl RusbTransport {
@@ -50,12 +51,14 @@ impl RusbTransport {
     }
 
     fn claim(dev: &rusb::Device<rusb::GlobalContext>) -> Result<Self, String> {
-        let mut handle = dev.open().map_err(|e| format!("USB 장치 열기 실패: {e}"))?;
+        let handle = dev.open().map_err(|e| format!("USB 장치 열기 실패: {e}"))?;
         // 인터페이스 번호·엔드포인트 탐색
         let desc = dev.device_descriptor().map_err(|e| e.to_string())?;
         let mut iface_no = None;
         let mut ep_out = None;
         let mut ep_in = None;
+        let mut configuration = None;
+        let mut alternate = None;
         'outer: for cfg_idx in 0..desc.num_configurations() {
             let Ok(cfg) = dev.config_descriptor(cfg_idx) else { continue };
             for iface in cfg.interfaces() {
@@ -64,43 +67,64 @@ impl RusbTransport {
                         && alt.sub_class_code() == FB_SUBCLASS
                         && alt.protocol_code() == FB_PROTOCOL
                     {
-                        iface_no = Some(iface.number());
+                        let mut out = None;
+                        let mut input = None;
                         for ep in alt.endpoint_descriptors() {
+                            if ep.transfer_type() != rusb::TransferType::Bulk { continue; }
                             if ep.direction() == rusb::Direction::Out {
-                                ep_out = Some(ep.address());
+                                out = Some(ep.address());
                             } else {
-                                ep_in = Some(ep.address());
+                                input = Some(ep.address());
                             }
                         }
+                        if out.is_none() || input.is_none() { continue; }
+                        iface_no = Some(iface.number());
+                        ep_out = out;
+                        ep_in = input;
+                        configuration = Some(cfg.number());
+                        alternate = Some(alt.setting_number());
                         break 'outer;
                     }
                 }
             }
         }
         let iface_no = iface_no.ok_or("fastboot 인터페이스를 찾지 못했습니다")?;
-        // 커널 드라이버가 붙어 있으면 분리 시도(WinUSB 바인딩이 이미면 불필요)
-        if handle.kernel_driver_active(iface_no).unwrap_or(false) {
-            let _ = handle.detach_kernel_driver(iface_no);
+        let configuration = configuration.ok_or("fastboot USB 설정을 찾지 못했습니다")?;
+        if handle.active_configuration().map_err(|e| e.to_string())? != configuration {
+            handle.set_active_configuration(configuration).map_err(|e| e.to_string())?;
+        }
+        // 지원하는 플랫폼에서는 release 시 커널 드라이버도 자동 복구한다.
+        match handle.set_auto_detach_kernel_driver(true) {
+            Ok(()) | Err(rusb::Error::NotSupported) => {},
+            Err(e) => return Err(format!("USB 드라이버 분리 설정 실패: {e}")),
         }
         handle
             .claim_interface(iface_no)
             .map_err(|e| format!("fastboot 인터페이스 클레임 실패(드라이버 확인 필요): {e}"))?;
+        if let Err(e) = handle.set_alternate_setting(iface_no, alternate.unwrap_or(0)) {
+            let _ = handle.release_interface(iface_no);
+            return Err(format!("fastboot USB 대체 설정 실패: {e}"));
+        }
         Ok(Self {
             handle,
             ep_out: ep_out.ok_or("bulk OUT 엔드포인트가 없습니다")?,
             ep_in: ep_in.ok_or("bulk IN 엔드포인트가 없습니다")?,
+            iface_no,
         })
     }
 }
 
 impl FastbootTransport for RusbTransport {
     fn write_command(&mut self, cmd: &str) -> Result<(), String> {
-        if cmd.len() > 64 {
+        if !cmd.is_ascii() || cmd.is_empty() || cmd.len() > 64 {
             return Err(format!("fastboot 명령이 너무 깁니다({}바이트)", cmd.len()));
         }
-        self.handle
+        let written = self.handle
             .write_bulk(self.ep_out, cmd.as_bytes(), RESPONSE_TIMEOUT)
             .map_err(|e| format!("명령 전송 실패: {e}"))?;
+        if written != cmd.len() {
+            return Err(format!("명령 일부만 전송되었습니다({written}/{})", cmd.len()));
+        }
         Ok(())
     }
 
@@ -116,11 +140,47 @@ impl FastbootTransport for RusbTransport {
         // 청크 단위 전송 — max-download-size 상한은 프로토콜 층에서 검사했다
         const CHUNK: usize = 512 * 1024; // fastboot 표준 max chunk
         for piece in data.chunks(CHUNK) {
-            self.handle
-                .write_bulk(self.ep_out, piece, Duration::from_secs(60))
-                .map_err(|e| format!("데이터 전송 실패: {e}"))?;
+            write_all_data(piece, |remaining| {
+                self.handle.write_bulk(self.ep_out, remaining, Duration::from_secs(60))
+                    .map_err(|e| format!("데이터 전송 실패: {e}"))
+            })?;
         }
         Ok(())
+    }
+}
+
+impl Drop for RusbTransport {
+    fn drop(&mut self) {
+        let _ = self.handle.release_interface(self.iface_no);
+    }
+}
+
+fn write_all_data(mut data: &[u8], mut write: impl FnMut(&[u8]) -> Result<usize, String>) -> Result<(), String> {
+    while !data.is_empty() {
+        let n = write(data)?;
+        if n == 0 || n > data.len() {
+            return Err("데이터 전송이 진행되지 않았습니다".into());
+        }
+        data = &data[n..];
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partial_data_writes_preserve_every_byte() {
+        let mut sent = vec![];
+        write_all_data(b"abcdefg", |data| {
+            let n = data.len().min(2);
+            sent.extend_from_slice(&data[..n]);
+            Ok(n)
+        }).unwrap();
+        assert_eq!(sent, b"abcdefg");
+        assert!(write_all_data(b"x", |_| Ok(0)).is_err());
+        assert!(write_all_data(b"x", |_| Err("timeout".into())).is_err());
     }
 }
 

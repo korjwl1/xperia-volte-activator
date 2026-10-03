@@ -123,18 +123,20 @@ invoke('env_fix', { id }) → FixResult           // WebView2 부트스트래퍼
 
 ## plan / fastboot (M2 — 설계 `.plans/04-engine/fastboot.md`, 사용자 승인 2026-10-03)
 
-**구현 상태**: 5 명령 전부 ✅ 구현(src-tauri/src/fastboot/ — FakeTransport 단위 테스트, 실기기 미검증). wizard 언락/리락 실전 연결 + 최소 리락 게이트(언루팅 완료 검사) 포함.
+**구현 상태**: 프로토콜 5 명령 구현(FakeTransport 검증, 실기기 미검증). 쓰기·재부팅은 Cargo `fastboot-write` 기본 비활성 + `REAL_STEPS.fastboot`로 보호. 실전 리락은 순정 이미지·부트 체인×슬롯 검증 구현 전 프론트/백엔드 모두 차단.
 
 ```ts
 invoke('fastboot_getvar') → Record<string,string>   // ✅ 읽기 전용 — rusb FF/42/03 open, getvar:all 파싱(unlocked·current-slot·slot-successful:_a/_b·max-download-size …)
 //   fastboot 모드 Sony 장치가 정확히 1대일 때만 open(다중 기기 거부 — §9-3)
 invoke('fastboot_unlock', { code, confirm }) → { unlocked: boolean }
 //   "oem unlock 0x{code}" — 16자리 hex 검증, 로그·이벤트에 코드 마스킹(§12.5). 실행 후 getvar로 이중 확인
-invoke('fastboot_lock', { confirm }) → { unlocked: boolean }       // "oem lock" — 최소 게이트(언루팅 완료·unlocked=yes)는 wizard가 판정
-invoke('fastboot_flash', { partition, path, confirm }) → void      // download(DATA 협상) → flash <partition>_a/_b — 플래시 이력 기록(§3-3 리락 게이트 입력)
+invoke('fastboot_lock', { confirm }) → { unlocked: boolean }       // 현재는 §3-3 게이트 미구현 오류로 차단
+invoke('fastboot_flash', { partition, path, confirm }) → void      // 슬롯 접미사 없는 기본명, 양쪽 슬롯 존재 확인 → download/flash → 기기별·슬롯별 이력
 invoke('fastboot_reboot', { target: 'os'|'bootloader' }) → void
-// 이벤트 'fastboot:log': { line: string } — INFO 프레임·진행(민감값 마스킹)
-//   파괴 명령은 confirm=true 필수. 실행은 REAL_STEPS.fastboot 전환 시에만(기본 꺼짐 — 실기기 검증 전)
+// 이벤트 'fastboot:log': string — INFO/TEXT 프레임·진행(코드·IMEI·식별정보 마스킹)
+//   파괴 명령은 confirm=true 필수. 쓰기/재부팅은 fastboot-write 없으면 USB open 전 오류.
+//   unlocked는 명시적 yes/no만 반환; 조회 실패는 오류. reboot는 OKAY만 성공(타임아웃도 오류).
+//   실전 unlock/flash는 is-userspace=no 필요; 미지원/fastbootd면 차단.
 invoke('plan_generate', { profile, toggles, deviceStatus }) → PlanStep[]   // §3-2 매트릭스 + §3-3 의존성 — 프론트 mock/plan.ts가 단일 공급원(유지)
 ```
 

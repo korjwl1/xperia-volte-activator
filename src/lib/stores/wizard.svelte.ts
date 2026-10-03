@@ -596,7 +596,7 @@ export class Wizard {
       const list = this.subtasksFor(cur.id);
       if (list.length > 0 && !cur.sub) cur.sub = { list, done: 0 };
       // 완결 게이트 (§3-3) — 파괴 단계(언락/리락) 직전, 실전 모드에서만 백업 완결을 강제한다
-      if ((cur.id === "unlock" || cur.id === "relock") && REAL_STEPS.backup) {
+      if ((cur.id === "unlock" || cur.id === "relock") && (REAL_STEPS.backup || REAL_STEPS.fastboot)) {
         this.pause();
         void this.enforceBackupGate(cur);
         return;
@@ -666,16 +666,20 @@ export class Wizard {
       return;
     }
     // 실전 언락/리락 — fastboot 엔진 (REAL_STEPS.fastboot 전환 시)
-    if (cur.id === "unlock" && REAL_STEPS.fastboot && cur.status === "running" && this.unlockRanGen !== this.runGen) {
-      this.unlockRanGen = this.runGen;
-      this.pause();
-      void this.runRealUnlock(cur);
+    if (cur.id === "unlock" && REAL_STEPS.fastboot) {
+      if (cur.status === "running" && this.unlockRanGen !== this.runGen) {
+        this.unlockRanGen = this.runGen;
+        this.pause();
+        void this.runRealUnlock(cur);
+      }
       return;
     }
-    if (cur.id === "relock" && REAL_STEPS.fastboot && cur.status === "running" && this.relockRanGen !== this.runGen) {
-      this.relockRanGen = this.runGen;
-      this.pause();
-      void this.runRealRelock(cur);
+    if (cur.id === "relock" && REAL_STEPS.fastboot) {
+      if (cur.status === "running" && this.relockRanGen !== this.runGen) {
+        this.relockRanGen = this.runGen;
+        this.pause();
+        void this.runRealRelock(cur);
+      }
       return;
     }
     cur.progress = Math.min(1, cur.progress + 0.04 + Math.random() * 0.05);
@@ -1030,7 +1034,7 @@ export class Wizard {
 
   /** 목업 실행에서만 — 폰이 실제로 재부팅되지 않아 확인할 수 없는 단계 건너뛰기 */
   get manualSkippable(): boolean {
-    return SIMULATED_RUN && (this.manualVerifiable || this.manualCurrent?.id === "firmware-select");
+    return SIMULATED_RUN && !REAL_STEPS.fastboot && (this.manualVerifiable || this.manualCurrent?.id === "firmware-select");
   }
 
   /** 직접 지정한 펌웨어 폴더 — 고르는 즉시 검사 */
@@ -1348,6 +1352,7 @@ export class Wizard {
       cur.logs.push(`[fastboot] ${line}`);
       void this.persist();
     });
+    if (gen !== this.runGen) return un();
     // 사전 프로브 — 모드·슬롯·언락 상태 확인(§10-2)
     cur.progress = 0.2;
     cur.logs.push("[실전] fastboot 연결 확인(getvar)");
@@ -1358,9 +1363,21 @@ export class Wizard {
       return this.failStep("fastboot 프로브 실패 — 폰이 부트로더 모드(파란 LED)인지 확인해 주세요");
     }
     cur.logs.push(`[fastboot] unlocked=${vars.unlocked ?? "?"} · slot=${vars["current-slot"] ?? "?"}`);
-    if ((vars.unlocked ?? "").toLowerCase() === "yes") {
-      cur.logs.push("[확인] 이미 언락되어 있습니다 — 명령을 건너뜁니다");
+    const state = (vars.unlocked ?? "").trim().toLowerCase();
+    if (state !== "yes" && state !== "no") {
       un();
+      return this.failStep("부트로더 잠금 상태를 확인할 수 없습니다 — 언락을 실행하지 않습니다");
+    }
+    if ((vars["is-userspace"] ?? "").trim().toLowerCase() !== "no") {
+      un();
+      return this.failStep("부트로더 모드를 확인할 수 없습니다 — fastbootd에서는 언락할 수 없습니다");
+    }
+    if (state === "yes") {
+      cur.logs.push("[확인] 이미 언락되어 있습니다 — OS 재부팅을 확인합니다");
+      const rebooted = await api.fastbootReboot("os");
+      un();
+      if (gen !== this.runGen) return;
+      if (!rebooted) return this.failStep("언락 상태지만 OS 재부팅을 확인하지 못했습니다 — 기기 상태를 확인해 주세요");
       cur.progress = 1;
       return this.stepDone(cur);
     }
@@ -1371,59 +1388,23 @@ export class Wizard {
       un();
       return this.failStep(`언락 실패: ${r.error}`);
     }
-    // 여전히 fastboot 모드면 재부팅(대부분 언락 후 자동 재부팅됨 — 응답 없음은 성공)
-    void api.fastbootReboot("os");
-    un();
-    cur.progress = 1;
     if (!r.value.unlocked) {
+      un();
       return this.failStep("언락 명령 후에도 unlocked=yes가 확인되지 않습니다 — 기기 상태를 확인해 주세요");
     }
+    const rebooted = await api.fastbootReboot("os");
+    un();
+    if (gen !== this.runGen) return;
+    if (!rebooted) return this.failStep("언락은 확인됐지만 OS 재부팅을 확인하지 못했습니다 — 기기 상태를 확인해 주세요");
+    cur.progress = 1;
     cur.logs.push("[완료] 부트로더 언락 확인(unlocked=yes) — 기기가 초기화된 뒤 재부팅됩니다");
     this.stepDone(cur);
   }
 
-  /** 실전 리락 — 최소 게이트(언루팅 완료) → getvar 확인 → oem lock → 이중 확인 */
+  /** §3-3의 순정 이미지·슬롯 이력 검증 구현 전에는 실전 리락을 허용하지 않는다. */
   private async runRealRelock(cur: RunStep) {
-    const gen = this.runGen;
-    const un = await api.onFastbootLog((line) => {
-      if (gen !== this.runGen) return;
-      cur.logs.push(`[fastboot] ${line}`);
-      void this.persist();
-    });
-    cur.progress = 0.2;
-    const vars = await api.fastbootGetvar();
-    if (gen !== this.runGen) return un();
-    if (!vars) {
-      un();
-      return this.failStep("fastboot 프로브 실패 — 폰이 부트로더 모드(파란 LED)인지 확인해 주세요");
-    }
-    // 최소 리락 게이트(§3-3) — 언루팅 단계가 계획에 있으면 완료여야 (전체 게이트는 M4 후 완성)
-    const unroot = this.runSteps.find((s) => s.id === "unroot");
-    if (unroot && unroot.status !== "done" && unroot.status !== "skipped") {
-      un();
-      return this.failStep("언루팅이 끝나지 않았습니다 — 리락 전에 언루팅을 먼저 진행해 주세요 (§3-3)");
-    }
-    if ((vars.unlocked ?? "").toLowerCase() === "no") {
-      cur.logs.push("[확인] 이미 리락되어 있습니다 — 건너뜁니다");
-      un();
-      cur.progress = 1;
-      return this.stepDone(cur);
-    }
-    cur.progress = 0.5;
-    const r = await api.fastbootLock(true);
-    if (gen !== this.runGen) return un();
-    if (!r.ok) {
-      un();
-      return this.failStep(`리락 실패: ${r.error}`);
-    }
-    void api.fastbootReboot("os");
-    un();
-    cur.progress = 1;
-    if (r.value.unlocked) {
-      return this.failStep("리락 명령 후에도 unlocked=no가 확인되지 않습니다 — 기기 상태를 확인해 주세요");
-    }
-    cur.logs.push("[완료] 부트로더 리락 확인(unlocked=no) — 기기가 초기화된 뒤 재부팅됩니다");
-    this.stepDone(cur);
+    cur.logs.push("[게이트] 언루팅 완료 표시만으로는 순정 부트 체인·AVB 안전을 확인할 수 없습니다");
+    this.failStep("리락 차단: 검증된 순정 이미지와 부트 체인·슬롯별 플래시 이력 게이트가 아직 구현되지 않았습니다 (§3-3)");
   }
 
   /** smsie 수동 복원 마무리 — 기본 문자 앱 역할 원복 + 안내 로그 */

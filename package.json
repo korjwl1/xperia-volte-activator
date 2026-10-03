@@ -4,6 +4,7 @@
   "description": "",
   "type": "module",
   "scripts": {
+    "test:fastboot": "node --test tests/fastboot.test.mjs",
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",

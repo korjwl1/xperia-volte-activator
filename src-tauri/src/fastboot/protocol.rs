@@ -31,10 +31,10 @@ impl<T: FastbootTransport> FastbootDevice<T> {
 
     /// 응답 읽기 — INFO는 로그로 흘리고 종결 프레임을 기다린다
     fn read_terminal(&mut self) -> Result<Terminal, String> {
-        for _ in 0..MAX_INFO_FRAMES {
+        for frame in 0..=MAX_INFO_FRAMES {
             let mut buf = [0u8; 256];
             let n = self.transport.read_frame(&mut buf)?;
-            if n < 4 {
+            if !(4..=buf.len()).contains(&n) {
                 return Err(format!("응답이 너무 짧습니다({n}바이트)"));
             }
             let status = &buf[..4];
@@ -43,11 +43,15 @@ impl<T: FastbootTransport> FastbootDevice<T> {
                 b"OKAY" => return Ok(Terminal::Ok(payload)),
                 b"FAIL" => return Ok(Terminal::Fail(payload)),
                 b"DATA" => {
+                    if n != 12 || payload.len() != 8 || !payload.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        return Err("DATA 크기는 정확히 8자리 16진수여야 합니다".into());
+                    }
                     let size = u64::from_str_radix(&payload, 16)
                         .map_err(|_| format!("DATA 크기 해석 실패: {payload}"))?;
                     return Ok(Terminal::Data(size));
                 }
-                b"INFO" => (self.on_log)(payload),
+                b"INFO" | b"TEXT" if frame < MAX_INFO_FRAMES => (self.on_log)(payload),
+                b"INFO" | b"TEXT" => break,
                 other => {
                     return Err(format!(
                         "알 수 없는 응답: {}",
@@ -61,9 +65,15 @@ impl<T: FastbootTransport> FastbootDevice<T> {
 
     /// 단일 명령 → 종결 응답 (INFO는 로그)
     fn command(&mut self, cmd: &str) -> Result<Terminal, String> {
-        (self.on_log)(format!("> {cmd}"));
+        // 프로토콜 콜백 자체에도 언락 코드를 노출하지 않는다.
+        let logged = if cmd.starts_with("oem unlock ") { "oem unlock [마스킹]" } else { cmd };
+        (self.on_log)(format!("> {logged}"));
         self.transport.write_command(cmd)?;
         let t = self.read_terminal()?;
+        if ["imei", "meid", "serialno", "serial-number"].iter().any(|key| cmd.to_ascii_lowercase().contains(key)) {
+            (self.on_log)("[기기 식별정보 응답 마스킹]".into());
+            return Ok(t);
+        }
         match &t {
             Terminal::Ok(v) => (self.on_log)(format!("OKAY {v}")),
             Terminal::Fail(r) => (self.on_log)(format!("FAIL {r}")),
@@ -86,25 +96,27 @@ impl<T: FastbootTransport> FastbootDevice<T> {
         (self.on_log)("> getvar:all".into());
         self.transport.write_command("getvar:all")?;
         let mut vars = HashMap::new();
-        for _ in 0..MAX_INFO_FRAMES {
+        for frame in 0..=MAX_INFO_FRAMES {
             let mut buf = [0u8; 256];
             let n = self.transport.read_frame(&mut buf)?;
-            if n < 4 {
+            if !(4..=buf.len()).contains(&n) {
                 return Err(format!("응답이 너무 짧습니다({n}바이트)"));
             }
             let status = &buf[..4];
             let payload = String::from_utf8_lossy(&buf[4..n]).trim().to_string();
             match status {
-                b"INFO" => {
+                b"INFO" | b"TEXT" if frame < MAX_INFO_FRAMES => {
                     (self.on_log)(payload.clone());
                     // "(bootloader)  key: value" / "key: value" 모두 허용
                     let line = payload
                         .trim_start_matches("(bootloader)")
                         .trim();
-                    if let Some((k, v)) = line.split_once(':') {
+                    // 슬롯 변수의 이름에도 ':'가 있다: slot-successful:a: yes.
+                    if let Some((k, v)) = line.split_once(": ").or_else(|| line.rsplit_once(':')) {
                         vars.insert(k.trim().to_string(), v.trim().to_string());
                     }
                 }
+                b"INFO" | b"TEXT" => break,
                 b"OKAY" => return Ok(vars),
                 b"FAIL" => return Err(format!("getvar:all 거부: {payload}")),
                 b"DATA" => return Err("getvar에 DATA 응답(비정상)".into()),
@@ -120,6 +132,23 @@ impl<T: FastbootTransport> FastbootDevice<T> {
             Terminal::Ok(v) => Ok(Some(v)),
             Terminal::Fail(_) => Ok(None),
             Terminal::Data(_) => Err("getvar에 DATA 응답(비정상)".into()),
+        }
+    }
+
+    /// 상태 조회 실패/미지원/알 수 없는 값은 잠김으로 추측하지 않는다.
+    pub fn unlocked(&mut self) -> Result<bool, String> {
+        match self.getvar("unlocked")?.as_deref().map(str::trim) {
+            Some(v) if v.eq_ignore_ascii_case("yes") => Ok(true),
+            Some(v) if v.eq_ignore_ascii_case("no") => Ok(false),
+            _ => Err("unlocked 상태를 확인할 수 없습니다 — 성공으로 처리하지 않습니다".into()),
+        }
+    }
+
+    pub fn ensure_bootloader(&mut self) -> Result<(), String> {
+        match self.getvar("is-userspace")?.as_deref().map(str::trim) {
+            Some(v) if v.eq_ignore_ascii_case("no") => Ok(()),
+            Some(v) if v.eq_ignore_ascii_case("yes") => Err("fastbootd에서는 실행할 수 없습니다 — 부트로더 모드가 필요합니다".into()),
+            _ => Err("부트로더 모드를 확인할 수 없습니다(is-userspace)".into()),
         }
     }
 
@@ -145,6 +174,9 @@ impl<T: FastbootTransport> FastbootDevice<T> {
     /// 데이터 다운로드 — DATA 협상(크기 일치 필수) → 본문 전송 → 최종 OKAY/FAIL
     pub fn download(&mut self, data: &[u8]) -> Result<(), String> {
         let len = data.len() as u64;
+        if len == 0 {
+            return Err("빈 이미지는 전송하지 않습니다".into());
+        }
         if len > MAX_DOWNLOAD {
             return Err(format!("이미지가 너무 큽니다({len}바이트 > {MAX_DOWNLOAD})"));
         }
@@ -171,8 +203,9 @@ impl<T: FastbootTransport> FastbootDevice<T> {
     pub fn flash(&mut self, partition: &str, image: &[u8]) -> Result<(), String> {
         validate_partition(partition)?;
         // max-download-size 확인(알 수 없으면 상한만)
-        if let Ok(Some(max)) = self.getvar("max-download-size") {
-            let cap = parse_size(&max).unwrap_or(MAX_DOWNLOAD);
+        if let Some(max) = self.getvar("max-download-size")? {
+            let cap = parse_size(&max).filter(|n| *n > 0)
+                .ok_or("기기 다운로드 상한을 해석할 수 없습니다")?;
             if image.len() as u64 > cap {
                 return Err(format!(
                     "이미지({}바이트)가 기기 다운로드 상한({cap}바이트)을 넘습니다",
@@ -192,15 +225,8 @@ impl<T: FastbootTransport> FastbootDevice<T> {
             "bootloader" => "reboot-bootloader",
             other => return Err(format!("알 수 없는 재부팅 대상: {other}")),
         };
-        // 재부팅은 응답이 없을 수 있다 — Ok이면 좋고, 타임아웃이면 성공으로 본다(USB가 끊기며 프레임이 안 옴)
-        match self.command(cmd) {
-            Ok(_) => Ok(()),
-            Err(e) if e.contains("시간 초과") => {
-                (self.on_log)("[재부팅] 응답 없음(정상 — USB 연결이 끊어짐)".into());
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
+        // FAIL/DATA/타임아웃은 성공 확인이 아니다.
+        self.expect_ok(cmd).map(|_| ())
     }
 
     /// 연결 해제(인터페이스 반납은 Drop)
@@ -249,6 +275,7 @@ pub mod fake {
 
     #[derive(Debug, Clone)]
     pub enum Frame {
+        Raw(&'static [u8]),
         Ok(&'static str),
         Fail(&'static str),
         Info(&'static str),
@@ -286,6 +313,11 @@ pub mod fake {
                 return Err("fastboot 응답 시간 초과".into());
             };
             let (status, payload): ([u8; 4], String) = match frame {
+                Frame::Raw(bytes) => {
+                    if bytes.len() > buf.len() { return Err("프레임이 너무 큽니다".into()); }
+                    buf[..bytes.len()].copy_from_slice(bytes);
+                    return Ok(bytes.len());
+                }
                 Frame::Ok(v) => (*b"OKAY", v.to_string()),
                 Frame::Fail(v) => (*b"FAIL", v.to_string()),
                 Frame::Info(v) => (*b"INFO", v.to_string()),
@@ -337,19 +369,95 @@ mod tests {
             Frame::Info("(bootloader)  version-bootloader: 1.0"),
             Frame::Info("(bootloader) unlocked: yes"),
             Frame::Info("current-slot: a"),
+            Frame::Info("slot-successful:a: yes"),
+            Frame::Info("slot-retry-count:b:3"),
             Frame::Ok(""),
         ]);
         let vars = d.getvar_all().unwrap();
         assert_eq!(vars.get("version-bootloader").map(String::as_str), Some("1.0"));
         assert_eq!(vars.get("unlocked").map(String::as_str), Some("yes"));
         assert_eq!(vars.get("current-slot").map(String::as_str), Some("a"));
-        assert_eq!(logs.lock().unwrap().len(), 4); // > getvar:all + INFO 3 (종결 OKAY는 로그 없음)
+        assert_eq!(vars.get("slot-successful:a").map(String::as_str), Some("yes"));
+        assert_eq!(vars.get("slot-retry-count:b").map(String::as_str), Some("3"));
+        assert_eq!(logs.lock().unwrap().len(), 6);
     }
 
     #[test]
     fn single_getvar_fail_is_none() {
         let (mut d, _) = dev_with(vec![Frame::Fail("no value")]);
         assert_eq!(d.getvar("nonexistent").unwrap(), None);
+    }
+
+    #[test]
+    fn unknown_unlock_state_cannot_be_mistaken_for_locked() {
+        for frame in [Frame::Timeout, Frame::Fail("unsupported"), Frame::Ok(""), Frame::Ok("unknown")] {
+            let (mut d, _) = dev_with(vec![frame]);
+            assert!(d.unlocked().is_err());
+        }
+        let (mut d, _) = dev_with(vec![Frame::Ok("no")]);
+        assert!(!d.unlocked().unwrap());
+        let (mut d, _) = dev_with(vec![Frame::Ok("yes")]);
+        assert!(d.unlocked().unwrap());
+    }
+
+    #[test]
+    fn fastbootd_and_unknown_mode_cannot_pass_bootloader_gate() {
+        for frame in [Frame::Ok("yes"), Frame::Fail("unknown variable"), Frame::Timeout, Frame::Ok("")] {
+            let (mut d, _) = dev_with(vec![frame]);
+            assert!(d.ensure_bootloader().is_err());
+        }
+        let (mut d, _) = dev_with(vec![Frame::Ok("no")]);
+        d.ensure_bootloader().unwrap();
+    }
+
+    #[test]
+    fn identifier_getvar_does_not_log_the_value() {
+        let (mut d, logs) = dev_with(vec![Frame::Ok("AB12345678")]);
+        assert_eq!(d.getvar("serialno").unwrap().as_deref(), Some("AB12345678"));
+        assert!(!logs.lock().unwrap().iter().any(|s| s.contains("AB12345678")));
+    }
+
+    #[test]
+    fn transport_failure_or_bad_limit_aborts_before_download() {
+        for frame in [Frame::Timeout, Frame::Ok("invalid"), Frame::Ok("0")] {
+            let (mut d, _) = dev_with(vec![frame]);
+            assert!(d.flash("boot_a", b"image").is_err());
+            assert_eq!(d.transport.sent_cmds, ["getvar:max-download-size"]);
+            assert!(d.transport.sent_data.is_empty());
+        }
+    }
+
+    #[test]
+    fn empty_download_does_not_send_commands() {
+        let (mut d, _) = dev_with(vec![]);
+        assert!(d.download(&[]).is_err());
+        assert!(d.transport.sent_cmds.is_empty());
+    }
+
+    #[test]
+    fn malformed_data_frames_never_send_payload() {
+        for raw in [b"DATA1".as_slice(), b"DATA00000004 ", b"DATAzzzzzzzz", b"XYZ!", b"OK"] {
+            let (mut d, _) = dev_with(vec![Frame::Raw(raw)]);
+            assert!(d.download(b"data").is_err());
+            assert!(d.transport.sent_data.is_empty());
+        }
+    }
+
+    #[test]
+    fn text_progress_does_not_interrupt_the_command() {
+        let (mut d, logs) = dev_with(vec![Frame::Raw(b"TEXTworking"), Frame::Ok("yes")]);
+        assert!(d.unlocked().unwrap());
+        assert!(logs.lock().unwrap().iter().any(|s| s == "working"));
+    }
+
+    #[test]
+    fn exactly_256_info_frames_allow_the_terminal_response() {
+        let mut frames = vec![Frame::Info("progress"); MAX_INFO_FRAMES];
+        frames.push(Frame::Ok("yes"));
+        let (mut d, _) = dev_with(frames.clone());
+        assert_eq!(d.getvar("unlocked").unwrap().as_deref(), Some("yes"));
+        let (mut d, _) = dev_with(frames);
+        d.getvar_all().unwrap();
     }
 
     #[test]
@@ -441,11 +549,13 @@ mod tests {
     }
 
     #[test]
-    fn reboot_treats_timeout_as_success() {
-        let (mut d, logs) = dev_with(vec![Frame::Timeout]);
-        d.reboot("os").unwrap(); // 타임아웃 → 성공 간주(USB 끊김)
-        let l = logs.lock().unwrap();
-        assert!(l.iter().any(|x| x.contains("정상")));
+    fn reboot_requires_okay() {
+        for frame in [Frame::Timeout, Frame::Fail("denied"), Frame::Data(Some(4))] {
+            let (mut d, _) = dev_with(vec![frame]);
+            assert!(d.reboot("os").is_err());
+        }
+        let (mut d, _) = dev_with(vec![Frame::Ok("")]);
+        d.reboot("os").unwrap();
     }
 
     #[test]

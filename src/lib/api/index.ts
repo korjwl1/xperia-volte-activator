@@ -1,10 +1,11 @@
 // 백엔드 facade — 데스크톱(Tauri) Rust 명령 우선, 브라우저 개발은 mock 폴백
 // adb 질의는 전부 백엔드(src-tauri/src/adb.rs)에서 수행 — 프론트/미들웨어에는 adb 코드 없음
-// 실쓰기(백업/플래싱/EFS)는 항상 mock — 실기기에는 영향 없음
+// 단계별 실행 플래그는 data/runMode.ts에서 관리. fastboot 쓰기/재부팅은 facade에서도 차단.
 // 컴포넌트에서 @tauri-apps/api 직접 import 금지.
 
 import type { AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FastbootVars, FirmwareResult, FirmwareVersions, RestoreOutcome, SettingsOverview, SmsIeOutcome, UnlockResult } from "$lib/types";
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
+import { REAL_STEPS } from "$lib/data/runMode";
 import { classifyApp, SAMPLE_FLAGS, type AppFlag } from "$lib/data/appRules";
 
 // ── Tauri 백엔드 경유 (데스크톱 빌드) ──
@@ -99,7 +100,7 @@ export interface Api {
   fastbootUnlock(code: string, confirm: boolean): Promise<{ ok: true; value: UnlockResult } | { ok: false; error: string }>;
   /** 부트로더 리락 — oem lock 후 확인 */
   fastbootLock(confirm: boolean): Promise<{ ok: true; value: UnlockResult } | { ok: false; error: string }>;
-  /** fastboot 재부팅 — os | bootloader (응답 없음=USB 끊김은 성공 간주) */
+  /** fastboot 재부팅 — os | bootloader (OKAY 확인 시 성공) */
   fastbootReboot(target: "os" | "bootloader"): Promise<boolean>;
   /** fastboot 로그 이벤트 구독 (INFO 프레임·명령·민감값 마스킹) */
   onFastbootLog(cb: (line: string) => void): Promise<() => void>;
@@ -273,14 +274,17 @@ const hybridApi: Api = {
   },
 
   async fastbootUnlock(code, confirm) {
+    if (!REAL_STEPS.fastboot) return { ok: false, error: "fastboot 실전 실행이 비활성화되어 있습니다" };
     return await invokeResult<UnlockResult>("fastboot_unlock", { code, confirm });
   },
 
   async fastbootLock(confirm) {
+    if (!REAL_STEPS.fastboot) return { ok: false, error: "fastboot 실전 실행이 비활성화되어 있습니다" };
     return await invokeResult<UnlockResult>("fastboot_lock", { confirm });
   },
 
   async fastbootReboot(target) {
+    if (!REAL_STEPS.fastboot) return false;
     return (await invokeResult<null>("fastboot_reboot", { target })).ok;
   },
 
