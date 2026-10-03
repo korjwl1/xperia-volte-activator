@@ -2,7 +2,10 @@
 //! 실기기 테스트 금지(사용자 승인 2026-10-03) 조건에서 엔진 전 과정을 검증한다.
 //! 이 파일은 cfg(test)에서만 컴파일된다(제품 빌드에 포함되지 않음).
 
-use adb_client::{ADBDeviceExt, ADBListItem, ADBListItemType, AdbStatResponse, RebootType, RemountInfo, RustADBError};
+use adb_client::{
+    ADBDeviceExt, ADBListItem, ADBListItemType, ADBStatExtendedResponse, ADBStatMapping, AdbStatResponse,
+    RebootType, RemountInfo, RustADBError,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::Path;
@@ -22,6 +25,8 @@ pub struct FakeADBDevice {
     symlinks: BTreeMap<String, String>,
     /// list()가 실패하게 만들 경로
     pub fail_list: BTreeSet<String>,
+    /// list()가 보고할 크기 덮어쓰기 — SYNC u32 wrap 시뮬레이션
+    pub list_size_override: BTreeMap<String, u32>,
     /// pull()이 실패하게 만들 경로
     pub fail_pull: BTreeSet<String>,
     /// shell_command 응답 규칙 — 명령 시작부 일치 시 텍스트 반환
@@ -156,6 +161,34 @@ impl ADBDeviceExt for FakeADBDevice {
         }
     }
 
+    /// 셸 파식 대신 메모리 기록에서 직접 구성 — 64비트 실제 크기 제공(u32 wrap 검증용)
+    fn stat_extended(
+        &mut self,
+        remote_path: &dyn AsRef<str>,
+    ) -> Result<Option<ADBStatExtendedResponse>, RustADBError> {
+        let path = remote_path.as_ref();
+        match self.files.get(path) {
+            Some(rec) => {
+                let mk = || ADBStatMapping { id: 1023, name: "media_rw".into() };
+                Ok(Some(ADBStatExtendedResponse {
+                    path: path.to_string(),
+                    size: rec.data.len() as u64,
+                    blocks: (rec.data.len() as u64).div_ceil(4096),
+                    io_blocks: 4096,
+                    inode: 12345,
+                    links: 1,
+                    perms: rec.perm as u64,
+                    user: mk(),
+                    group: mk(),
+                    atime: rec.mtime,
+                    mtime: rec.mtime,
+                    ctime: rec.mtime,
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
     fn pull(&mut self, source: &dyn AsRef<str>, output: &mut dyn Write) -> Result<(), RustADBError> {
         let path = source.as_ref();
         if self.fail_pull.contains(path) {
@@ -211,11 +244,16 @@ impl ADBDeviceExt for FakeADBDevice {
         // 파일
         for (p, rec) in &self.files {
             if Self::parent_of(p) == dir {
+                let size = self
+                    .list_size_override
+                    .get(p)
+                    .copied()
+                    .unwrap_or(rec.data.len() as u32);
                 out.push(ADBListItemType::File(ADBListItem {
                     name: Self::name_of(p).to_string(),
                     time: rec.mtime,
                     permissions: 0o100000 | rec.perm,
-                    size: rec.data.len() as u32,
+                    size,
                 }));
             }
         }
