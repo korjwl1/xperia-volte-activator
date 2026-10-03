@@ -25,7 +25,6 @@ impl PullFile {
 
 /// 진행 보고 — mod.rs에서 이벤트로 변환(쓰로틀 포함)
 pub struct PullProgress<'a> {
-    pub item_id: &'a str,
     pub file: &'a str,
     pub files_done: u64,
     pub files_total: u64,
@@ -44,6 +43,7 @@ impl CancelFlag {
     pub fn from_shared(arc: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
         Self(arc)
     }
+    #[cfg(test)]
     pub fn set(&self) {
         self.0.store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -125,7 +125,6 @@ pub fn pull_item_files(
             rec.errors.push(format!("{}: {}", f.remote, entry.error.clone().unwrap_or_default()));
         }
         on_progress(PullProgress {
-            item_id,
             file: &f.remote,
             files_done: (i + 1) as u64,
             files_total: files.len() as u64,

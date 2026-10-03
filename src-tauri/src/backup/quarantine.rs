@@ -22,7 +22,19 @@ impl Quarantine {
     pub fn new(backup_root: &Path) -> Result<Self, String> {
         let dir = backup_root.join("quarantine");
         std::fs::create_dir_all(&dir).map_err(|e| format!("quarantine 폴더 생성 실패: {e}"))?;
-        Ok(Self { dir, builder: None, segment: 0, written: 0 })
+        // 이어서 백업할 때 이전 실행의 세그먼트(완료된 항목의 격리 파일)를 덮어쓰지 않도록 다음 번호부터
+        let segment = std::fs::read_dir(&dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter_map(|e| {
+                        let n = e.file_name().to_string_lossy().to_string();
+                        n.strip_prefix("seg")?.strip_suffix(".tar")?.parse::<usize>().ok()
+                    })
+                    .max()
+                    .map_or(0, |m| m + 1)
+            })
+            .unwrap_or(0);
+        Ok(Self { dir, builder: None, segment, written: 0 })
     }
 
     fn seg_path(&self) -> PathBuf {

@@ -75,6 +75,10 @@ export interface Api {
   firmwareDirCheck(dir: string, partition: string): Promise<{ ok: true; value: { file: string; imageBytes: number } } | { ok: false; error: string }>;
   /** 작업 중 PC 보호 — 절전 방지 + Windows 종료 방지 (작업 중에만 켬) */
   runGuard(active: boolean, reason?: string): Promise<boolean>;
+  /** 연락처 복원 확인 — 백업한 연락처 수와 지금 폰의 연락처 수, 조회 실패 시 null */
+  contactsRestoreCheck(serial: string | undefined, dir: string): Promise<{ backedUp: number; onDevice: number } | null>;
+  /** 백업 시작 — 지정 폴더 아래 시작 시각 기준 폴더 생성, 절대 경로 반환 */
+  backupPrepare(serial: string | undefined, dest: string): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
   /** 백업 실행(자동 항목) — 진행은 onBackupProgress로. 실패 시 error 문구 */
   backupRun(serial: string | undefined, items: string[], dest: string, resumeDir?: string): Promise<{ ok: true; value: BackupSummary } | { ok: false; error: string }>;
   /** 진행 중 백업 취소 요청 */
@@ -213,6 +217,14 @@ const hybridApi: Api = {
 
   async runGuard(active, reason) {
     return (await invokeResult<null>("run_guard", { active, reason: reason ?? null })).ok;
+  },
+
+  async contactsRestoreCheck(serial, dir) {
+    return await invokeBackend<{ backedUp: number; onDevice: number }>("contacts_restore_check", { serial: serial ?? null, dir });
+  },
+
+  async backupPrepare(serial, dest) {
+    return await invokeResult<string>("backup_prepare", { serial: serial ?? null, dest });
   },
 
   async backupRun(serial, items, dest, resumeDir) {

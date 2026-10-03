@@ -68,7 +68,7 @@ export type StepKind =
 export type ManualId =
   | "usb-debug" | "su-grant" | "magisk-patch" | "oem-toggle" | "mode-wait" | "ims-check"
   | "unlock-code" | "firmware-select" | "backup-notice" | "flash-mode" | "ims-precheck"
-  | "smsie-export" | "smsie-import";
+  | "smsie-export" | "smsie-import" | "contacts-import";
 
 /** 수동 개입 모달 내용 — input이 있으면 입력 완료 전까지 [완료] 비활성 */
 export interface ManualPrompt {

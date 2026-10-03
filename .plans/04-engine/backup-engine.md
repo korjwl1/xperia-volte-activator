@@ -1,6 +1,6 @@
 # 백업·복구 엔진 (M3) — 구현 설계
 
-status: implemented (실기기 검증 대기 — 단위 테스트 52통과, REAL_STEPS 기본 꺼짐)
+status: implemented — 백업 실기기 검증 완료(2026-10-03, 읽기 전용), 복구는 모의 실행 검증·실기기 검증 대기
 
 - 상위 정책: `../tasks/plan.md`(v4) §5·§6·§9·§12.5, `../tasks/recovery.md` 전체
 - 승인 배경 (사용자 승인 2026-10-03): **실전 Rust 코드 작성 허용. 단 실기기 테스트는 계속 금지** —
@@ -177,3 +177,19 @@ APK 재설치(`install()`) → 파일 tar 스트리밍(fs-rest → 기명 폴더
 1. **복원 = tar 스트리밍 통일** — adb_client push는 mtime 미보존(0777 고정)이므로, 폴더(항목) 단위 tar를 기기 셸 `tar -xf -`로 스트리밍해 mtime·원본 이름 보존. quarantine 복원과 같은 구현 재사용.
 2. **통화·문자·연락처 = 하이브리드(C안)** — 연락처는 adb vCard 직접(자동·완결 게이트 포함), 문자·통화기록은 sms-ie 세미수동. 전 항목 실측 전까지 "검증 대기" 배지.
 3. **실전 실행 플래그 기본 꺼짐** — 데스크톱 빌드에서도 시뮬레이션이 기본. `REAL_STEPS` 플래그 전환으로만 실동작.
+
+
+## 실기기 검증 (2026-10-03, XQ-DQ44 / Android 15 — 사용자 요청, 폰에서 읽기만)
+
+- 대상: 설정·APK·연락처·Download·Music·Documents·Recordings·그 외 파일(사진·영상·앱 데이터 40GB·문자·통화 제외)
+- 결과: 460파일 · 11.2GB · 682초 — 파일 455개 크기·해시·수정 시각 재대조 문제 0, APK 323개 zip 정상, 연락처 295명 vCard(전화 312건) 폰과 일치
+- 이어서 백업: 같은 폴더로 재실행 → 끝난 7항목 건너뛰고 미완료(연락처)만 다시 받아 2초 만에 완결
+- 복원 모의 실행(live_restore_dryrun): 실제 백업 폴더를 가짜 기기로 복원 — tar 133개 파일 이름·크기·해시·수정 시각, APK 321개 바이트, 연락처 파일, 설정 명령 대조 문제 0
+- 실측으로 고친 것
+  - 연락처: 셸에서 contacts/<id>/as_vcard는 "No files supported by provider"로 읽을 수 없음 → raw_contact_entities(전원·전체 행)를 읽어 vCard 3.0 생성.
+    포함: 이름·전화·이메일·회사/직함·주소·메모·별명·웹사이트·생일 / 미포함: 사진·그룹(라벨)·메신저
+  - 설정 화이트리스트: stay_on_while_plugged_in은 global 네임스페이스
+- 백업 폴더: 시작 시 backup_prepare가 지정 폴더 아래 backup-<시각>-<모델> 생성 후 절대 경로 반환 → 진행 기록(journal backupDir)에 먼저 저장.
+  끊기면 같은 폴더로 이어서: 끝난 항목 건너뜀, 미완료 항목은 이전 파일을 지우고 다시 받아 덮어씀, 격리 세그먼트 번호는 이어서
+- 연락처 복원: 복구 후 "연락처 가져오기" 수동 단계(연락처 앱 → 설정 → 가져오기 → .vcf → contacts-restore.vcf) + 폰 연락처 수 ≥ 백업 수 확인(contacts_restore_check)
+- 실행: XVOLTE_LIVE_BACKUP_DEST / _ITEMS / _RESUME 로 live_backup, XVOLTE_RESTORE_DRYRUN_DIR / XVOLTE_RESTORE_SPOOL 로 live_restore_dryrun (둘 다 #[ignore])

@@ -3,7 +3,6 @@
 //! tar 스트리밍: adb_client `exec`(명령 stdin)으로 `tar -xf - -C <dst>`에 아카이브를 흘린다 —
 //! Windows 파일시스템을 거치지 않고 기기 셸 tar가 mtime·원본 이름을 복원한다(§6-3).
 
-use crate::backup::model::{ItemKind, ItemStatus};
 use crate::backup::runner::StepProgress;
 use crate::backup::{contacts, settings, smsie};
 use adb_client::ADBDeviceExt;
@@ -386,20 +385,11 @@ pub fn run_restore(
     out
 }
 
-/// manifest에서 문자·통화(smsie) 항목이 백업에 있는지 — 복구 가능 판정
-pub fn has_smsie_backup(backup_root: &Path) -> bool {
-    crate::backup::model::load_manifest(backup_root)
-        .map(|m| {
-            m.items
-                .iter()
-                .any(|i| i.kind == ItemKind::SmsIe && i.status == ItemStatus::Done && !i.artifacts.is_empty())
-        })
-        .unwrap_or(false)
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backup::model::{ItemKind, ItemStatus};
     use crate::backup::fake_device::FakeADBDevice;
     use crate::backup::model::{save_manifest_atomic, Manifest};
 
@@ -480,6 +470,126 @@ mod tests {
         assert!(d.pushed.contains_key("/sdcard/contacts-restore.vcf"));
 
         assert!(out.failures.is_empty(), "failures: {failures:?}", failures = out.failures);
+    }
+
+    /// 실제 백업 폴더로 복원 모의 실행 — 폰 대신 가짜 기기가 받은 스트림을 백업 manifest와 대조한다(폰에 쓰지 않음).
+    /// 실행: XVOLTE_RESTORE_DRYRUN_DIR=<백업 폴더> XVOLTE_RESTORE_SPOOL=<임시 폴더> cargo test --lib -- --ignored live_restore_dryrun --nocapture
+    #[test]
+    #[ignore]
+    fn live_restore_dryrun() {
+        use crate::backup::model::load_manifest;
+        use sha2::{Digest, Sha256};
+        use std::collections::HashMap;
+        let root = PathBuf::from(std::env::var("XVOLTE_RESTORE_DRYRUN_DIR").expect("XVOLTE_RESTORE_DRYRUN_DIR 필요"));
+        let spool = PathBuf::from(std::env::var("XVOLTE_RESTORE_SPOOL").expect("XVOLTE_RESTORE_SPOOL 필요"));
+        std::fs::create_dir_all(&spool).unwrap();
+        let m = load_manifest(&root).unwrap();
+        let items: Vec<String> = m.items.iter().filter(|i| i.status == ItemStatus::Done).map(|i| i.id.clone()).collect();
+        eprintln!("[모의] 복원 항목: {items:?}");
+
+        let mut d = FakeADBDevice::new();
+        d.spool_dir = Some(spool.clone());
+        d.answer_shell("pm install-create", "Success: created install session [1]\n");
+        d.answer_shell("pm install-commit", "Success\n");
+        d.answer_shell("pm install-abandon", "");
+        d.answer_shell("settings put", "");
+        d.answer_shell("dumpsys deviceidle whitelist +", "");
+        let sink: RestoreSink = Arc::new(|_| {});
+        let out = run_restore(&mut d, &root, &items, &sink);
+        eprintln!("[모의] 로그 {}건, 실패 {}건", out.logs.len(), out.failures.len());
+        for f in &out.failures {
+            eprintln!("[실패] {f}");
+        }
+
+        let sha_file = |p: &Path| -> String {
+            let mut h = Sha256::new();
+            std::io::copy(&mut std::fs::File::open(p).unwrap(), &mut h).unwrap();
+            hex::encode(h.finalize())
+        };
+        let mut problems: Vec<String> = Vec::new();
+
+        // 1) 파일 항목: tar 안의 (이름 → 크기·해시·mtime)이 manifest와 같은지
+        let mut tar_files: HashMap<String, (u64, String, u64)> = HashMap::new();
+        for (cmd, path) in d.spooled.iter().filter(|(c, _)| c.starts_with("tar -xf - -C ")) {
+            let dst = cmd.trim_start_matches("tar -xf - -C ").trim().to_string();
+            let mut ar = tar::Archive::new(std::fs::File::open(path).unwrap());
+            for e in ar.entries().unwrap() {
+                let mut e = e.unwrap();
+                let name = e.path().unwrap().to_string_lossy().to_string();
+                let size = e.header().size().unwrap();
+                let mtime = e.header().mtime().unwrap();
+                let mut h = Sha256::new();
+                std::io::copy(&mut e, &mut h).unwrap();
+                let full = if dst == "/" { format!("/{name}") } else { format!("{dst}/{name}") };
+                tar_files.insert(full, (size, hex::encode(h.finalize()), mtime));
+            }
+        }
+        let mut checked = 0usize;
+        // 파일로 푸는 항목만 (APK는 설치 세션, 연락처는 파일 전송 후 가져오기 — 아래에서 따로 대조)
+        for it in m.items.iter().filter(|i| i.status == ItemStatus::Done && i.id != "apk" && i.id != "contacts") {
+            for e in it.entries.iter().filter(|e| e.error.is_none()) {
+                checked += 1;
+                match tar_files.get(&e.remote) {
+                    None => problems.push(format!("복원 스트림에 없음: {}", e.remote)),
+                    Some((size, sha, mtime)) => {
+                        if *size != e.size {
+                            problems.push(format!("크기 다름: {} ({} vs {})", e.remote, size, e.size));
+                        }
+                        if Some(sha.as_str()) != e.sha256.as_deref() {
+                            problems.push(format!("해시 다름: {}", e.remote));
+                        }
+                        if *mtime != e.mtime as u64 {
+                            problems.push(format!("수정 시각 다름: {} ({} vs {})", e.remote, mtime, e.mtime));
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("[모의] 파일 대조 {checked}개 — tar 항목 {}개", tar_files.len());
+
+        // 2) APK: 설치 세션으로 흘린 바이트가 백업 파일·manifest 해시와 같은지
+        if let Some(apk_item) = m.items.iter().find(|i| i.id == "apk" && i.status == ItemStatus::Done) {
+            let by_local: HashMap<String, &str> =
+                apk_item.entries.iter().filter_map(|e| Some((e.local.clone(), e.sha256.as_deref()?))).collect();
+            let mut expected: Vec<PathBuf> = Vec::new();
+            let mut pkgs: Vec<PathBuf> = std::fs::read_dir(root.join("apks")).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).collect();
+            pkgs.sort();
+            for p in pkgs {
+                let mut apks: Vec<PathBuf> = std::fs::read_dir(&p).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|x| x.extension().is_some_and(|e| e == "apk")).collect();
+                apks.sort();
+                expected.extend(apks);
+            }
+            let streams: Vec<&PathBuf> = d.spooled.iter().filter(|(c, _)| c.starts_with("pm install-write")).map(|(_, p)| p).collect();
+            if streams.len() != expected.len() {
+                problems.push(format!("APK 전송 수 다름: {} vs {}", streams.len(), expected.len()));
+            }
+            for (s, local) in streams.iter().zip(expected.iter()) {
+                let rel = local.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+                let got = sha_file(s);
+                if by_local.get(&rel).copied() != Some(got.as_str()) {
+                    problems.push(format!("APK 해시 다름: {rel}"));
+                }
+            }
+            eprintln!("[모의] APK 대조 {}개", streams.len());
+        }
+
+        // 3) 연락처: 폰으로 보낸 파일이 백업 vCard와 같은지
+        if let Some(c) = m.items.iter().find(|i| i.id == "contacts" && i.status == ItemStatus::Done) {
+            let want = c.entries.first().and_then(|e| e.sha256.clone());
+            let got = d.pushed.get("/sdcard/contacts-restore.vcf").map(|b| hex::encode(Sha256::digest(b)));
+            if want.is_none() || want != got {
+                problems.push("연락처 전송 파일이 백업과 다름".into());
+            }
+        }
+        // 4) 설정
+        let puts = d.shell_calls.iter().filter(|c| c.starts_with("settings put")).count();
+        eprintln!("[모의] 설정 복원 명령 {puts}건, 연락처 전송 {}", d.pushed.keys().cloned().collect::<Vec<_>>().join(", "));
+
+        let _ = std::fs::remove_dir_all(&spool);
+        for p in problems.iter().take(40) {
+            eprintln!("[문제] {p}");
+        }
+        assert!(problems.is_empty(), "복원 모의 문제 {}건", problems.len());
     }
 
     #[test]

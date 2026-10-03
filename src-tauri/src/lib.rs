@@ -47,6 +47,8 @@ pub fn run() {
             fastboot::fastboot_lock,
             fastboot::fastboot_flash,
             fastboot::fastboot_reboot,
+            backup::backup_prepare,
+            backup::contacts_restore_check,
             backup::backup_run,
             backup::backup_cancel,
             backup::backup_manifest_check,
