@@ -129,14 +129,29 @@ invoke('fastboot_getvar', { serial }) → Record<string,string>              // 
 // 파괴적: fastboot_oem_unlock / fastboot_oem_lock — 실행 전 confirm 인자 필수
 ```
 
-## backup (M3)
+## backup (M3 — 설계 `.plans/04-engine/backup-engine.md`, 사용자 승인 2026-10-03)
 
 ```ts
-invoke('backup_scan_items', { serial }) → BackupGroup[]     // 분류기(§6-4): allowBackup+폴더+큐레이션
-invoke('backup_estimate', { groups, path }) → Estimate      // 항목별/합계 용량
-invoke('backup_run', { groups, path }) → void               // 이벤트: 'backup:progress' {item, bytes, total}
-invoke('restore_run', { backupDir }) → void                 // 이벤트: 'restore:progress'
+invoke('backup_scan_items', { serial, items: string[] }) → { items: { id, files, bytes, ok }[] }
+// 사전 점검·재개 판정 — 항목별 파일 수·바이트 (완결 게이트 표시용)
+invoke('backup_run', { serial, items: string[], dest }) → BackupSummary
+// 실행: 항목별 열거 → pull(sha256 동시 계산) → manifest 원자 저장 → quarantine 격리 → 설정·연락처 덤프 → sms-ie 산출물 수령
+// 이벤트 'backup:progress': { itemId, phase: 'scan'|'copy'|'quarantine'|'settings'|'contacts'|'smsie',
+//   file?, filesDone, filesTotal, bytesDone, bytesTotal }
+// BackupSummary = { complete, files, bytes, errors: string[], dir, manifestPath }
+//   complete = 전수 열거 완료 + 오류 0 (§6-2) — 파괴 단계 게이트의 입력
+invoke('backup_manifest_check', { dir }) → BackupSummary | null   // 기존 백업 폴더 완결 검사 (백업 스킵 시 게이트용)
+invoke('restore_run', { serial, dir, items: string[] }) → RestoreSummary
+// 순서(§6-5): APK 재설치 → tar 스트리밍 복원(mtime 보존, quarantine 포함) → 설정 화이트리스트 7키(adb_enabled 제외) →
+//   deviceidle whitelist → 연락처·sms-ie 복원(수동 개입 포함)
+// 이벤트 'restore:progress': { itemId, phase: 'apk'|'files'|'quarantine'|'settings'|'contacts'|'smsie',
+//   file?, filesDone, filesTotal, bytesDone, bytesTotal }
 ```
+
+- 폐기: `backup_estimate`(용량은 storage_sizes 실측이 담당), 구안 `backup_scan_items → BackupGroup[]`(항목 정의는 프론트 mock이 단일 공급원)
+- 문자·통화 기록은 SMS Import/Export(tmo1/sms-ie) 세미수동 — 설치·pm grant·cmd role·파일 전송 자동, 앱 내 내보내기/가져오기는 수동 개입 단계(ManualPrompt)
+- 연락처는 adb 셸 vCard(as_vcard) 직접 수집 — 자동·완결 게이트 포함
+- 항목 id는 mock/apps.ts의 id 그대로(settings-all, apk, app-data, dcim, download, pictures, movies, music, documents, recordings, fs-rest, calllog, sms, contacts)
 
 ## EFS (M5)
 
