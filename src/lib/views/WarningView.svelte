@@ -1,9 +1,16 @@
 <script lang="ts">
   import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "$lib/components/ui/card";
   import { Checkbox } from "$lib/components/ui/checkbox";
-  import { Signal, TriangleAlert, OctagonX } from "@lucide/svelte/icons";
+  import { Signal, TriangleAlert, OctagonX, ExternalLink, Smartphone } from "@lucide/svelte/icons";
   import { wizard } from "$lib/stores/wizard.svelte";
-  import { omdInfo, omdCommonGuide } from "$lib/data/omd";
+  import { api } from "$lib/api";
+  import { omdInfo, omdCommonGuide, omdDisclaimer, type OmdRole } from "$lib/data/omd";
+
+  const roleClass: Record<OmdRole, string> = {
+    기본: "bg-primary/10 text-primary",
+    대안: "bg-warning-container text-warning",
+    예외: "bg-muted text-muted-foreground",
+  };
 </script>
 
 <div class="flex-1 overflow-y-auto flex">
@@ -16,34 +23,56 @@
           OMD 등록 확인
         </CardTitle>
         <CardDescription>
-          VoLTE 패치 전에 사용할 SIM의 통신사에 외산폰 VoLTE(OMD) 등록이 되어 있어야 합니다
+          사용할 통신사와 망(5G/LTE)에 따라 외산폰 VoLTE(OMD) 등록이 필요할 수 있습니다
         </CardDescription>
       </CardHeader>
       <CardContent class="space-y-3">
         <p class="text-[13px] leading-relaxed">{omdCommonGuide}</p>
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div class="space-y-3">
           {#each omdInfo as o (o.carrier)}
-            <div class="rounded-xl border p-4 space-y-2">
-              <div class="text-sm font-bold">{o.label}</div>
-              <div class="space-y-1">
-                {#each o.codes as c (c.net)}
-                  <div class="text-[11px]">
-                    <span class="text-muted-foreground">{c.net}</span>
-                    <div class="font-mono text-[12px] font-medium break-all">{c.code}</div>
+            <div class="rounded-xl border p-4 space-y-3">
+              <div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <span class="text-sm font-bold">{o.label}</span>
+                <span class="text-[12px] text-muted-foreground">{o.summary}</span>
+              </div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {#each o.codes as c (c.code)}
+                  <div class="rounded-lg bg-muted/50 px-3 py-2 space-y-1">
+                    <div class="flex items-start justify-between gap-2">
+                      <span class="font-mono text-[12.5px] font-semibold break-all">{c.code}</span>
+                      <span class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium {roleClass[c.role]}">{c.role}</span>
+                    </div>
+                    <div class="text-[11px] text-muted-foreground">{c.net} · {c.sim}{c.when ? ` — ${c.when}` : ""}</div>
+                    {#if c.aliases?.length}
+                      <div class="text-[11px] text-muted-foreground">다른 표기: <span class="font-mono">{c.aliases.join(", ")}</span></div>
+                    {/if}
+                    <button type="button" class="inline-flex items-center gap-1 text-[11px] text-primary hover:underline" onclick={() => api.openExternal(c.source)}>
+                      <ExternalLink size={11} />출처
+                    </button>
                   </div>
                 {/each}
               </div>
+              {#if o.simPlacement}
+                <div class="flex items-start gap-1.5 text-[12px]">
+                  <Smartphone size={13} class="mt-0.5 shrink-0 text-muted-foreground" />
+                  <span><b class="font-medium">등록 시 SIM 위치</b> — {o.simPlacement}</span>
+                </div>
+              {/if}
+              {#each o.notes as n, i (i)}
+                <p class="text-[11px] text-muted-foreground leading-relaxed">
+                  * {n.text}
+                  {#if n.source}
+                    <button type="button" class="ml-1 text-primary hover:underline" onclick={() => api.openExternal(n.source!)}>출처</button>
+                  {/if}
+                </p>
+              {/each}
             </div>
           {/each}
         </div>
-        <div class="space-y-0.5">
-          {#each omdInfo.filter((o) => o.footnote) as o (o.carrier)}
-            <p class="text-[11px] text-muted-foreground leading-relaxed">* {o.footnote}</p>
-          {/each}
-        </div>
+        <p class="text-[11px] text-muted-foreground leading-relaxed">{omdDisclaimer}</p>
         <label class="flex items-center gap-2.5 rounded-lg border px-4 py-2.5 cursor-pointer {wizard.omdAck ? 'border-primary/30 bg-primary/5' : 'border-border'}">
           <Checkbox checked={wizard.omdAck} onCheckedChange={(v: boolean | "indeterminate") => (wizard.omdAck = v === true)} />
-          <span class="text-[13px] font-medium">사용할 SIM의 OMD 등록을 완료했습니다</span>
+          <span class="text-[13px] font-medium">사용할 망의 OMD 등록 조건을 확인했습니다</span>
         </label>
       </CardContent>
     </Card>

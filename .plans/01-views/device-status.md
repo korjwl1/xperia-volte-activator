@@ -31,3 +31,7 @@ SIM 줄의 VoLTE 표기: on → "VoLTE 활성화" / off → "VoLTE 비활성화"
 
 ## 비주얼 (desktop-ui 스킬)
 DeviceHero(gradient 히어로 + 폰 SVG 일러스트 + 반투명 상태 칩) / USB 정보 바(Usb 아이콘·info 컬러) / 환경검사 리스트(의미색 아이콘 배지 + tonal 컨테이너, sticky 헤더).
+
+- [작업 시작](wizard.startSession): 기기를 고정. 이전과 다른 기기면 SIM·펌웨어 선택, 동의, 입력값(언락 코드·펌웨어)을 새로 시작
+- 화면을 떠난 뒤 도착한 기기 조회 결과는 버림 — 작업 중 선택 기기가 바뀌지 않음
+- 모드 감지(부트로더·플래시)는 Sony USB 장치가 정확히 1대일 때만 통과 — 여러 대면 분리 안내

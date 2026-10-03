@@ -133,15 +133,24 @@ pub fn init(app: &AppHandle) {
 #[tauri::command]
 pub fn run_guard(app: AppHandle, active: bool, reason: Option<String>) -> Result<(), String> {
     let reason = reason.filter(|r| !r.trim().is_empty()).unwrap_or_else(|| "VoLTE 작업 진행 중".into());
-    ACTIVE.store(active, Ordering::SeqCst);
     #[cfg(windows)]
     {
-        win::power(active, &reason)?;
+        if let Err(e) = win::power(active, &reason) {
+            // 부분 적용 방지 — 켜기에 실패하면 전부 끈 상태로
+            let _ = win::power(false, "");
+            ACTIVE.store(false, Ordering::SeqCst);
+            return Err(e);
+        }
         if let Some(h) = main_hwnd(&app) {
-            app.run_on_main_thread(move || win::shutdown_block(h, active, &reason))
-                .map_err(|e| format!("종료 방지 설정 실패: {e}"))?;
+            let r = reason.clone();
+            if let Err(e) = app.run_on_main_thread(move || win::shutdown_block(h, active, &r)) {
+                let _ = win::power(false, "");
+                ACTIVE.store(false, Ordering::SeqCst);
+                return Err(format!("종료 방지 설정 실패: {e}"));
+            }
         }
     }
+    ACTIVE.store(active, Ordering::SeqCst);
     #[cfg(not(windows))]
     let _ = (app, reason);
     eprintln!("[rust] run_guard: {}", if active { "켜짐" } else { "꺼짐" });

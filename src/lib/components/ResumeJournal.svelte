@@ -27,6 +27,7 @@
     return "다음 단계를 시작하기 전에 멈췄습니다";
   });
   const lastLogs = $derived((stopStep?.logs ?? []).slice(-4));
+  const simChanged = $derived(wizard.simChangedSince(journal));
 
   const options = $derived.by(() => {
     const c = journal.config;
@@ -80,6 +81,12 @@
               {#each lastLogs as l, i (i)}<div class="truncate">{l}</div>{/each}
             </div>
           {/if}
+        </div>
+      {/if}
+
+      {#if simChanged}
+        <div class="rounded-xl border border-destructive/40 bg-danger-container/40 px-4 py-2.5 text-[12px] text-destructive">
+          작업 시작 때와 SIM 구성이 다릅니다 — SIM을 바꾸면 패치가 풀릴 수 있어, 이어서 진행하면 통신 확인을 다시 합니다.
         </div>
       {/if}
 

@@ -1,7 +1,9 @@
 <script lang="ts">
   import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "$lib/components/ui/card";
   import { Badge } from "$lib/components/ui/badge";
-  import { LoaderCircle, LockOpen, Lock } from "@lucide/svelte/icons";
+  import { LoaderCircle, LockOpen, Lock, TriangleAlert, ExternalLink } from "@lucide/svelte/icons";
+  import { modelSupport } from "$lib/data/devices";
+  import { api } from "$lib/api";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { resolveCarrier, simStateLabel, type CarrierId, type SimTarget } from "$lib/types";
 
@@ -21,6 +23,9 @@
     t.carrier = id === null ? null : resolveCarrier(id, wizard.device?.model ?? "");
     if (id !== null) wizard.volteConfig.bootloaderAction = null; // 패치를 고르면 부트로더만 작업은 해제
   }
+
+  // 기종별 지원 범위 — 기기에 따라 고정(선택에 따라 바뀌지 않음)
+  const support = $derived(modelSupport(wizard.device?.model ?? ""));
 
   // 펌웨어 버전 — 서버 조회는 기기당 1회 (읽기 전용)
   wizard.ensureFirmwareVersions();
@@ -73,6 +78,21 @@
 
 <div class="flex-1 overflow-y-auto flex">
   <div class="m-auto w-full max-w-2xl p-6 space-y-4">
+  {#if support.level !== "일반"}
+    <div class="rounded-xl border border-warning/40 bg-warning-container/40 px-4 py-3 space-y-1.5">
+      <div class="flex items-center gap-2 text-sm font-semibold">
+        <TriangleAlert size={15} class="shrink-0 text-warning" />{support.name} · {support.level}
+      </div>
+      {#each support.notes as n, i (i)}
+        <p class="text-[12px] leading-relaxed text-muted-foreground">· {n}</p>
+      {/each}
+      {#if support.source}
+        <button type="button" class="inline-flex items-center gap-1 text-[11px] text-primary hover:underline" onclick={() => api.openExternal(support.source!)}>
+          <ExternalLink size={11} />기종별 주의 사항
+        </button>
+      {/if}
+    </div>
+  {/if}
   <Card class="elev-1">
     <CardHeader>
       <CardTitle class="text-base">VoLTE 설정</CardTitle>

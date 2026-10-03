@@ -1,13 +1,13 @@
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge";
-  import { CircleCheck, LoaderCircle, ChevronUp, ChevronDown } from "@lucide/svelte/icons";
+  import { CircleCheck, LoaderCircle, ChevronUp, ChevronDown, OctagonX } from "@lucide/svelte/icons";
   import { wizard, MACRO_STEPS } from "$lib/stores/wizard.svelte";
 
   // 서브스텝 가시 창: 실행 중 기준 3개
   const subWindow = $derived.by(() => {
     if (wizard.view !== "step3" || wizard.runSteps.length === 0) return null;
     const steps = wizard.runSteps;
-    const activeIdx = steps.findIndex((s) => s.status === "running" || s.status === "manual-wait");
+    const activeIdx = steps.findIndex((s) => s.status === "running" || s.status === "manual-wait" || s.status === "failed");
     const doneCount = steps.filter((s) => s.status === "done").length;
     // 실행 중이 없고 전부 완료면 마지막 3개
     const focus = activeIdx >= 0 ? activeIdx : Math.max(0, doneCount - 1);
@@ -53,6 +53,8 @@
               <div class="flex items-center gap-1.5 text-[11px] py-0.5 {sub.status === 'running' || sub.status === 'manual-wait' ? 'text-foreground font-medium' : sub.status === 'done' ? 'text-muted-foreground' : 'text-muted-foreground/50'}">
                 {#if sub.status === "done"}
                   <CircleCheck size={11} class="text-success shrink-0" />
+                {:else if sub.status === "failed"}
+                  <OctagonX size={11} class="text-destructive shrink-0" />
                 {:else if sub.status === "running" || sub.status === "manual-wait"}
                   <LoaderCircle size={11} class="text-primary shrink-0 animate-spin" />
                 {:else}

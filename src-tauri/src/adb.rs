@@ -82,8 +82,9 @@ pub(crate) fn app_data_dir() -> Option<PathBuf> {
 }
 
 fn standard_adb_key() -> Option<PathBuf> {
+    // ANDROID_USER_HOME은 설정 폴더 자체(기본 ~/.android)를 가리킨다
     let base = std::env::var_os("ANDROID_USER_HOME")
-        .map(|h| PathBuf::from(h).join("android"))
+        .map(PathBuf::from)
         .or_else(|| std::env::var_os("USERPROFILE").map(|h| PathBuf::from(h).join(".android")))?;
     let key = base.join("adbkey");
     key.exists().then_some(key)
@@ -216,7 +217,7 @@ pub(crate) fn with_first_device<T>(
             None if ready.len() > 1 => return Err("여러 대의 기기가 연결되어 있습니다".into()),
             None => *ready.first().ok_or("연결된 기기가 없습니다")?,
         };
-        return f(&mut entry.handle());
+        return f(&mut entry.handle()).map_err(|e| scrub_serial(e, &entry.serial));
     }
 
     // 2) USB 직접 연결 — 기기 구분 수단이 없으므로 1대일 때만, serial 지정 시 연결 후 일치 확인
@@ -240,12 +241,17 @@ pub(crate) fn with_first_device<T>(
         f(dev)
     };
     let first = run(&mut guard);
-    if first.is_err() {
+    let result = if first.is_err() {
         // 커넥션이 끊겼을 수 있으므로 버리고 재연결 후 1회 재시도
         *guard = None;
-        return run(&mut guard);
-    }
-    first
+        run(&mut guard)
+    } else {
+        first
+    };
+    result.map_err(|e| match wanted {
+        Some(s) => scrub_serial(e, s),
+        None => e,
+    })
 }
 
 // ── adb 설치/연결 상태 ──
@@ -297,6 +303,15 @@ pub async fn adb_status() -> Result<AdbStatus, String> {
 // ── 기기 상태 ──
 
 /// 일련번호 부분 마스킹 — 앞 6자만 표시 (AGENTS 규칙 5, 예: AB1234****)
+/// 오류 문자열에 섞인 전체 시리얼을 마스킹 (adb 오류 "device '<serial>' not found" 등 — 로그·진행 기록 유출 방지)
+pub(crate) fn scrub_serial(e: String, serial: &str) -> String {
+    if serial.chars().count() > 6 && e.contains(serial) {
+        e.replace(serial, &mask_serial(serial))
+    } else {
+        e
+    }
+}
+
 fn mask_serial(serial: &str) -> String {
     let n = serial.chars().count();
     if n > 6 {
@@ -334,7 +349,6 @@ fn bootloader_state(flash_locked: &str, vbmeta_state: &str, rooted: bool) -> &'s
     };
     let locked = match (a, b) {
         (Some(x), Some(y)) if x == y => x,
-        (Some(x), None) | (None, Some(x)) => x,
         _ => return "unknown",
     };
     if locked && rooted {
@@ -358,19 +372,56 @@ pub(crate) fn parse_getprop(out: &str) -> HashMap<String, String> {
     map
 }
 
-/// TelephonyDebugService 덤프(필터링)에서 슬롯별 VoLTE 사용 가능 여부.
-/// 전화 앱 *#*#4636#*#* 휴대전화 정보의 IMS 상태와 같은 출처 — ImsPhone의 MmTel 음성 기능(Voice)이
-/// true면 IMS 음성(VoLTE) 등록 상태. phoneId 0 = 슬롯 1.
-fn parse_ims_voice(out: &str) -> HashMap<u8, bool> {
-    let mut map = HashMap::new();
+/// 슬롯별 IMS 음성 상태
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+struct ImsVoice {
+    /// MmTel 음성 기능 (Voice: true/false)
+    voice: Option<bool>,
+    /// mImsMmTelRegistrationState (0 미등록 / 1 등록 중 / 2 등록됨)
+    reg_state: Option<i32>,
+    /// 마지막 등록의 전송 방식 — WWAN(셀룰러, VoLTE) / WLAN(Wi-Fi 통화)
+    wlan: Option<bool>,
+}
+
+impl ImsVoice {
+    /// "on" = 셀룰러 IMS 음성(VoLTE) / "wifi" = Wi-Fi 통화로만 등록 / "off" / "unknown"
+    fn volte(&self) -> &'static str {
+        match self.voice {
+            Some(true) if self.wlan == Some(true) => "wifi",
+            Some(true) => "on",
+            Some(false) => "off",
+            None => "unknown",
+        }
+    }
+}
+
+/// TelephonyDebugService 덤프(필터링)에서 슬롯별 IMS 음성 상태.
+/// 전화 앱 *#*#4636#*#* 휴대전화 정보의 IMS 상태와 같은 출처. phoneId 0 = 슬롯 1.
+/// - MmTel 음성 기능(Voice)이 true여도 Wi-Fi 통화(IWLAN)로만 등록됐으면 VoLTE가 아님 —
+///   ImsPhone 등록 로그의 마지막 "handleImsRegistered … imsRadioTech=WWAN|WLAN"으로 구분 (2026-10-03 실기기 덤프 확인)
+fn parse_ims_voice(out: &str) -> HashMap<u8, ImsVoice> {
+    let mut map: HashMap<u8, ImsVoice> = HashMap::new();
     let mut phone: Option<u8> = None;
     for line in out.lines() {
         let t = line.trim();
         if let Some(v) = t.strip_prefix("mPhoneId=") {
             phone = v.trim().parse::<i32>().ok().filter(|n| *n >= 0).map(|n| (n + 1) as u8);
-        } else if t.starts_with("mMmTelCapabilities=") {
-            if let Some(slot) = phone {
-                map.entry(slot).or_insert(t.contains("Voice: true"));
+            continue;
+        }
+        let Some(slot) = phone else { continue };
+        let e = map.entry(slot).or_default();
+        if t.starts_with("mMmTelCapabilities=") {
+            if e.voice.is_none() {
+                e.voice = Some(t.contains("Voice: true"));
+            }
+        } else if let Some(v) = t.strip_prefix("mImsMmTelRegistrationState") {
+            e.reg_state = v.trim_start_matches([' ', '=']).trim().parse().ok();
+        } else if t.contains("handleImsRegistered") {
+            // 로그는 시간순 — 마지막 등록이 현재 전송 방식
+            if t.contains("imsRadioTech=WLAN") {
+                e.wlan = Some(true);
+            } else if t.contains("imsRadioTech=WWAN") {
+                e.wlan = Some(false);
             }
         }
     }
@@ -422,7 +473,7 @@ pub struct SimOut {
     carrier: Option<String>,
     /// gsm.sim.state 원값 (LOADED / ABSENT / PIN_REQUIRED / …), 비어 있으면 ABSENT
     state: String,
-    /// "on" = IMS 음성 등록 / "off" = 미등록 / "unknown" = 판별 불가
+    /// "on" = 셀룰러 IMS 음성(VoLTE) / "wifi" = Wi-Fi 통화로만 등록 / "off" = 미등록 / "unknown" = 판별 불가
     volte: &'static str,
     #[serde(rename = "_plmn")]
     plmn: String,
@@ -486,7 +537,7 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
          dumpsys isub | sed -n '/^Active subscriptions:/,/^All subscriptions:/p' \
            | grep -oE 'simSlotIndex=-?[0-9]+ portIndex=-?[0-9]+ isEmbedded=[01]' || true; echo __IMS__; \
          dumpsys activity service com.android.phone/.TelephonyDebugService \
-           | grep -E 'mPhoneId=|mMmTelCapabilities=' || true; echo __DEV__;          settings get global development_settings_enabled; settings get global adb_enabled",
+           | grep -E 'mPhoneId=|mMmTelCapabilities=|mImsMmTelRegistrationState|handleImsRegistered' || true; echo __DEV__;          settings get global development_settings_enabled; settings get global adb_enabled",
     )?;
     let (props_raw, rest) = raw.split_once("__SU__").unwrap_or((&raw, ""));
     let (su_raw, rest) = rest.split_once("__ISUB__").unwrap_or((rest, ""));
@@ -499,12 +550,14 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
     let p = parse_getprop(props_raw);
     let get = |k: &str| p.get(k).cloned().unwrap_or_default();
 
-    let mut serial = get("ro.serialno");
+    // 기기 지정 식별자: 서버 모드는 adb 전송 식별자(serial_hint) — with_first_device가 같은 값으로 찾는다.
+    // USB 직접 연결(serial_hint 없음)은 ro.serialno — with_first_device가 연결 후 같은 프롭과 대조한다
+    let mut serial = serial_hint.to_string();
     if serial.is_empty() {
-        serial = get("ro.boot.serialno");
+        serial = get("ro.serialno");
     }
     if serial.is_empty() {
-        serial = serial_hint.to_string();
+        serial = get("ro.boot.serialno");
     }
     if serial.is_empty() {
         serial = "unknown".into();
@@ -540,8 +593,7 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
                 state,
                 // IMS 음성 등록 상태(실측) 우선 — 덤프에서 못 읽으면 판별 불가
                 volte: match (loaded, ims_voice.get(&slot)) {
-                    (true, Some(true)) => "on",
-                    (true, Some(false)) => "off",
+                    (true, Some(v)) => v.volte(),
                     _ => "unknown",
                 },
                 plmn: numerics[idx].clone(),
@@ -612,6 +664,7 @@ fn device_list_work() -> Result<Vec<DeviceOut>, String> {
         let mut out = Vec::with_capacity(devs.len());
         // 미승인 기기는 제조사를 알 수 없음 → PC에 Sony USB 장치가 있을 때만 안내 대상으로
         let sony_usb = crate::usbmode::sony_usb_present();
+        let mut failed = 0usize;
         for entry in &devs {
             if !entry.ready() {
                 if sony_usb {
@@ -622,13 +675,21 @@ fn device_list_work() -> Result<Vec<DeviceOut>, String> {
             match device_status(&mut entry.handle(), &entry.serial) {
                 Ok(d) if d.sony => out.push(d),
                 Ok(_) => eprintln!("[rust] Xperia가 아닌 기기 제외({})", mask_serial(&entry.serial)),
-                Err(e) => eprintln!(
-                    "[rust] 기기 정보 읽기 실패({}): {e}",
-                    mask_serial(&entry.serial)
-                ),
+                Err(e) => {
+                    failed += 1;
+                    eprintln!(
+                        "[rust] 기기 정보 읽기 실패({}): {}",
+                        mask_serial(&entry.serial),
+                        scrub_serial(e, &entry.serial)
+                    )
+                }
             }
         }
-        eprintln!("[rust] device_list(server) -> {} device(s)", out.len());
+        eprintln!("[rust] device_list(server) -> {} device(s), 실패 {failed}", out.len());
+        // 준비된 기기를 하나도 읽지 못했으면 "기기 없음"이 아니라 조회 실패 — 프론트는 연속 실패 시에만 카드를 지운다
+        if out.is_empty() && failed > 0 {
+            return Err("기기 정보를 읽지 못했습니다".into());
+        }
         return Ok(out);
     }
 
@@ -703,7 +764,8 @@ const FOLDER_PATHS: [(&str, &str); 9] = [
 fn build_storage_script() -> String {
     let mut s = String::from("(");
     for (_, path) in FOLDER_PATHS.iter() {
-        s.push_str(&format!("du -sk {path} & "));
+        // 없는 폴더는 0으로 명시, 있는데 du가 결과를 못 내면 줄이 없어 "측정 불가"로 남는다
+        s.push_str(&format!("(if [ -e {path} ]; then du -sk {path} 2>/dev/null; else printf '0\t{path}\n'; fi) & "));
     }
     s.push_str(
         "(for l in $(pm list packages -3 -f); do a=${l#package:}; a=${a%=*}; \
@@ -714,8 +776,8 @@ fn build_storage_script() -> String {
 }
 
 fn parse_storage_output(raw: &str) -> Value {
-    let mut sizes: HashMap<String, u64> =
-        FOLDER_PATHS.iter().map(|(id, _)| (id.to_string(), 0u64)).collect();
+    // 측정된 폴더만 키를 갖는다 — 빠진 키는 측정 실패(프론트에서 "측정 불가")
+    let mut sizes: HashMap<String, u64> = HashMap::new();
     let mut section = 0u8; // 0=du·apk(병렬, 형식으로 구분), 2=df
     let mut apk_sum = 0u64;
     let mut apk_n = 0u64;
@@ -1156,9 +1218,25 @@ __GBACKUP__\n";
        mMmTelCapabilities=MmTel Capabilities - [Voice: true Video: false UT: true SMS: true CALL_COMPOSER: false BUSINESS_COMPOSER_ONLY: false]\n\
                 mPhoneId=1\n";
         let m = parse_ims_voice(raw);
-        assert_eq!(m.get(&1), Some(&false));
-        assert_eq!(m.get(&2), Some(&true));
+        assert_eq!(m[&1].volte(), "off");
+        assert_eq!(m[&2].volte(), "on");
         assert!(parse_ims_voice("").is_empty());
+    }
+
+    /// 실기기(XQ-DQ44) 덤프 형식 — 등록 로그로 셀룰러/Wi-Fi 통화 구분
+    #[test]
+    fn parse_ims_voice_wifi_calling() {
+        let raw = "\
+       mPhoneId=1\n\
+       mMmTelCapabilities=MmTel Capabilities - [Voice: true Video: false UT: true SMS: true CALL_COMPOSER: false BUSINESS_COMPOSER_ONLY: false]\n\
+        mImsMmTelRegistrationState = 2\n\
+        2026-10-03T20:50:08.839782 - handleImsRegistered: onImsMmTelConnected imsRadioTech=WWAN\n\
+        2026-10-03T21:10:00.000000 - handleImsRegistered: onImsMmTelConnected imsRadioTech=WLAN\n";
+        let m = parse_ims_voice(raw);
+        assert_eq!(m[&2].reg_state, Some(2));
+        assert_eq!(m[&2].volte(), "wifi"); // 마지막 등록이 WLAN → VoLTE 아님
+        let cellular = raw.replace("21:10:00.000000 - handleImsRegistered: onImsMmTelConnected imsRadioTech=WLAN", "21:10:00.000000 - handleImsRegistered: onImsMmTelConnected imsRadioTech=WWAN");
+        assert_eq!(parse_ims_voice(&cellular)[&2].volte(), "on");
     }
 
     /// 실기기(XQ-DQ44) getprop — 슬롯 1 비어 있음, 슬롯 2 eSIM SKT
@@ -1218,8 +1296,8 @@ Filesystem     1K-blocks      Used Available Use% Mounted on\n\
         assert_eq!(get("recordings"), 8 * 1024);
         assert_eq!(get("android-data"), 42064776 * 1024);
         assert_eq!(get("sdcard-total"), 180041842 * 1024);
-        // 폴더 목록에 없는 경로·권한 오류 줄은 무시, 미측정 키는 0
-        assert_eq!(get("music"), 0);
+        // 폴더 목록에 없는 경로·권한 오류 줄은 무시, 측정 결과가 없는 폴더는 키 없음(측정 불가)
+        assert!(v.get("music").is_none());
         assert_eq!(get("sdcard-free"), 231736508 * 1024);
         // 두 번째 앱은 base + split APK 2개 — 앱 수는 2, 크기는 split 포함 합산
         assert_eq!(get("apk-total"), 68440742 + 187393515 + 1200000);
@@ -1267,7 +1345,7 @@ Filesystem     1K-blocks      Used Available Use% Mounted on\n\
         assert_eq!(bootloader_state("1", "locked", true), "unknown");
         assert_eq!(bootloader_state("1", "unlocked", false), "unknown");
         assert_eq!(bootloader_state("", "", false), "unknown");
-        assert_eq!(bootloader_state("0", "", false), "unlocked");
+        assert_eq!(bootloader_state("0", "", false), "unknown"); // 한쪽만으로는 확정하지 않음
     }
 
     #[test]

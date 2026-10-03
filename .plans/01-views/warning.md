@@ -28,3 +28,17 @@ status: implemented (정적 안내, 백엔드 호출 없음)
 ## 비주얼
 step 페이지 셸(헤더 + 중앙 카드 + 하단 액션 바), 사이드바 없음(1~4단계 시작 전).
 카드 3장: OMD(primary 아이콘) / 초기화 경고(warning) / 책임 고지(destructive 테두리). 체크 시 primary 톤.
+
+
+## OMD 안내 갱신 (카페 조사 반영, 2026-10-03 — tasks/research-cafe-omd-volte.md)
+
+- 데이터: src/lib/data/omd.ts — 코드마다 망(5G/LTE)·SIM 종류(물리 SIM/eSIM/공통)·구분(기본/대안/예외)·적용 조건·다른 표기·출처 URL, 확인일 OMD_CHECKED.
+  전역 OMD_VERIFIED 플래그 제거, 대신 "카페 안내 기준 · 통신사 공식 보증 아님 · 고객센터 확인" 문구를 항상 표시
+- SKT: OMD DEFAULT 5G(물리, 다른 표기 OMD-DEFAULT_5G) / OMD DEFAULT 5G ESIM / 대안 OMD DEFAULT 5G DUAL USIM / LTE는 OMD SONY LTE핸드셋_VOLTE, 범용 OMD 기타 LTE핸드셋_VOLTE.
+  등록 시 SIM 위치: 등록할 IMEI 쪽 슬롯은 비우고 반대 슬롯에 SIM (예전 "세컨폰 필요" 일반화 제거)
+- KT: LTE·패치 전 SONY-XPR-TAC / 5G 물리 PTA-TYPE5G(패치 후, APN 확인) / 5G eSIM PTA-DS-5G. 등록 시 SIM은 등록할 IMEI의 슬롯.
+  기본 OMD로도 LTE VoLTE가 막히지 않는다는 안내 → 등록 "완료"가 아닌 "조건 확인"으로. 예전 PTA-VoLTE는 바뀜(무효 여부 미확인)
+- LG U+: 보통 별도 등록 없음, 예외로 LTE 단말 등록 때문에 5G 제한 시 OMD-STDPHONE (OM-Phone 강제 안내 제거)
+- 체크박스 문구: "사용할 망의 OMD 등록 조건을 확인했습니다"
+- 카페의 "듀얼 SIM을 단일 SIM이라고 설명" 같은 우회 문구는 옮기지 않음 — 실제 SIM 구성과 IMEI를 알리도록 안내
+- 레이아웃: 통신사별 블록(요약 + 코드 타일 2열 + SIM 위치 + 각주), 출처는 외부 브라우저로 열기

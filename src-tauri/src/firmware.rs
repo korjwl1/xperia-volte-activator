@@ -237,74 +237,85 @@ struct ZipEntry {
     local_offset: u64,
 }
 
-fn u16le(b: &[u8], i: usize) -> u16 {
-    u16::from_le_bytes([b[i], b[i + 1]])
+// 범위 밖 읽기는 panic 대신 오류 (손상된 응답·파일 방어 — release는 panic=abort라 앱 전체가 종료됨)
+const ZIP_BAD: &str = "펌웨어 ZIP 구조가 올바르지 않습니다";
+fn u16le(b: &[u8], i: usize) -> Result<u16, String> {
+    b.get(i..i.checked_add(2).ok_or(ZIP_BAD)?).map(|s| u16::from_le_bytes([s[0], s[1]])).ok_or_else(|| ZIP_BAD.into())
 }
-fn u32le(b: &[u8], i: usize) -> u32 {
-    u32::from_le_bytes(b[i..i + 4].try_into().unwrap())
+fn u32le(b: &[u8], i: usize) -> Result<u32, String> {
+    b.get(i..i.checked_add(4).ok_or(ZIP_BAD)?)
+        .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+        .ok_or_else(|| ZIP_BAD.into())
 }
-fn u64le(b: &[u8], i: usize) -> u64 {
-    u64::from_le_bytes(b[i..i + 8].try_into().unwrap())
+fn u64le(b: &[u8], i: usize) -> Result<u64, String> {
+    b.get(i..i.checked_add(8).ok_or(ZIP_BAD)?)
+        .map(|s| u64::from_le_bytes(s.try_into().expect("8바이트")))
+        .ok_or_else(|| ZIP_BAD.into())
 }
+/// 한 항목으로 받을 최대 크기 (update.xml·부트 이미지 .sin — 정상은 수십 MB 이하)
+const MAX_ENTRY: u64 = 256 * 1024 * 1024;
 
 /// 파일 끝부분(tail)에서 central directory 위치를 찾는다 → (cd_offset, cd_size)
 fn find_central_directory(tail: &[u8], tail_start: u64, f: &mut ChunkedFile) -> Result<(u64, u64), String> {
     let eocd = (0..tail.len().saturating_sub(21))
         .rev()
-        .find(|&i| u32le(tail, i) == 0x0605_4b50)
+        .find(|&i| u32le(tail, i).ok() == Some(0x0605_4b50))
         .ok_or("펌웨어 ZIP 끝 정보를 찾을 수 없습니다")?;
-    let cd_size = u32le(tail, eocd + 12) as u64;
-    let cd_offset = u32le(tail, eocd + 16) as u64;
+    let cd_size = u32le(tail, eocd + 12)? as u64;
+    let cd_offset = u32le(tail, eocd + 16)? as u64;
     if cd_offset != 0xFFFF_FFFF && cd_size != 0xFFFF_FFFF {
         return Ok((cd_offset, cd_size));
     }
     // zip64: EOCD 바로 앞 locator(20바이트) → zip64 EOCD
-    if eocd < 20 || u32le(tail, eocd - 20) != 0x0706_4b50 {
+    if eocd < 20 || u32le(tail, eocd - 20)? != 0x0706_4b50 {
         return Err("펌웨어 ZIP64 정보를 찾을 수 없습니다".into());
     }
-    let z64_off = u64le(tail, eocd - 20 + 8);
+    let z64_off = u64le(tail, eocd - 20 + 8)?;
     let rec = if z64_off >= tail_start {
-        tail[(z64_off - tail_start) as usize..].to_vec()
+        tail.get((z64_off - tail_start) as usize..).ok_or(ZIP_BAD)?.to_vec()
     } else {
         f.read_at(z64_off, 56)?
     };
-    if u32le(&rec, 0) != 0x0606_4b50 {
+    if u32le(&rec, 0)? != 0x0606_4b50 {
         return Err("펌웨어 ZIP64 레코드가 올바르지 않습니다".into());
     }
-    Ok((u64le(&rec, 48), u64le(&rec, 40)))
+    Ok((u64le(&rec, 48)?, u64le(&rec, 40)?))
 }
 
 fn parse_central_directory(cd: &[u8]) -> Result<Vec<ZipEntry>, String> {
     let mut out = vec![];
     let mut i = 0;
-    while i + 46 <= cd.len() && u32le(cd, i) == 0x0201_4b50 {
-        let method = u16le(cd, i + 10);
-        let crc32 = u32le(cd, i + 16);
-        let mut comp_size = u32le(cd, i + 20) as u64;
-        let mut uncomp_size = u32le(cd, i + 24) as u64;
-        let name_len = u16le(cd, i + 28) as usize;
-        let extra_len = u16le(cd, i + 30) as usize;
-        let comment_len = u16le(cd, i + 32) as usize;
-        let mut local_offset = u32le(cd, i + 42) as u64;
-        let name = String::from_utf8_lossy(&cd[i + 46..i + 46 + name_len]).to_string();
+    while i + 46 <= cd.len() && u32le(cd, i)? == 0x0201_4b50 {
+        let method = u16le(cd, i + 10)?;
+        let crc32 = u32le(cd, i + 16)?;
+        let mut comp_size = u32le(cd, i + 20)? as u64;
+        let mut uncomp_size = u32le(cd, i + 24)? as u64;
+        let name_len = u16le(cd, i + 28)? as usize;
+        let extra_len = u16le(cd, i + 30)? as usize;
+        let comment_len = u16le(cd, i + 32)? as usize;
+        let mut local_offset = u32le(cd, i + 42)? as u64;
+        let name = String::from_utf8_lossy(cd.get(i + 46..i + 46 + name_len).ok_or(ZIP_BAD)?).to_string();
         // zip64 확장 필드(0x0001): 0xFFFFFFFF인 값만 순서대로 들어 있다
         let mut e = i + 46 + name_len;
         let extra_end = e + extra_len;
+        if extra_end > cd.len() {
+            return Err(ZIP_BAD.into());
+        }
         while e + 4 <= extra_end {
-            let id = u16le(cd, e);
-            let size = u16le(cd, e + 2) as usize;
+            let id = u16le(cd, e)?;
+            let size = u16le(cd, e + 2)? as usize;
             if id == 0x0001 {
                 let mut p = e + 4;
                 if uncomp_size == 0xFFFF_FFFF {
-                    uncomp_size = u64le(cd, p);
+                    uncomp_size = u64le(cd, p)?;
                     p += 8;
                 }
                 if comp_size == 0xFFFF_FFFF {
-                    comp_size = u64le(cd, p);
+                    comp_size = u64le(cd, p)?;
                     p += 8;
                 }
                 if local_offset == 0xFFFF_FFFF {
-                    local_offset = u64le(cd, p);
+                    local_offset = u64le(cd, p)?;
                 }
             }
             e += 4 + size;
@@ -321,10 +332,13 @@ fn parse_central_directory(cd: &[u8]) -> Result<Vec<ZipEntry>, String> {
 /// 항목 하나만 받아 압축 해제 + CRC 확인
 fn read_entry(f: &mut ChunkedFile, e: &ZipEntry) -> Result<Vec<u8>, String> {
     let header = f.read_at(e.local_offset, 30)?;
-    if u32le(&header, 0) != 0x0403_4b50 {
+    if e.comp_size > MAX_ENTRY || e.uncomp_size > MAX_ENTRY {
+        return Err(format!("{} 항목 크기가 비정상적입니다", e.name));
+    }
+    if u32le(&header, 0)? != 0x0403_4b50 {
         return Err(format!("{} 항목 헤더가 올바르지 않습니다", e.name));
     }
-    let data_off = e.local_offset + 30 + u16le(&header, 26) as u64 + u16le(&header, 28) as u64;
+    let data_off = e.local_offset + 30 + u16le(&header, 26)? as u64 + u16le(&header, 28)? as u64;
     let raw = f.read_at(data_off, e.comp_size)?;
     let data = match e.method {
         0 => raw,
@@ -579,6 +593,21 @@ pub async fn firmware_versions(serial: Option<String>) -> Result<FirmwareVersion
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn corrupt_central_directory_is_error_not_panic() {
+        // 46바이트 헤더에 name_len=1, 실제 이름 바이트 없음
+        let mut cd = vec![0u8; 46];
+        cd[0..4].copy_from_slice(&0x0201_4b50u32.to_le_bytes());
+        cd[28] = 1;
+        assert!(parse_central_directory(&cd).is_err());
+        // extra 길이가 버퍼를 넘음
+        let mut cd2 = vec![0u8; 47];
+        cd2[0..4].copy_from_slice(&0x0201_4b50u32.to_le_bytes());
+        cd2[28] = 1;
+        cd2[30] = 200;
+        assert!(parse_central_directory(&cd2).is_err());
+    }
 
     #[test]
     fn dir_check_rejects_bad_folders() {

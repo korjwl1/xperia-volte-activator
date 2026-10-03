@@ -7,7 +7,7 @@
   import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "$lib/components/ui/tooltip";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { api } from "$lib/api";
-  import type { BackupItem } from "$lib/types";
+  import { simIssue, type BackupItem } from "$lib/types";
 
   // 선택 상태·실측 결과는 스토어에 보관 — 이전/다음으로 오가도 유지 (기기가 바뀔 때만 초기화)
   wizard.ensureOptions();
@@ -29,7 +29,7 @@
     if (!s) return null;
     if (item.id === "fs-rest") {
       // 그 외 = 내부 저장소 전체 − Android/data − 기명 폴더 합계
-      if (!("sdcard-total" in s)) return null;
+      if (!("sdcard-total" in s) || FOLDER_IDS.some((id) => !(id in s))) return null; // 하나라도 측정 실패면 계산 불가
       const named = FOLDER_IDS.reduce((a, id) => a + (s[id] ?? 0), 0);
       return Math.max(0, s["sdcard-total"] - (s["android-data"] ?? 0) - named);
     }
@@ -77,8 +77,11 @@
     };
   });
   const diskFreeGB = $derived((freeBytes ?? 0) / 1024 ** 3);
-  const usageRatio = $derived(freeBytes ? selectedBytes / freeBytes : 0);
+  const usageRatio = $derived(freeBytes === null ? 0 : freeBytes === 0 ? Infinity : selectedBytes / freeBytes);
   const diskWarning = $derived(freeBytes !== null && usageRatio > 0.85);
+  // 데스크톱 앱에서 여유 공간을 확인하지 못했으면(조회 중·실패) 실행하지 않는다 — 브라우저 개발 환경은 조회 수단이 없어 제외
+  const inDesktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  const diskUnknown = $derived(inDesktop && wizard.backupPath.trim() !== "" && (freeLoading || freeBytes === null));
 
   async function pickBackupFolder() {
     const path = await api.pickFolder();
@@ -119,6 +122,13 @@
     wizard.plan.map((s) => ({ title: s.title, wipe: s.wipe, flash: s.kind === "fw-flash", warn: s.wipe || s.kind === "fw-flash" })),
   );
   const patching = $derived(wizard.hasPatchTarget);
+  // 패치 대상 슬롯의 SIM 문제(없음·PIN 잠김·통신사 미확인) — 기기·선택에 따라 고정
+  const simProblems = $derived(
+    wizard.volteConfig.sims
+      .filter((t) => t.carrier !== null)
+      .map((t) => ({ slot: t.slot, issue: simIssue(wizard.device?.sims.find((s) => s.slot === t.slot)) }))
+      .filter((x) => x.issue !== null),
+  );
 
   // 실행 전 확인 모달 — 초기화 또는 펌웨어 기록 단계가 포함된 계획에서만 (AGENTS 규칙 7)
   let confirmOpen = $state(false);
@@ -132,7 +142,7 @@
   function confirm() {
     // 방어: 백업 선택 + 경로 미지정 or 용량 부족
     // 용량 계산 중에는 여유 공간 판단이 불완전하므로 실행 보류
-    if (anyBackupChecked && (!wizard.backupPath.trim() || diskWarning || sizesLoading)) {
+    if (anyBackupChecked && (!wizard.backupPath.trim() || diskWarning || diskUnknown || sizesLoading)) {
       showPathAlert = true;
       setTimeout(() => (showPathAlert = false), 4000);
       return;
@@ -345,6 +355,17 @@
         {/each}
         </TooltipProvider>
       </div>
+      {#if simProblems.length > 0}
+        <div class="shrink-0 border-t bg-warning-container/40 px-4 py-3 space-y-1">
+          <div class="flex items-center gap-1.5 text-[12px] font-semibold text-warning">
+            <TriangleAlert size={13} class="shrink-0" />{simProblems.map((p) => `SIM${p.slot} ${p.issue}`).join(" · ")}
+          </div>
+          <p class="text-[11px] leading-relaxed text-muted-foreground">
+            SIM 없이 패치하면 처음 SIM을 넣을 때 프로파일이 바뀌어 패치가 풀릴 수 있습니다. 사용할 SIM을 넣고 진행하는 것을 권장합니다.
+            {wizard.opts.relock ? "리락 전 통신 확인을 할 수 없어 리락 단계로 넘어갈 수 없습니다." : ""}
+          </p>
+        </div>
+      {/if}
     </div>
   </div>
 
@@ -354,6 +375,8 @@
         백업 위치를 지정해 주세요
       {:else if sizesLoading}
         휴대폰 용량 계산이 끝난 뒤 실행해 주세요
+      {:else if diskUnknown}
+        {freeLoading ? "백업 위치의 여유 공간을 확인하는 중입니다 — 잠시 후 실행해 주세요" : "백업 위치의 여유 공간을 확인할 수 없습니다 — 다른 위치를 지정해 주세요"}
       {:else}
         디스크 여유 공간이 부족합니다 — 백업 항목을 줄이거나 다른 위치를 지정해 주세요
       {/if}

@@ -148,10 +148,28 @@ invoke('efs_verify', { serial, snapshot }) → VerifyReport   // 전수 리드�
 invoke('efs_rollback', { serial, snapshot }) → void
 ```
 
+EFS 실행 규칙 (카페 조사 반영, 2026-10-03 — tasks/research-cafe-omd-volte.md):
+- 프리셋: src/lib/data/efsPresets.ts manifest(통신사·슬롯·폴더·파일 수·SHA-256, 버전 20250901 balance)와 일치하는 폴더만 사용.
+  실행 직전 폴더 해시를 다시 계산해 manifest와 다르면 진행하지 않음. 이름("for V" 등)을 적용 가능 기종의 근거로 삼지 않음
+- 원본 beta11 계승: 슬롯별로 efs_upload 2회(1차·2차) → efs_verify 전수 리드백·해시 비교.
+  두 번 썼다는 것만으로 성공 판정하지 않음 — 누락·해시 불일치는 도구가 정상 종료해도 실패
+- 실패하면 해당 단계를 failed로 유지(wizard.failStep)하고 다음 단계·리락으로 넘어가지 않음. 허용: 이 단계 다시 시도 / 중단.
+  사유에 실패 파일·슬롯·시도 횟수·도구 종료 코드·출력 요약을 남김 (원본 CLI는 EFS 예외 후 Enter로 다음 단계 진행 가능 — 계승하지 않음)
+- 입력 오류(잘못된 통신사·슬롯)는 명시적 오류 타입으로 반환 (원본 efs.py의 문자열 raise 계승하지 않음)
+- 진단: EFS(DIAG)와 펌웨어 기록(newflasher)은 USB 경로가 다름 — "무조건 USB 2.0" 대신 실제 인터페이스·드라이버·케이블·실패 명령을 보여줌.
+  ADB/fastboot 대상은 Sony 기기만(에뮬레이터·Google Play Games ADB 기기 혼입 방지)
+
+통신 확인 구분 (IMS 판정 개선은 실기기 실측 후):
+- 파일 주입 확인(efs_verify) / IMS 음성 사용 가능(mMmTelCapabilities Voice) / IMS 등록 상태·등록 기술(LTE vs IWLAN) / 실제 발신·수신(사용자 확인)
+- 자동으로 판독할 수 없는 항목은 unknown. 문자·MMS·5G 데이터·해외 로밍은 별도 확인 항목 — 국내 통화 성공을 로밍 성공으로 표시하지 않음
+- "VoLTE 활성화 설정"(persist.dbg.*_avail_ovr)은 설정을 켠다는 뜻이지 통신사 서비스 검증이 아님
+
 ## flasher / session (M6)
 
 ```ts
 invoke('fw_prepare', { fwDir, opts }) → StagedDir           // §8 스테이징 (원본 불변)
+// 플래시 허용 목록(파일을 지우지 않고 목록으로 검사): 패치 유지 업데이트 = modem*·dsp*·.ta(boot 하위 포함)·userdata 제외 /
+//   재패치 업데이트 = modem·dsp 포함, .ta·userdata 제외. 모델·지역 펌웨어 일치 확인, 슬롯 A 고정 명령을 기기 상태 확인 없이 일괄 실행하지 않음
 invoke('newflasher_run', { staged }) → void                 // 이벤트: 'flasher:output'
 invoke('session_save' | 'session_load' | 'session_resume')  // §9-1/9-2 상태+프로브
 ```
@@ -189,3 +207,19 @@ invoke('run_guard', { active: boolean, reason?: string }) → void
 invoke('root_check', { serial? }) → boolean            // su -c id 결과에 uid=0 — Magisk 허용 창이 뜰 수 있음, 기기 변경 없음
 invoke('firmware_dir_check', { dir, partition }) → { file, imageBytes }  // PC 폴더에서 <partition>_*.sin 찾아 부트 이미지 추출 확인
 ```
+
+## 점검 반영 (Codex gpt-6.1-sol 리뷰, 2026-10-03)
+
+- device_list: serial = 서버 모드는 adb 전송 식별자(TCP 연결 등에서 ro.serialno와 다를 수 있음), USB 직접 연결은 ro.serialno — 이후 명령의 serial 인자와 같은 값.
+  준비된 기기를 하나도 읽지 못하면 빈 목록이 아니라 오류(프론트는 연속 2회 실패 시에만 카드 제거)
+- bootloader: 두 프롭이 모두 유효하고 일치할 때만 확정(한쪽만 있으면 unknown) — 위 계약과 구현 일치
+- storage_sizes: 없는 폴더는 0, 측정하지 못한 폴더는 키 없음(프론트 "측정 불가", 그 외 파일 합계도 계산 불가)
+- 오류 문자열의 전체 시리얼은 마스킹(scrub_serial) — 로그·진행 기록 유출 방지
+- firmware ZIP 파서: 범위 밖 읽기는 panic 대신 오류, 항목 크기 상한 256 MiB
+- run_guard: 켜기에 실패하면 전부 끈 상태로 되돌리고 오류 반환(프론트는 경고 로그 후 다음 시작 때 재시도)
+- SimInfo.volte: "on"(셀룰러 IMS 음성 = VoLTE) | "wifi"(Wi-Fi 통화로만 등록 — VoLTE 아님) | "off" | "unknown".
+  TelephonyDebugService에서 슬롯별 mMmTelCapabilities(Voice), mImsMmTelRegistrationState(0/1/2), 등록 로그의 마지막
+  "handleImsRegistered … imsRadioTech=WWAN|WLAN"을 읽음 (2026-10-03 XQ-DQ44 덤프로 필드 확인). 최종·리락 전 확인은 "on"만 통과, "wifi"면 Wi-Fi를 끄고 확인 안내
+- EFS 프리셋 버전 조사(tasks/research-efs-preset-versions.md, 2026-10-03): 20250901 balance = 확인된 최신 공통 세트(도구 beta9~beta11 동일, 카페 재첨부 ZIP과 SHA-256 동일).
+  manifest에 원본 출처·ZIP 해시, 이전 성공 후보(KT/LGU beta7, 자동 롤백 금지) 기록. performance 세트는 배포 구성 문제로 사용하지 않음.
+  갱신 판정은 데이터 해시 기준, 새 세트는 격리 → 차이·XML·슬롯 경로 검토 → 실물 확인 → 승격

@@ -56,7 +56,8 @@ export function buildPlan(
   const prep: ManualId[] = [];
   if (needsUnlock && !prepReady(device)) prep.push("oem-toggle");
   if (needsUnlock) prep.push("unlock-code");
-  if (needsRoot) prep.push("firmware-select"); // 업데이트 시에는 새 버전의 부트 이미지
+  // 루팅(새로 또는 다시)·언루팅 모두 순정 부트 이미지가 필요 — 업데이트 시에는 새 버전의 이미지
+  if (needsRoot || unroot) prep.push("firmware-select");
   if (prep.length > 0) {
     steps.push({ id: "prep", kind: "setup", title: "사전 준비", desc: "언락 조건 확인 · 언락 코드 · 펌웨어 준비", estSec: 300, manual: prep });
   }
@@ -71,9 +72,10 @@ export function buildPlan(
       id: "fw-flash",
       kind: "fw-flash",
       title: "펌웨어 업데이트",
+      // 플래시 허용 목록 정책: 패치 유지 = 모뎀·DSP·TA·사용자 데이터 제외 / 재패치 = 모뎀·DSP 포함, TA·사용자 데이터 제외
       desc: patch
-        ? "모뎀 포함 업데이트(사용자 데이터 유지) — 이후 VoLTE를 다시 적용합니다"
-        : "모뎀·사용자 데이터를 제외하고 업데이트 — 기존 VoLTE 패치 유지",
+        ? "모뎀·DSP 포함 업데이트(TA·사용자 데이터 제외) — 이후 VoLTE를 다시 적용합니다"
+        : "모뎀·DSP·TA·사용자 데이터를 제외하고 업데이트 — 기존 VoLTE 패치 유지",
       risk: "danger",
       estSec: 900,
       manual: ["flash-mode"],
@@ -103,9 +105,14 @@ export function buildPlan(
       .map((s) => `SIM${s.slot}=${CARRIER_LABEL[s.carrier!]}`)
       .join(", ");
     steps.push({ id: "efs-preflight", kind: "efs-preflight", title: "연결 안정성 검사", desc: "USB 포트·케이블 상태 확인", estSec: 60 });
-    steps.push({ id: "efs", kind: "efs", title: "VoLTE 적용", desc: `${targets} 프로파일을 주입합니다`, risk: "danger", estSec: 420, manual: ["su-grant"] });
-    steps.push({ id: "verify", kind: "verify", title: "적용 확인", desc: "주입된 파일의 무결성 검증", estSec: 120 });
-    steps.push({ id: "volte-props", kind: "volte-props", title: "VoLTE 활성화 설정", desc: "VoLTE·영상통화·Wi-Fi 통화 활성화 설정 후 재부팅", estSec: 120 });
+    // 원본 beta11 계승: 슬롯별 두 번 업로드 → 전수 리드백. 두 번 썼다는 것만으로 성공 판정하지 않는다
+    steps.push({ id: "efs", kind: "efs", title: "VoLTE 적용", desc: `${targets} 프로파일을 슬롯별로 두 번 주입합니다`, risk: "danger", estSec: 420, manual: ["su-grant"] });
+    steps.push({ id: "verify", kind: "verify", title: "적용 확인", desc: "주입한 파일 전수 리드백·해시 비교 — 누락·불일치는 실패", estSec: 120 });
+    steps.push({ id: "volte-props", kind: "volte-props", title: "VoLTE 활성화 설정", desc: "VoLTE·영상통화·Wi-Fi 통화 설정을 켜고 재부팅 (통신사 서비스 검증은 아님)", estSec: 120 });
+    // 언루팅·리락 전에 실제 통신 확인 — 리락 뒤 문제가 있으면 다시 고치려면 초기화가 한 번 더 필요
+    if (unroot || relock) {
+      steps.push({ id: "comm-check", kind: "final-verify", title: "통신 확인", desc: "언루팅·리락 전에 VoLTE 등록과 실제 발신·수신을 확인", estSec: 300, manual: ["ims-precheck"] });
+    }
   }
 
   if (unroot) {
@@ -116,12 +123,13 @@ export function buildPlan(
     // 초기화 후 최종 확인·복구에 adb 연결이 필요
     steps.push(setupAfterWipe("setup-relock"));
   }
-  if (patch ? bootloaderKnown : update !== null) {
-    steps.push({ id: "final-verify", kind: "final-verify", title: "최종 확인", desc: "재부팅 후 VoLTE 작동 여부 확인", estSec: 300, manual: ["ims-check"] });
-  }
   // 복구는 초기화가 실제로 일어나는 경우에만 (초기화 없이 복원하면 기존 데이터에 덮어씀)
   if (wipes && opts.restore && hasBackup) {
     steps.push({ id: "restore", kind: "restore", title: "복구", desc: "백업한 데이터를 기기로 복원", estSec: 1500 });
+  }
+  // 최종 확인은 리락·복구까지 끝난 뒤
+  if (patch || update !== null) {
+    steps.push({ id: "final-verify", kind: "final-verify", title: "최종 확인", desc: "재부팅 후 VoLTE 작동 여부 확인", estSec: 300, manual: ["ims-check"] });
   }
 
   return finalize(steps);

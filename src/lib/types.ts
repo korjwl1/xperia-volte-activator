@@ -9,8 +9,8 @@ export interface SimInfo {
   carrier: string | null; // null = SIM 인식 안 됨 (state 참고)
   /** gsm.sim.state 원값: LOADED / ABSENT / PIN_REQUIRED / PUK_REQUIRED / NETWORK_LOCKED / NOT_READY / CARD_IO_ERROR … */
   state: string;
-  /** on = IMS 음성(VoLTE) 등록 / off = 미등록 / unknown = 판별 불가 — *#*#4636#*#* IMS 상태와 같은 출처 */
-  volte: "on" | "off" | "unknown";
+  /** on = 셀룰러 IMS 음성(VoLTE) / wifi = Wi-Fi 통화로만 등록(VoLTE 아님) / off = 미등록 / unknown = 판별 불가 — *#*#4636#*#* IMS 상태와 같은 출처 */
+  volte: "on" | "wifi" | "off" | "unknown";
   patchedWith?: string; // 어떤 통신사 프로파일이 적용됐는지 — DIAG 리드백(M5) 전까지 미제공
 }
 
@@ -67,7 +67,7 @@ export type StepKind =
 
 export type ManualId =
   | "usb-debug" | "su-grant" | "magisk-patch" | "oem-toggle" | "mode-wait" | "ims-check"
-  | "unlock-code" | "firmware-select" | "backup-notice" | "flash-mode";
+  | "unlock-code" | "firmware-select" | "backup-notice" | "flash-mode" | "ims-precheck";
 
 /** 수동 개입 모달 내용 — input이 있으면 입력 완료 전까지 [완료] 비활성 */
 export interface ManualPrompt {
@@ -94,6 +94,13 @@ export interface PlanStep {
 export type CarrierId = "SKT" | "KT" | "LGU" | "LGU_V";
 
 /** SIM 상태 표시 문구 — LOADED가 아닌 경우 */
+/** 패치 대상 슬롯의 SIM 문제 — 없으면 null (SIM 없음·PIN 잠김·통신사 미확인을 구분) */
+export function simIssue(sim: SimInfo | undefined): string | null {
+  if (!sim || sim.carrier === null) return simStateLabel(sim?.state ?? "ABSENT");
+  if (sim.carrier.trim() === "") return "통신사 확인 불가";
+  return null;
+}
+
 export function simStateLabel(state: string): string {
   switch (state) {
     case "ABSENT": return "미삽입";
@@ -231,6 +238,10 @@ export interface RunJournal {
   cursor: number;
   firmware: FirmwareResult | null;
   firmwareDir: string;
+  /** 최종 VoLTE 확인을 생략하고 마무리했는지 */
+  imsUnverified?: boolean;
+  /** 작업 시작 때의 SIM 구성 — 이어서 진행할 때 바뀌었으면 통신 확인을 다시 */
+  sims?: { slot: 1 | 2; carrier: string | null; state: string }[];
   /** 명시적으로 멈춘 경우의 사유 (없으면 진행 중 앱 종료·연결 끊김으로 본다) */
   stop: { stepId: string; stepTitle: string; reason: string; at: string } | null;
 }

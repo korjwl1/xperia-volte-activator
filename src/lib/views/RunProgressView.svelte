@@ -51,9 +51,23 @@
 
   const overallPct = $derived(Math.round(wizard.overall * 100));
   const currentStep = $derived(wizard.runSteps.find((s) => s.status === "running" || s.status === "manual-wait"));
+  const currentFailed = $derived(wizard.runSteps.find((s) => s.status === "failed"));
 </script>
 
 <div class="flex-1 min-h-0 flex flex-col gap-3 p-4 lg:p-6">
+  {#if wizard.stepError}
+    <Alert variant="destructive" class="shrink-0">
+      <OctagonX size={16} />
+      <AlertTitle>{currentFailed?.title ?? "단계"} 단계가 실패했습니다</AlertTitle>
+      <AlertDescription class="flex flex-col gap-2">
+        <span>{wizard.stepError} — 다음 단계(리락 포함)로 넘어가지 않습니다.</span>
+        <div class="flex gap-2">
+          <Button size="sm" onclick={() => wizard.retryStep()}>이 단계 다시 시도</Button>
+          <Button size="sm" variant="outline" onclick={() => wizard.abort()}>중단</Button>
+        </div>
+      </AlertDescription>
+    </Alert>
+  {/if}
   {#if wizard.usbError}
     <Alert variant="destructive" class="shrink-0">
       <Usb size={16} />
@@ -89,11 +103,15 @@
             <Switch id="sim-err" checked={wizard.simulateUsbError} onCheckedChange={(v: boolean) => (wizard.simulateUsbError = v)} />
             <Label for="sim-err" class="text-[11px] text-muted-foreground cursor-pointer">USB 오류 시뮬</Label>
           </div>
+          <div class="flex items-center gap-1.5 mr-1">
+            <Switch id="sim-efs" checked={wizard.simulateEfsFail} onCheckedChange={(v: boolean) => (wizard.simulateEfsFail = v)} />
+            <Label for="sim-efs" class="text-[11px] text-muted-foreground cursor-pointer">EFS 실패 시뮬</Label>
+          </div>
           {#if !wizard.finished}
             {#if wizard.running}
               <Button size="sm" variant="outline" onclick={() => wizard.pause()}><Pause size={13} class="mr-1" />일시정지</Button>
             {:else}
-              <Button size="sm" disabled={wizard.usbError} onclick={() => wizard.begin()}><Play size={13} class="mr-1" />{wizard.runSteps.some((s) => s.status !== "pending") ? "이어서" : "실행"}</Button>
+              <Button size="sm" disabled={wizard.usbError || !!wizard.stepError} onclick={() => wizard.begin()}><Play size={13} class="mr-1" />{wizard.runSteps.some((s) => s.status !== "pending") ? "이어서" : "실행"}</Button>
             {/if}
             <Button size="sm" variant="destructive" onclick={() => wizard.abort()}><Square size={12} class="mr-1" />중단</Button>
           {:else}
@@ -287,18 +305,27 @@
             {/if}
           {/if}
         {/if}
-        {#if wizard.manualCurrent.id === "ims-check" && wizard.imsSims.length > 0}
+        {#if (wizard.manualCurrent.id === "ims-check" || wizard.manualCurrent.id === "ims-precheck") && wizard.imsSims.length > 0}
           <div class="rounded-lg border divide-y">
             {#each wizard.imsSims.filter((s) => s.carrier) as sim (sim.slot)}
               <div class="flex items-center gap-2.5 px-3 py-2 text-sm">
                 {#if sim.volte === "on"}<CircleCheck size={15} class="text-success shrink-0" />{:else}<LoaderCircle size={15} class="animate-spin text-muted-foreground shrink-0" />{/if}
                 <span class="flex-1">SIM{sim.slot} · {sim.carrier}</span>
                 <span class="text-[11px] {sim.volte === 'on' ? 'text-success' : 'text-muted-foreground'}">
-                  {sim.volte === "on" ? "VoLTE 활성화" : sim.volte === "off" ? "VoLTE 비활성화" : "확인 불가"}
+                  {sim.volte === "on" ? "VoLTE 활성화" : sim.volte === "wifi" ? "Wi-Fi 통화만 — Wi-Fi를 끄고 확인" : sim.volte === "off" ? "VoLTE 비활성화" : "확인 불가"}
                 </span>
               </div>
             {/each}
           </div>
+        {/if}
+        {#if wizard.manualCurrent.id === "ims-precheck"}
+          <label class="flex items-start gap-2.5 rounded-lg border px-3 py-2.5 cursor-pointer {wizard.callAck ? 'border-primary/40 bg-primary/5' : ''}">
+            <Checkbox class="mt-0.5" checked={wizard.callAck} onCheckedChange={(v: boolean | "indeterminate") => (wizard.callAck = v === true)} />
+            <span class="text-[12.5px]">
+              실제로 전화를 걸고 받아 통화되는 것을 확인했습니다
+              <span class="block text-[11px] text-muted-foreground">문자·MMS·5G 데이터는 따로 확인해 주세요</span>
+            </span>
+          </label>
         {/if}
         {#if wizard.manualWatching}
           <div class="flex items-center gap-2 rounded-lg bg-primary/5 px-3 py-2 text-[12px] text-primary">
@@ -323,6 +350,9 @@
           <div class="flex shrink-0 gap-2">
             {#if wizard.manualSkippable}
               <Button variant="ghost" class="text-muted-foreground" onclick={() => wizard.skipManual()}>(목업) 건너뛰기</Button>
+            {/if}
+            {#if wizard.manualCurrent.id === "ims-precheck" && wizard.manualCheckError}
+              <Button variant="outline" onclick={() => wizard.repatch()}>다시 패치</Button>
             {/if}
             {#if wizard.manualCurrent.id === "ims-check" && wizard.manualCheckError}
               <Button variant="outline" onclick={() => wizard.finishWithoutIms()}>확인 없이 마무리</Button>

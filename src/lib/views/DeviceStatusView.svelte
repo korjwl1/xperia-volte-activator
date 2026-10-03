@@ -23,6 +23,7 @@
   const showLinkPopup = $derived(linkError !== null && !linkDismissed);
 
   let inFlight = false; // 이전 조회가 끝나기 전 다음 폴링이 겹치지 않도록
+  let alive = true; // 화면을 떠난 뒤 도착한 조회 결과는 버린다
   let failStreak = 0; // 일시적 조회 실패 1회로 기기 카드가 사라지지 않도록
 
   async function refresh() {
@@ -30,6 +31,7 @@
     inFlight = true;
     try {
       const list = await api.deviceList();
+      if (!alive || wizard.view !== "device") return;
       if (list === null) {
         failStreak++;
         if (failStreak < 2) return;
@@ -58,11 +60,12 @@
   });
 
   onDestroy(() => {
+    alive = false;
     if (pollTimer) clearInterval(pollTimer);
   });
 
   function start() {
-    wizard.view = "warning";
+    wizard.startSession();
   }
 </script>
 
@@ -157,6 +160,8 @@
                   <div class="flex items-center gap-1.5 text-sm {sim.volte === 'on' ? 'text-emerald-300' : 'opacity-70'}">
                     {#if sim.volte === "on"}
                       <CircleCheck size={14} /> VoLTE 활성화
+                    {:else if sim.volte === "wifi"}
+                      Wi-Fi 통화만 등록 (VoLTE 아님)
                     {:else if sim.volte === "off"}
                       VoLTE 비활성화
                     {:else}

@@ -6,6 +6,7 @@ import { bootPartition } from "$lib/data/devices";
 import { mockBackupGroups } from "$lib/mock/apps";
 import { bootloaderOnly, buildPlan, updateTarget, type PlanOptions } from "$lib/mock/plan";
 import { SIMULATED_RUN } from "$lib/data/runMode";
+import { EFS_PRESET_MODE, EFS_PRESET_VERSION, efsPreset } from "$lib/data/efsPresets";
 
 export type WizardView = "device" | "warning" | "step1" | "step2" | "step3" | "step4";
 
@@ -75,6 +76,14 @@ const MANUAL_TEXT: Record<ManualId, Omit<ManualPrompt, "id">> = {
       "패치가 완료되면 자동으로 감지됩니다",
     ],
   },
+  "ims-precheck": {
+    title: "리락 전 통신 확인",
+    steps: [
+      "재부팅 후 통신사 신호가 잡히면 앱이 VoLTE(IMS) 등록을 확인합니다",
+      "다른 전화로 실제로 걸고 받아 통화가 되는지 확인해 주세요 — 리락한 뒤에는 다시 고치려면 초기화가 한 번 더 필요합니다",
+      "통화가 안 되면 [다시 패치]로 VoLTE 적용부터 다시 진행할 수 있습니다",
+    ],
+  },
   "ims-check": {
     title: "최종 VoLTE 확인",
     steps: [
@@ -138,6 +147,35 @@ export class Wizard {
       this.fwVersions = v;
       this.fwVersionsState = v ? "done" : "failed";
     });
+  }
+
+  /** 선택·입력값이 속한 기기 — 다른 기기로 [작업 시작]하면 초기화 */
+  private sessionFor: string | null = null;
+
+  /** 1페이지 [작업 시작] — 기기를 고정하고, 이전과 다른 기기면 선택·입력값을 새로 시작 */
+  startSession() {
+    const d = this.device;
+    if (!d) return;
+    const key = `${d.model}|${d.serial ?? d.serialMasked}`;
+    if (this.sessionFor !== key) {
+      this.sessionFor = key;
+      this.volteConfig = defaultVolteConfig();
+      this.omdAck = false;
+      this.riskAck = false;
+      this.unlockCode = "";
+      this.imei1 = null;
+      this.imeiState = "idle";
+      this.firmware = null;
+      this.firmwareState = "idle";
+      this.firmwareError = "";
+      this.firmwareFail = null;
+      this.firmwareDest = "";
+      this.firmwareDir = "";
+      this.firmwareDirInfo = null;
+      this.firmwareDirState = "idle";
+      this.firmwareDirError = "";
+    }
+    this.view = "warning";
   }
 
   // 경고 페이지 동의 (뒤로 왔다 다시 와도 유지, 처음으로 가면 초기화)
@@ -231,6 +269,8 @@ export class Wizard {
   usbErrorCount = $state(0);
   simulateUsbError = $state(false);
   private erroredOnce = false;
+  /** 실행 세대 — 중단·처음으로·새 실행·재개 때 증가. 비동기 완료 시 같은 세대인지 확인 */
+  private runGen = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
   private cursor = 0;
 
@@ -244,6 +284,7 @@ export class Wizard {
     this.view = "step3";
     this.prepareRun();
     this.journalStarted = new Date().toISOString();
+    this.journalSims = this.simSnapshot();
     void this.journalKeyReady().then(() => this.persist(true));
     this.begin();
   }
@@ -254,6 +295,21 @@ export class Wizard {
   private journalKey: string | null = null;
   private journalStarted = "";
   private lastJournalSave = 0;
+  private journalSims: RunJournal["sims"] = undefined;
+
+  private simSnapshot(): RunJournal["sims"] {
+    return this.device?.sims.map((s) => ({ slot: s.slot, carrier: s.carrier, state: s.state }));
+  }
+
+  /** 작업 시작 때와 지금의 SIM 구성이 다른지 (기록이 없으면 다르지 않은 것으로) */
+  simChangedSince(j: RunJournal): boolean {
+    const now = this.simSnapshot();
+    if (!j.sims || !now) return false;
+    return j.sims.some((a) => {
+      const b = now.find((x) => x.slot === a.slot);
+      return !b || b.carrier !== a.carrier || b.state !== a.state;
+    });
+  }
   private stopInfo: RunJournal["stop"] = null;
 
   /** 기기 식별 키 — 모델+시리얼의 SHA-256 앞 16바이트 (파일 이름에 시리얼을 그대로 쓰지 않음) */
@@ -300,6 +356,7 @@ export class Wizard {
     this.firmware = j.firmware;
     this.firmwareState = j.firmware ? "done" : "idle";
     this.firmwareDir = j.firmwareDir;
+    this.imsUnverified = j.imsUnverified ?? false;
     // 직접 지정한 폴더는 그사이 바뀌었을 수 있으므로 다시 검사
     if (!j.firmware && j.firmwareDir) void this.setFirmwareDir(j.firmwareDir);
     this.steps = j.steps;
@@ -323,6 +380,18 @@ export class Wizard {
       prep.progress = 0;
       prep.manualDone = 0;
     }
+    // SIM을 바꿨으면 이전 통신 확인 결과를 재사용하지 않는다
+    if (this.simChangedSince(j)) {
+      for (const st of runSteps) {
+        if ((st.id === "comm-check" || st.id === "final-verify") && st.status === "done") {
+          st.status = "pending";
+          st.progress = 0;
+          st.manualDone = 0;
+          st.logs.push("[재개] 작업 시작 때와 SIM 구성이 달라 통신 확인을 다시 진행합니다");
+        }
+      }
+    }
+    this.journalSims = j.sims;
     const first = runSteps.findIndex((st) => st.status !== "done" && st.status !== "skipped");
     if (first >= 0) {
       const sub = runSteps[first].sub;
@@ -339,6 +408,7 @@ export class Wizard {
     this.finished = false;
     this.usbError = false;
     this.erroredOnce = false;
+    this.runGen++;
     this.pendingJournal = null;
     this.view = "step3";
     void this.persist(true);
@@ -368,6 +438,8 @@ export class Wizard {
       cursor: this.cursor,
       firmware: this.firmware ? { ...this.firmware } : null,
       firmwareDir: this.firmwareDir,
+      imsUnverified: this.imsUnverified,
+      sims: this.journalSims,
       stop: this.stopInfo,
     };
     return api.journalSave(key, JSON.stringify(j));
@@ -378,7 +450,12 @@ export class Wizard {
   private setGuard(on: boolean) {
     if (this.guardOn === on) return;
     this.guardOn = on;
-    void api.runGuard(on, "Xperia VoLTE 작업 진행 중 — 끝날 때까지 PC를 끄지 마세요");
+    void api.runGuard(on, "Xperia VoLTE 작업 진행 중 — 끝날 때까지 PC를 끄지 마세요").then((ok) => {
+      if (ok || !on || !this.guardOn) return;
+      // 켜기 실패 — 상태를 되돌려 다음 시작 때 다시 시도하고, 사용자에게 알림
+      this.guardOn = false;
+      this.runSteps[this.cursor]?.logs.push("[경고] PC 절전·종료 방지를 켜지 못했습니다 — 작업이 끝날 때까지 PC가 잠들거나 꺼지지 않게 해 주세요");
+    });
   }
 
   /** Windows 종료 요청 (guard.rs 이벤트) — query: 종료 보류 중 기록 저장 / end: 그래도 종료됨 */
@@ -406,7 +483,7 @@ export class Wizard {
   }
 
   /** 창 닫기 — 멈춘 사유를 남기고 기록을 확실히 저장 (사용자가 이미 중단한 경우 그 사유 유지) */
-  async closeForExit() {
+  async closeForExit(): Promise<boolean> {
     const cur = this.runSteps[this.cursor];
     const wasWaiting = cur?.status === "manual-wait";
     this.pause();
@@ -420,8 +497,9 @@ export class Wizard {
       };
       cur.logs.push(`[종료] ${this.stopInfo.reason}`);
     }
-    await this.persist(true);
+    const saved = await this.persist(true);
     this.setGuard(false);
+    return saved;
   }
 
   /** 명시적으로 멈춘 사유를 기록 */
@@ -434,6 +512,7 @@ export class Wizard {
 
   // ── 실행 시뮬레이션 ───────────────────
   prepareRun() {
+    this.runGen++;
     this.runSteps = this.steps
       .filter((s) => s.enabled)
       .map((s) => ({ id: s.id, title: s.title, status: "pending", progress: 0, logs: [], manualDone: 0 }));
@@ -441,10 +520,12 @@ export class Wizard {
     this.finished = false;
     this.usbError = false;
     this.erroredOnce = false;
+    this.efsFailedOnce = false;
+    this.stepError = "";
   }
 
   begin() {
-    if (this.running || this.usbError) return;
+    if (this.running || this.usbError || this.stepError) return;
     this.running = true;
     this.stopInfo = null;
     this.setGuard(true);
@@ -466,7 +547,22 @@ export class Wizard {
       cur.logs.push(`[시작] ${cur.title}`);
       const list = this.subtasksFor(cur.id);
       if (list.length > 0 && !cur.sub) cur.sub = { list, done: 0 };
+      if (cur.id === "efs") {
+        for (const t of this.volteConfig.sims.filter((x) => x.carrier !== null)) {
+          const p = efsPreset(t.carrier!, t.slot);
+          cur.logs.push(
+            p
+              ? `[프리셋] SIM${t.slot} ${t.carrier} · ${EFS_PRESET_VERSION} ${EFS_PRESET_MODE} · 파일 ${p.files}개 · sha256 ${p.sha256.slice(0, 12)}…`
+              : `[프리셋] SIM${t.slot} ${t.carrier} — 번들 프리셋을 찾을 수 없습니다`,
+          );
+        }
+      }
       void this.persist(true);
+    }
+    if (this.simulateEfsFail && !this.efsFailedOnce && cur.id === "efs" && cur.progress > 0.5) {
+      this.efsFailedOnce = true;
+      this.failStep("EFS 업로드 실패 — SIM1 2차 업로드, 도구 종료 코드 1 (시뮬레이션)");
+      return;
     }
     if (this.simulateUsbError && !this.erroredOnce && (cur.id === "backup" || cur.id === "efs")) {
       this.erroredOnce = true;
@@ -515,7 +611,12 @@ export class Wizard {
       case "restore": return items.map((l) => `${l} 복원`);
       case "root": return ["Magisk 받기", "부트 이미지·패치 도구 전송", "Magisk 패치", "패치 결과 확인", "패치 이미지 기록", "Magisk 앱 설치"];
       case "efs-preflight": return ["USB 연결 확인", "드라이버 확인", "전원 관리 해제", "연결 안정성 테스트"];
-      case "efs": return this.volteConfig.sims.filter((s) => s.carrier !== null).map((s) => `SIM${s.slot} 프로파일 적용`);
+      case "efs":
+        return this.volteConfig.sims
+          .filter((s) => s.carrier !== null)
+          .flatMap((s) => [`SIM${s.slot} 프로파일 1차 업로드`, `SIM${s.slot} 프로파일 2차 업로드`]);
+      case "verify":
+        return this.volteConfig.sims.filter((s) => s.carrier !== null).map((s) => `SIM${s.slot} 전수 리드백·해시 비교`);
       case "volte-props": return ["VoLTE 설정", "영상통화 설정", "Wi-Fi 통화 설정", "재부팅"];
       case "fw-verify": return ["재부팅", "버전 확인", "지문 확인"];
       case "final-verify": return ["재부팅", "네트워크 등록", "VoLTE 활성 확인"];
@@ -552,7 +653,14 @@ export class Wizard {
 
   /** USB 모드 감지 (fastboot / flashmode) — 장치 디스크립터만 읽음 */
   private async usbModeIs(mode: string): Promise<boolean> {
-    return (await api.usbModes())?.some((m) => m.mode === mode) ?? false;
+    const list = await api.usbModes();
+    // 여러 대가 연결돼 있으면 어느 폰의 모드인지 구분할 수 없으므로 통과시키지 않는다
+    return !!list && list.length === 1 && list[0].mode === mode;
+  }
+
+  /** 연결된 Sony USB 장치 수 (모드 확인 실패 사유 안내용) */
+  private async sonyUsbCount(): Promise<number> {
+    return (await api.usbModes())?.length ?? 0;
   }
 
   /** VoLTE 패치 대상 슬롯이 모두 IMS 음성 등록(on)인지 — 최종 확인 자동 판정 */
@@ -576,13 +684,16 @@ export class Wizard {
   /** 자동 감지: 조건이 충족될 때까지 주기적으로 확인 → 충족되면 자동 진행 (수동 [완료]도 가능) */
   private watchManual(cur: RunStep, id: ManualId, label: string, check: () => Promise<boolean>, everyMs: number) {
     this.manualWatching = label;
+    const gen = this.runGen;
     let busy = false;
     this.watchTimer = setInterval(async () => {
-      if (this.manualCurrent?.id !== id) return this.stopWatch();
+      if (this.manualCurrent?.id !== id || gen !== this.runGen) return this.stopWatch();
       if (busy) return;
       busy = true;
       try {
-        if (await check()) {
+        const ok = await check();
+        if (gen !== this.runGen || this.manualCurrent?.id !== id) return; // 그사이 중단·진행됨
+        if (ok) {
           this.stopWatch();
           cur.logs.push(`[감지] ${label} — 자동으로 진행합니다`);
           this.ackManual();
@@ -601,7 +712,10 @@ export class Wizard {
 
   /** 수동 개입 시작 — 이미 충족이면 안내 없이 진행, 자동 감지 가능한 항목은 감지되면 자동 진행 */
   private async openManual(cur: RunStep, id: ManualId) {
-    if (id === "usb-debug" && (await this.usbDebugReady())) {
+    const gen = this.runGen;
+    const usbReady = id === "usb-debug" && (await this.usbDebugReady());
+    if (gen !== this.runGen) return; // 확인하는 사이 중단됨
+    if (usbReady) {
       cur.logs.push("[확인] USB 디버깅 연결 확인됨 — 자동으로 진행합니다");
       cur.manualDone++;
       cur.status = "running";
@@ -613,6 +727,7 @@ export class Wizard {
         cur.status = "running";
         cur.logs.push(`[자동] Sony 서버에서 순정 펌웨어의 ${this.partition ?? "부트"} 이미지 받는 중`);
         await this.fetchFirmware();
+        if (gen !== this.runGen) return; // 받는 사이 중단·처음으로
       }
       if (this.firmware) {
         this.logFirmware(cur);
@@ -625,6 +740,7 @@ export class Wizard {
     }
     this.manualCheckError = "";
     this.oemUnknownAck = false;
+    this.callAck = false;
     this.manualCurrent = { id, ...MANUAL_TEXT[id] };
     this.onManualOpen(id);
     cur.logs.push(`[대기] 수동 개입: ${this.manualCurrent.title}`);
@@ -640,6 +756,8 @@ export class Wizard {
     if (id === "unlock-code") {
       void api.openExternal(LINKS.unlock);
       void this.loadImei();
+    } else if (id === "ims-precheck") {
+      void this.imsReady(); // 슬롯별 현재 상태 표시 (진행은 통화 확인 체크 후 [확인하고 진행])
     } else if (id === "oem-toggle") {
       // 폰에 해당 설정 화면을 바로 띄움 (개발자 옵션이 꺼져 있으면 휴대전화 정보 — 빌드번호 연타)
       void this.openPhoneSettings();
@@ -658,6 +776,7 @@ export class Wizard {
   }
 
   async fetchFirmware() {
+    const gen = this.runGen;
     const partition = this.partition;
     this.firmwareError = "";
     if (!partition) {
@@ -669,6 +788,7 @@ export class Wizard {
     this.firmwareState = "loading";
     // 업데이트를 고른 경우 루팅용 이미지는 새 버전 것
     const r = await api.firmwareFetch(this.device?.serial, partition, this.updateVersion ?? undefined, this.firmwareDest || undefined);
+    if (gen !== this.runGen) return;
     if (r.ok) {
       this.firmware = r.value;
       this.firmwareState = "done";
@@ -692,7 +812,9 @@ export class Wizard {
     cur.logs.push(
       fw
         ? `[준비] 순정 펌웨어 ${fw.version} — ${fw.partition} 자동 다운로드(${(fw.downloadedBytes / 1024 ** 2).toFixed(1)} MB 받음), 기기 지문 일치`
-        : `[입력] 펌웨어 폴더: ${this.firmwareDir}`,
+        : this.firmwareDirInfo
+          ? `[입력] 펌웨어 폴더: ${this.firmwareDir} (${this.firmwareDirInfo.file})`
+          : "[목업] 순정 펌웨어 준비를 건너뛰었습니다",
     );
   }
 
@@ -737,6 +859,8 @@ export class Wizard {
   // ── 수동 확인 검증 — "완료" 버튼은 건너뛰기가 아니라 실제 확인 후 진행 ──
   manualChecking = $state(false);
   manualCheckError = $state("");
+  /** 리락 전 통신 확인 — 실제 발신·수신을 확인했다는 체크 */
+  callAck = $state(false);
   /** 언락 조건 중 "확인 불가" 항목을 폰에서 직접 켰다고 확인 */
   oemUnknownAck = $state(false);
   firmwareDirInfo: { file: string; imageBytes: number } | null = $state(null);
@@ -759,12 +883,12 @@ export class Wizard {
   /** 실제 확인이 필요한 수동 단계인지 (동의·입력형 제외) */
   get manualVerifiable(): boolean {
     const id = this.manualCurrent?.id;
-    return !!id && ["oem-toggle", "usb-debug", "mode-wait", "flash-mode", "su-grant", "ims-check"].includes(id);
+    return !!id && ["oem-toggle", "usb-debug", "mode-wait", "flash-mode", "su-grant", "ims-check", "ims-precheck"].includes(id);
   }
 
   /** 목업 실행에서만 — 폰이 실제로 재부팅되지 않아 확인할 수 없는 단계 건너뛰기 */
   get manualSkippable(): boolean {
-    return SIMULATED_RUN && this.manualVerifiable;
+    return SIMULATED_RUN && (this.manualVerifiable || this.manualCurrent?.id === "firmware-select");
   }
 
   /** 직접 지정한 펌웨어 폴더 — 고르는 즉시 검사 */
@@ -802,16 +926,26 @@ export class Wizard {
       case "usb-debug":
         return (await this.usbDebugReady()) ? null : "폰이 아직 USB 디버깅으로 연결되지 않았습니다 — 폰 화면에서 '허용'을 눌렀는지 확인해 주세요";
       case "mode-wait":
-        return (await this.usbModeIs("fastboot")) ? null : "부트로더(fastboot) 모드가 감지되지 않았습니다 — USB 연결을 확인해 주세요";
-      case "flash-mode":
-        return (await this.usbModeIs("flashmode"))
-          ? null
+      case "flash-mode": {
+        if (await this.usbModeIs(id === "mode-wait" ? "fastboot" : "flashmode")) return null;
+        if ((await this.sonyUsbCount()) > 1) return "Xperia가 여러 대 연결되어 있습니다 — 작업할 폰만 남기고 나머지는 분리해 주세요";
+        return id === "mode-wait"
+          ? "부트로더(fastboot) 모드가 감지되지 않았습니다 — USB 연결을 확인해 주세요"
           : "플래시 모드가 감지되지 않았습니다 — 전원을 끈 뒤 볼륨 아래 버튼을 누른 채 USB를 연결해 주세요";
+      }
       case "su-grant": {
         const ok = await api.rootCheck(this.device?.serial);
         return ok ? null : "루트 권한이 확인되지 않았습니다 — 폰에서 Magisk 권한 요청을 '허용'했는지 확인해 주세요";
       }
+      case "ims-precheck":
+        if (await this.imsReady()) return null;
+        if (this.imsSims.some((s) => s.volte === "wifi")) return "Wi-Fi 통화로만 등록되어 있습니다 — 폰의 Wi-Fi를 끄고 셀룰러 VoLTE로 등록되는지 확인해 주세요";
+        return (await this.imsReady())
+          ? null
+          : "VoLTE 등록이 확인되지 않았습니다 — 신호가 잡힐 때까지 기다리거나, 통화가 안 되면 [다시 패치]로 VoLTE 적용부터 다시 진행해 주세요";
       case "ims-check":
+        if (await this.imsReady()) return null;
+        if (this.imsSims.some((s) => s.volte === "wifi")) return "Wi-Fi 통화로만 등록되어 있습니다 — 폰의 Wi-Fi를 끄고 셀룰러 VoLTE로 등록되는지 확인해 주세요";
         return (await this.imsReady())
           ? null
           : "VoLTE 등록이 아직 확인되지 않았습니다 — 재부팅 후 통신사 신호가 잡힐 때까지 잠시 기다려 주세요";
@@ -827,8 +961,9 @@ export class Wizard {
     this.manualChecking = true;
     this.manualCheckError = "";
     try {
+      const gen = this.runGen;
       const err = await this.verifyManual(m.id);
-      if (this.manualCurrent?.id !== m.id) return; // 그사이 자동 감지로 진행됨
+      if (gen !== this.runGen || this.manualCurrent?.id !== m.id) return; // 그사이 중단·자동 감지로 진행됨
       if (err) {
         this.manualCheckError = err;
         this.runSteps[this.cursor]?.logs.push(`[확인 실패] ${err}`);
@@ -854,7 +989,8 @@ export class Wizard {
   finishWithoutIms() {
     if (this.manualCurrent?.id !== "ims-check") return;
     this.imsUnverified = true;
-    this.runSteps[this.cursor]?.logs.push("[확인 생략] VoLTE 등록을 확인하지 못한 채 마무리했습니다 — SIM을 넣은 뒤 VoLTE 상태를 확인해 주세요");
+    void this.persist(true);
+    this.runSteps[this.cursor]?.logs.push("[확인 생략] VoLTE 등록을 확인하지 못한 채 마무리했습니다 — 통신 미검증. SIM을 넣으면 프로파일이 바뀌어 재패치가 필요할 수 있습니다");
     this.stopWatch();
     this.ackManual(true);
   }
@@ -863,6 +999,7 @@ export class Wizard {
   get manualInputReady(): boolean {
     const m = this.manualCurrent;
     if (m?.id === "backup-notice") return this.backupNoticeAck;
+    if (m?.id === "ims-precheck") return this.callAck;
     if (m?.id === "oem-toggle") return this.prepMissing.length === 0 && (this.prepUnknown.length === 0 || this.oemUnknownAck) && !this.prepChecking;
     if (!m?.input) return true;
     if (m.input === "unlock-code") return this.unlockCodeValid;
@@ -886,6 +1023,58 @@ export class Wizard {
     void this.persist(true);
   }
 
+  // ── 단계 실패 — 실패 상태를 유지하고 다음 단계(리락 포함)로 넘어가지 않는다. 다시 시도 또는 중단만 허용
+  stepError = $state("");
+  simulateEfsFail = $state(false);
+  private efsFailedOnce = false;
+
+  /** 실제 백엔드도 이 경로로 실패를 알린다 — 실패 파일·슬롯·시도 횟수·종료 코드·출력 요약을 reason과 로그에 남긴다 */
+  failStep(reason: string) {
+    const cur = this.runSteps[this.cursor];
+    if (!cur) return;
+    cur.status = "failed";
+    cur.logs.push(`[실패] ${reason}`);
+    this.stepError = reason;
+    this.pause();
+    this.stopWatch();
+    this.markStop(reason);
+  }
+
+  /** 실패한 단계를 처음부터 다시 */
+  retryStep() {
+    const cur = this.runSteps[this.cursor];
+    if (!cur || cur.status !== "failed") return;
+    cur.status = "pending";
+    cur.progress = 0;
+    cur.manualDone = 0;
+    cur.sub = undefined;
+    cur.logs.push("[재시도] 이 단계를 처음부터 다시 진행합니다");
+    this.stepError = "";
+    this.runGen++;
+    this.begin();
+  }
+
+  /** 통신 확인 실패 시 VoLTE 적용부터 다시 (리락 전이라 루트가 남아 있음) */
+  repatch() {
+    const idx = this.runSteps.findIndex((s) => s.id === "efs-preflight" || s.id === "efs");
+    if (idx < 0 || idx > this.cursor) return;
+    for (let k = idx; k <= this.cursor; k++) {
+      const st = this.runSteps[k];
+      st.status = "pending";
+      st.progress = 0;
+      st.manualDone = 0;
+      st.sub = undefined;
+    }
+    this.runSteps[idx].logs.push("[재패치] 통신이 확인되지 않아 VoLTE 적용부터 다시 진행합니다");
+    this.stopWatch();
+    this.manualCurrent = null;
+    this.manualCheckError = "";
+    this.cursor = idx;
+    this.runGen++;
+    void this.persist(true);
+    this.begin();
+  }
+
   dismissUsbError() {
     this.usbError = false;
     const cur = this.runSteps[this.cursor];
@@ -894,6 +1083,8 @@ export class Wizard {
   }
 
   abort() {
+    this.runGen++;
+    this.stepError = "";
     this.pause();
     this.stopWatch();
     // 진행 중·수동 대기 단계 모두 대기 상태로 (사이드바 스피너가 남지 않도록), 수동 개입은 처음부터 다시
@@ -901,6 +1092,12 @@ export class Wizard {
       if (s.status === "running" || s.status === "manual-wait") {
         s.status = "pending";
         s.manualDone = 0;
+      } else if (s.status === "failed") {
+        // 실패한 단계는 다시 시작할 때 처음부터
+        s.status = "pending";
+        s.progress = 0;
+        s.manualDone = 0;
+        s.sub = undefined;
       }
     });
     this.manualCurrent = null;
@@ -915,6 +1112,7 @@ export class Wizard {
 
   /** [처음으로] — 모든 선택·입력·실행 상태 초기화 */
   restart() {
+    this.runGen++;
     this.pause();
     this.stopWatch();
     this.view = "device";
@@ -963,6 +1161,12 @@ export class Wizard {
     this.firmwareDirState = "idle";
     this.firmwareDirError = "";
     this.imsUnverified = false;
+    this.callAck = false;
+    this.stepError = "";
+    this.simulateEfsFail = false;
+    this.efsFailedOnce = false;
+    this.journalSims = undefined;
+    this.sessionFor = null;
     this.pendingJournal = null;
     this.journalKey = null;
     this.journalStarted = "";
