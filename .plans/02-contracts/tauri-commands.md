@@ -17,6 +17,7 @@ invoke('device_list') → DeviceStatus[]            // ✅ 구현: adb_client �
 //     미승인 기기는 PC에 Sony USB 장치가 있을 때만 표시
 //   - state: "device"(준비) / "unauthorized"(USB 디버깅 허용 대기) / "offline" … — 준비 안 된 기기도 상태만 담아 반환
 //   - firmware: ro.build.id (display.id는 " release-keys" 접미어) / productName: ro.semc.product.name 우선, 없으면 모델 표
+//   - fingerprint: ro.build.fingerprint (시리얼 없음) — 업데이트 확인(fw-verify)에서 같은 기기·지역·대상 버전 대조. 자리표시 항목은 빈 문자열
 //   - bootloader: ro.boot.flash.locked + ro.boot.vbmeta.device_state 일치 시 확정, 불일치·잠김인데 su 존재(위장 가능성)면 "unknown"
 //   - rooted: true | false | "unknown" — su 경로가 보이면 true. 안 보여도 부트로더가 잠김으로 확정될 때만 false,
 //     언락·판별 불가 상태나 출력 끊김은 "unknown"(셸에 su를 숨긴 루팅과 구분 불가 → 리락 전 언루팅 포함)
@@ -115,6 +116,7 @@ invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb r
 // 기록은 fastboot_flash 재사용. expectedSerial과 패치 결과 expectedSha256을 함께 전달한다.
 // 검증(절차 7)은 기존 root_check + su-grant 수동 개입 재사용
 // 패치·설치는 root-write + REAL_STEPS.root. root_reboot는 root-write 또는 fastboot-write 필요.
+// 프론트 facade는 REAL_STEPS.root/fastboot이면 os·bootloader 모두, REAL_STEPS.verify만 켜져 있으면 os만 허용(최종 확인의 재부팅).
 // 시리얼은 필수이며 선택 기기가 없을 때 임의의 첫 기기로 대체하지 않는다.
 ```
 
