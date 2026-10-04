@@ -293,9 +293,7 @@ mod tests {
         std::fs::write(&bad, b"NOTANDROID").unwrap();
         assert!(stock_sha256(&bad).is_err());
         let good = dir.path().join("stock2.img");
-        let mut data = vec![0; 4096];
-        data[..8].copy_from_slice(b"ANDROID!");
-        std::fs::write(&good, data).unwrap();
+        std::fs::write(&good, crate::boot_image::test_image(4096, 0)).unwrap();
         let sha = stock_sha256(&good).unwrap();
         assert_eq!(sha.len(), 64);
     }

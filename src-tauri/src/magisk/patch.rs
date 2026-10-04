@@ -199,6 +199,9 @@ pub fn run_patch(
                 orig.len()
             ));
         }
+        // 헤더가 말하는 길이까지 있는지 — 잘린 결과를 기록하지 않는다
+        crate::boot_image::validate(&buf)
+            .map_err(|e| format!("패치 결과가 완전한 부트 이미지가 아닙니다 — {e}"))?;
         let patched_sha = sha256_hex(&buf);
         if patched_sha == orig_sha {
             return Err("패치 결과가 순정 이미지와 동일합니다 — 패치가 적용되지 않았습니다".into());
@@ -247,9 +250,7 @@ mod tests {
     }
 
     fn image(len: usize, fill: u8) -> Vec<u8> {
-        let mut bytes = vec![fill; len];
-        bytes[..8].copy_from_slice(b"ANDROID!");
-        bytes
+        crate::boot_image::test_image(len, fill)
     }
 
     fn fixture(orig: &[u8]) -> Fixture {
@@ -290,11 +291,7 @@ mod tests {
     #[test]
     fn patch_roundtrip_verified_and_cleaned() {
         let orig = image(4096, 0x41);
-        let patched = {
-            let mut p = b"ANDROID!".to_vec();
-            p.extend_from_slice(&[0xBB; 4088]);
-            p
-        };
+        let patched = image(4096, 0xBB);
         let f = fixture(&orig);
         let mut d = dev_ready(&patched);
         let out = f.dir.path().join("patched.img");
@@ -367,11 +364,7 @@ mod tests {
 
     #[test]
     fn identical_output_fails() {
-        let orig = {
-            let mut o = b"ANDROID!".to_vec();
-            o.extend_from_slice(&[0x41; 4088]);
-            o
-        };
+        let orig = image(4096, 0x41);
         let f = fixture(&orig);
         let mut d = dev_ready(&orig); // 패치 결과 == 원본
         let out = f.dir.path().join("patched.img");
@@ -432,8 +425,7 @@ mod tests {
     fn weird_local_filename_is_never_interpolated() {
         // 로컬 이미지명에 셸 특수문자가 있어도 기기 측 명령은 고정명만 쓴다
         let orig = image(4096, 0x41);
-        let mut patched = b"ANDROID!".to_vec();
-        patched.extend_from_slice(&[0xBB; 4088]);
+        let patched = image(4096, 0xBB);
         let dir = tempfile::tempdir().unwrap();
         let apk = dir.path().join("Magisk-v30.7.apk");
         std::fs::write(

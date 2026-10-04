@@ -528,9 +528,15 @@ fn update_xml_fingerprint(xml: &str) -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
-/// `.sin`(tar: 서명 .cms + 원본 이미지 .000)에서 이미지 추출 — ANDROID! 매직 확인
+/// `.sin`(tar: 서명 .cms + 원본 이미지 .000)에서 이미지 추출 — 헤더 길이까지 검사.
+/// 이미지가 여러 조각(.001, .002 …)으로 나뉜 .sin은 첫 조각만으로는 완전한 이미지가 아니므로 거부한다.
 fn extract_sin_image(sin: &[u8]) -> Result<Vec<u8>, String> {
+    let is_part = |name: &str| {
+        name.rsplit_once('.')
+            .is_some_and(|(_, ext)| ext.len() == 3 && ext.bytes().all(|b| b.is_ascii_digit()))
+    };
     let mut ar = tar::Archive::new(sin);
+    let mut image = None;
     for entry in ar.entries().map_err(|e| format!(".sin 해석 실패: {e}"))? {
         let mut entry = entry.map_err(|e| format!(".sin 해석 실패: {e}"))?;
         let path = entry
@@ -538,25 +544,31 @@ fn extract_sin_image(sin: &[u8]) -> Result<Vec<u8>, String> {
             .map_err(|e| format!(".sin 해석 실패: {e}"))?
             .to_string_lossy()
             .to_string();
-        if path.ends_with(".000") {
-            let mut img = vec![];
-            if entry.size() > MAX_ENTRY {
-                return Err("부트 이미지 크기가 상한을 넘습니다".into());
-            }
-            (&mut entry)
-                .take(MAX_ENTRY + 1)
-                .read_to_end(&mut img)
-                .map_err(|e| format!(".sin 해석 실패: {e}"))?;
-            if img.len() as u64 > MAX_ENTRY {
-                return Err("부트 이미지 크기가 상한을 넘습니다".into());
-            }
-            if !img.starts_with(b"ANDROID!") {
-                return Err("부트 이미지 형식(ANDROID!)이 아닙니다".into());
-            }
-            return Ok(img);
+        if !is_part(&path) {
+            continue;
         }
+        if !path.ends_with(".000") || image.is_some() {
+            return Err(
+                ".sin 안의 이미지가 여러 조각으로 나뉘어 있습니다 — 지원하지 않는 형식입니다"
+                    .into(),
+            );
+        }
+        if entry.size() > MAX_ENTRY {
+            return Err("부트 이미지 크기가 상한을 넘습니다".into());
+        }
+        let mut img = vec![];
+        (&mut entry)
+            .take(MAX_ENTRY + 1)
+            .read_to_end(&mut img)
+            .map_err(|e| format!(".sin 해석 실패: {e}"))?;
+        if img.len() as u64 > MAX_ENTRY {
+            return Err("부트 이미지 크기가 상한을 넘습니다".into());
+        }
+        image = Some(img);
     }
-    Err(".sin 안에 이미지(.000)가 없습니다".into())
+    let img = image.ok_or(".sin 안에 이미지(.000)가 없습니다")?;
+    crate::boot_image::validate(&img)?;
+    Ok(img)
 }
 
 fn sin_name_matches(name: &str, partition: &str) -> bool {
@@ -936,13 +948,42 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn split_or_truncated_sin_images_are_rejected() {
+        let sin = |parts: &[(&str, Vec<u8>)]| {
+            let mut tar = tar::Builder::new(Vec::new());
+            for (name, data) in parts {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(data.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                tar.append_data(&mut header, *name, &data[..]).unwrap();
+            }
+            tar.into_inner().unwrap()
+        };
+        let whole = crate::boot_image::test_image(8192, 0x41);
+        assert_eq!(
+            extract_sin_image(&sin(&[("boot.cms", vec![1]), ("boot.000", whole.clone())])).unwrap(),
+            whole
+        );
+        // 여러 조각(.000 + .001)은 첫 조각만으로 완전한 이미지가 아니다
+        let (first, rest) = whole.split_at(4096);
+        assert!(extract_sin_image(&sin(&[
+            ("boot.000", first.to_vec()),
+            ("boot.001", rest.to_vec())
+        ]))
+        .is_err());
+        // 헤더보다 짧은(잘린) 이미지
+        assert!(extract_sin_image(&sin(&[("boot.000", first.to_vec())])).is_err());
+        assert!(extract_sin_image(&sin(&[("boot.cms", vec![1])])).is_err());
+    }
+
+    #[test]
     fn manual_sin_returns_a_raw_image_and_requires_unambiguous_firmware_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let firmware = dir.path().join("download");
         std::fs::create_dir_all(&firmware).unwrap();
         let cache = dir.path().join("cache");
-        let mut image = vec![0x41; 4096];
-        image[..8].copy_from_slice(b"ANDROID!");
+        let image = crate::boot_image::test_image(4096, 0x41);
         let mut header = tar::Header::new_gnu();
         header.set_size(image.len() as u64);
         header.set_mode(0o644);
