@@ -132,8 +132,11 @@ invoke('disk_free', { path }) → number   // ✅ 구현(src-tauri/src/host.rs):
 ## env (M1 — §12.6)
 
 ```ts
-invoke('env_check') → EnvCheckItem[]            // WebView2/드라이버/adb서버/번들해시/프리셋/디스크/QPST(정보)
-invoke('env_fix', { id }) → FixResult           // WebView2 부트스트래퍼, PNPUTIL 상승 등 자동 수리
+invoke('env_check') → EnvCheckItem[]            // ✅ 구현(src-tauri/src/env.rs, 읽기 전용·관리자 권한 불필요)
+//   현재 항목: diag-driver — 드라이버 저장소(레지스트리 HKLM\SYSTEM\DriverDatabase\DriverPackages)에 qcser.inf_* 패키지가 있으면 pass(패키지 설치 여부 — 포트 연결까지 보장하지 않음),
+//   없으면 warn(설치 안내), 레지스트리를 읽지 못하면 info(단정하지 않음). 드라이버를 설치하지 않는다(사용자 결정 2026-10-04: 감지+안내).
+//   예정 항목: WebView2/adb서버/번들해시/프리셋/디스크/QPST(정보)
+// env_fix(자동 수리)는 두지 않는다 — 드라이버 설치 등은 안내만(사용자 결정 2026-10-04). 프론트 api.envCheck는 조회 실패 시 null(이전 결과 유지)
 ```
 
 ## plan / fastboot (M2 — 설계 `.plans/04-engine/fastboot.md`, 사용자 승인 2026-10-03)

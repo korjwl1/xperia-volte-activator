@@ -44,8 +44,8 @@ export interface Api {
   pickFolder(): Promise<string | null>;
   /** 경로가 속한 PC 드라이브의 여유 공간(바이트), 조회 불가 시 null */
   diskFree(path: string): Promise<number | null>;
-  envCheck(): Promise<EnvCheckItem[]>;
-  envFix(id: string): Promise<{ ok: boolean; message: string }>;
+  /** PC 환경 점검(읽기 전용) — 조회 실패 시 null(이전 결과를 유지하고 단정하지 않음). 자동 수정(설치)은 하지 않는다 */
+  envCheck(): Promise<EnvCheckItem[] | null>;
   /** 작업 진행 기록 저장 (기기별, 앱 데이터 폴더) */
   journalSave(key: string, data: string): Promise<boolean>;
   /** 끝나지 않은 진행 기록 (없거나 실패 시 null) */
@@ -348,12 +348,9 @@ const hybridApi: Api = {
   },
 
   async envCheck() {
-    // 환경 체크는 로컬 상태라 실기기와 무관 — mock 유지
+    // 데스크톱: PC 실측(드라이버 등, 읽기 전용). 브라우저 개발은 mock
+    if (inTauri()) return await invokeBackend<EnvCheckItem[]>("env_check");
     return mockEnvChecks;
-  },
-
-  async envFix(id) {
-    return { ok: true, message: `(mock) 수정: ${id}` };
   },
 };
 

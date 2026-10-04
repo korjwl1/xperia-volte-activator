@@ -5,6 +5,7 @@ mod app_paths;
 mod backup;
 mod boot_image;
 mod device_io;
+mod env;
 mod fastboot;
 mod firmware;
 mod guard;
@@ -43,6 +44,7 @@ pub fn run() {
             adb::open_settings_screen,
             usbmode::usb_modes,
             host::disk_free,
+            env::env_check,
             firmware::firmware_fetch,
             firmware::firmware_versions,
             firmware::firmware_dir_check,
