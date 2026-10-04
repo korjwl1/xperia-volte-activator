@@ -135,14 +135,18 @@ invoke('env_fix', { id }) → FixResult           // WebView2 부트스트래퍼
 
 ## plan / fastboot (M2 — 설계 `.plans/04-engine/fastboot.md`, 사용자 승인 2026-10-03)
 
-**구현 상태**: 프로토콜 5 명령 구현(FakeTransport 검증, 실기기 미검증). 쓰기·재부팅은 Cargo `fastboot-write` 기본 비활성 + `REAL_STEPS.fastboot`로 보호. 실전 리락은 순정 이미지·부트 체인×슬롯 검증 구현 전 프론트/백엔드 모두 차단.
+**구현 상태**: 프로토콜 5 명령 구현(FakeTransport 검증, 실기기 미검증). 쓰기·재부팅은 Cargo `fastboot-write` 기본 비활성 + `REAL_STEPS.fastboot`로 보호. **리락 게이트(§3-3) 구현 완료** — `relock_gate_check`(사전 점검) + `fastboot_lock` 내부 강제(feat/unroot-relockgate, 2026-10-04).
 
 ```ts
 invoke('fastboot_getvar') → Record<string,string>   // ✅ 읽기 전용 — rusb FF/42/03 open, getvar:all 파싱(unlocked·current-slot·slot-successful:_a/_b·max-download-size …)
 //   fastboot 모드 Sony 장치가 정확히 1대일 때만 open(다중 기기 거부 — §9-3)
 invoke('fastboot_unlock', { code, confirm }) → { unlocked: boolean }
 //   "oem unlock 0x{code}" — 16자리 hex 검증, 로그·이벤트에 코드 마스킹(§12.5). 실행 후 getvar로 이중 확인
-invoke('fastboot_lock', { confirm }) → { unlocked: boolean }       // 현재는 §3-3 게이트 미구현 오류로 차단
+invoke('fastboot_lock', { confirm, partition, stockPath }) → { unlocked: boolean }
+//   "oem lock" — 내부에서 리락 게이트 강제(§3-3): {partition}×_a/_b의 마지막 done 기록 sha256이
+//   순정 이미지(stockPath — firmware_fetch 결과) 해시와 일치해야 실행. 미충족 시 사유와 함께 차단
+invoke('relock_gate_check', { partition, stockPath, deviceKey? }) → { ok, reasons: string[], checked: [{partition, slot, ok, detail}] }
+//   읽기 전용 사전 점검(adb 연결 중 호출 가능) — fastboot_lock이 최종 판정(fastboot serial 기준 deviceKey)
 invoke('fastboot_flash', { partition, path, confirm }) → void      // 슬롯 접미사 없는 기본명, 양쪽 슬롯 존재 확인 → download/flash → 기기별·슬롯별 이력
 invoke('fastboot_reboot', { target: 'os'|'bootloader' }) → void
 // 이벤트 'fastboot:log': string — INFO/TEXT 프레임·진행(코드·IMEI·식별정보 마스킹)

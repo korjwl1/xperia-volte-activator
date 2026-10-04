@@ -250,6 +250,13 @@ export interface UnlockResult {
   unlocked: boolean;
 }
 
+/** 리락 게이트(§3-3) 사전 점검 결과 — 백엔드 relock_gate_check */
+export interface RelockGate {
+  ok: boolean;
+  reasons: string[];
+  checked: { partition: string; slot: string; ok: boolean; detail: string }[];
+}
+
 /** Magisk APK 확보 결과 — 백엔드 magisk_prepare */
 export interface MagiskPrepared {
   version: string;

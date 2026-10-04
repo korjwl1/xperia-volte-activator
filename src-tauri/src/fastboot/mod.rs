@@ -2,6 +2,7 @@
 //! 쓰기/재부팅은 기본 꺼진 Cargo feature fastboot-write + 프론트 게이트 뒤에 있다.
 
 pub mod protocol;
+pub mod relock;
 pub mod transport;
 
 use protocol::FastbootDevice;
@@ -26,10 +27,31 @@ fn ensure_write_enabled() -> Result<(), String> {
     }
 }
 
-fn ensure_relock_verified() -> Result<(), String> {
-    // §3-3: 언루팅 done/skipped 또는 su 부재로는 AVB 안전을 증명할 수 없다.
-    // 세션·기기별 순정 해시와 부트 체인×슬롯 이력 검증 구현 전에는 허용하지 않는다.
-    Err("리락 차단: 검증된 순정 이미지와 부트 체인·슬롯별 플래시 이력 게이트가 아직 구현되지 않았습니다 (§3-3)".into())
+/// fastboot serialno → 이력 deviceKey(fastboot_flash 기록 방식과 동일)
+fn device_key(serial: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(serial.as_bytes()))
+}
+
+/// 리락 게이트(§3-3) — 이력 파일을 읽어 판정. 순수 로직은 relock::verify.
+fn verify_from_dir(
+    dir: &std::path::Path,
+    partition: &str,
+    stock_sha: &str,
+    device_key: Option<&str>,
+) -> Result<relock::GateResult, String> {
+    let raw = std::fs::read_to_string(dir.join("flash-history.jsonl")).unwrap_or_default();
+    let history = relock::parse_history(&raw);
+    Ok(relock::verify(&history, partition, stock_sha, device_key))
+}
+
+fn load_and_verify(
+    partition: &str,
+    stock_sha: &str,
+    device_key: Option<&str>,
+) -> Result<relock::GateResult, String> {
+    let dir = crate::app_paths::data_dir().ok_or("앱 데이터 폴더를 찾지 못했습니다")?;
+    verify_from_dir(&dir, partition, stock_sha, device_key)
 }
 
 /// 로그와 반환 오류를 같은 규칙으로 마스킹한다.
@@ -130,16 +152,39 @@ pub async fn fastboot_unlock(
     .map_err(|e| format!("언락 스레드 오류: {e}"))?
 }
 
+/// 리락 — 게이트(§3-3) 통과 후 `oem lock`. 게이트: {partition}×_a/_b 마지막 done 기록이
+/// 순정 이미지(stock_path — firmware_fetch 결과) 해시와 일치해야 한다(기기 fastboot serial 기준).
 #[tauri::command]
-pub async fn fastboot_lock(app: tauri::AppHandle, confirm: bool) -> Result<UnlockResult, String> {
+pub async fn fastboot_lock(
+    app: tauri::AppHandle,
+    confirm: bool,
+    partition: String,
+    stock_path: String,
+) -> Result<UnlockResult, String> {
     ensure_write_enabled()?;
     if !confirm {
         return Err("확인 없이는 실행하지 않습니다".into());
     }
-    ensure_relock_verified()?;
+    validate_base_partition(&partition)?;
+    // 순정 증거는 진입 전에 확인(빠른 실패) — ANDROID! 매직 + 해시
+    let stock_sha = relock::stock_sha256(std::path::Path::new(&stock_path))
+        .map_err(|e| format!("리락 게이트 — 순정 이미지 확인 실패: {e}"))?;
     tauri::async_runtime::spawn_blocking(move || {
-        with_device(app, None, |mut d| {
+        with_device(app, None, move |mut d| {
             d.ensure_bootloader()?;
+            // 최종 판정은 이 기기(fastboot serial)의 이력으로만
+            let serial = d
+                .getvar("serialno")?
+                .filter(|s| !s.trim().is_empty())
+                .ok_or("리락 게이트 — 기기 식별값을 확인할 수 없습니다")?;
+            let key = device_key(serial.trim());
+            let gate = load_and_verify(&partition, &stock_sha, Some(&key))?;
+            if !gate.ok {
+                return Err(format!(
+                    "리락 게이트 실패(§3-3) — {} / 순정 이미지로 언루팅을 먼저 진행해 주세요",
+                    gate.reasons.join(" / ")
+                ));
+            }
             if d.unlocked()? {
                 d.oem_lock()?;
             }
@@ -152,6 +197,24 @@ pub async fn fastboot_lock(app: tauri::AppHandle, confirm: bool) -> Result<Unloc
     })
     .await
     .map_err(|e| format!("리락 스레드 오류: {e}"))?
+}
+
+/// 리락 게이트 사전 점검(읽기 전용) — adb 연결 중에도 호출 가능. 안내 표시용이며
+/// 최종 판정은 fastboot_lock이 기기 fastboot serial 기준으로 다시 수행한다.
+#[tauri::command]
+pub async fn relock_gate_check(
+    partition: String,
+    stock_path: String,
+    device_key: Option<String>,
+) -> Result<relock::GateResult, String> {
+    validate_base_partition(&partition)?;
+    let stock_sha = relock::stock_sha256(std::path::Path::new(&stock_path))
+        .map_err(|e| format!("순정 이미지 확인 실패: {e}"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        load_and_verify(&partition, &stock_sha, device_key.as_deref().filter(|k| !k.is_empty()))
+    })
+    .await
+    .map_err(|e| format!("게이트 점검 스레드 오류: {e}"))?
 }
 
 /// 양쪽 슬롯을 대상으로 하는 기본 파티션명만 허용한다.
@@ -209,7 +272,7 @@ pub async fn fastboot_flash(
                 .getvar("serialno")?
                 .filter(|s| !s.trim().is_empty())
                 .ok_or("플래시 이력에 연결할 기기 식별값을 확인할 수 없습니다")?;
-            let device_key = hex::encode(Sha256::digest(serial.as_bytes()));
+            let device_key = device_key(serial.trim());
             let slot = d
                 .getvar("current-slot")?
                 .ok_or("현재 슬롯을 확인할 수 없습니다")?;
@@ -328,10 +391,21 @@ mod tests {
     }
 
     #[test]
-    fn relock_stays_blocked_without_stock_evidence() {
-        assert!(ensure_relock_verified().is_err());
+    fn write_and_relock_gate_need_feature_and_stock() {
         #[cfg(not(feature = "fastboot-write"))]
         assert!(ensure_write_enabled().is_err());
+        // 게이트 파일 판정 — 이력 없음 = 미조작 간주(통과), 이력 있고 순정 불일치 = 차단
+        let dir = tempfile::tempdir().unwrap();
+        let stock = "aa1111111111111111111111111111111111111111111111111111111111111aa";
+        let g = verify_from_dir(dir.path(), "init_boot", stock, None).unwrap();
+        assert!(g.ok, "{:?}", g.reasons);
+        std::fs::write(
+            dir.path().join("flash-history.jsonl"),
+            "{\"deviceKey\":\"d\",\"partition\":\"init_boot_a\",\"sha256\":\"patched\",\"status\":\"done\"}\n",
+        )
+        .unwrap();
+        let g2 = verify_from_dir(dir.path(), "init_boot", stock, None).unwrap();
+        assert!(!g2.ok);
     }
 
     #[test]
