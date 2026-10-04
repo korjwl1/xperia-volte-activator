@@ -16,7 +16,11 @@ Xperia VoLTE 활성화 통합 도구. Tauri 2 + SvelteKit 2 + Svelte 5 + TypeScr
 - 예외(사용자 승인 2026-10-03): 순정 펌웨어 부트 이미지(init_boot/boot)를 Sony 서버에서 부분 다운로드해 앱 데이터 폴더 firmware/ 캐시에 저장한다 — 저장 공간이 부족하면 사용자가 고른 다른 폴더에 저장 (src-tauri/src/firmware.rs, 재배포 금지).
 - 예외(사용자 승인 2026-10-03, feat/backup-engine 워크트리): **백업·복구 엔진 실전 코드 작성 허용** — 백업(폰에서 읽기만)은 사용자 요청으로 실기기 검증 완료(2026-10-03). 복구(폰에 쓰기)는 실기기 테스트 금지 유지 — 모의 실행(live_restore_dryrun)과 FakeADBDevice 단위 테스트로 검증. 실행은 `REAL_STEPS` 플래그가 꺼져 있는 동안 시뮬레이션 유지. 설계는 `.plans/04-engine/backup-engine.md`.
 - 예외(사용자 승인 2026-10-04, efs-native-rust 격리 워크트리): **네이티브 Rust EFS/NV 구현·오프라인 검증·커밋 허용**. `src-tauri/src/efs/`의 COM/HDLC/DIAG/EFS/NV, `adb_client`를 통한 DIAG 전환, 스냅샷·업로드·리드백·롤백을 작성한다. 실기기 작업·DIAG 전환 테스트는 금지. Cargo `efs-write`와 `REAL_STEPS.efs`는 기본 꺼짐 유지. 공유 원본 프리셋·상위 tasks·다른 워크트리는 수정하지 않는다. 설계: `.plans/04-engine/efs-native.md`.
+- 예외(사용자 승인 2026-10-03, feat/fastboot-unlock 워크트리): **fastboot 엔진(언락/리락/플래시) 실전 코드 작성 허용** — 단 실기기 테스트 금지(FakeTransport 단위 테스트). 실행은 `REAL_STEPS.fastboot` 꺼져 있는 동안 시뮬레이션 유지. 설계는 `.plans/04-engine/fastboot.md`.
+- 예외(사용자 승인 2026-10-04, feat/root-engine 워크트리): **루팅 엔진(Magisk 자동 패치·기록·설치) 실전 코드 작성 허용** — 절차는 2026-10-03 실기기 검증 분량. 단 이 구현의 실기기 테스트는 금지(FakeADBDevice 단위 테스트). 실행은 `REAL_STEPS.root` + Cargo feature `root-write` 이중 게이트 뒤(기록은 기존 fastboot-flash 게이트 재사용). 설계는 `.plans/04-engine/root.md`.
+- 예외(사용자 승인 2026-10-04, feat/unroot-relockgate 워크트리): **언루팅 절차 연결 + 리락 게이트(§3-3) 실전 구현 허용** — 기존 명령 조합(root_reboot·fastboot_flash·fastboot_reboot)과 게이트 판정 로직. 실기기 테스트 금지(이력 픽스처 단위 테스트). 리락 게이트는 fastboot-write feature 뒤. 설계는 `.plans/04-engine/unroot-relock.md`.
 - 기기 통신: ADB는 `adb_client` 크레이트(ADB 프로토콜 순수 Rust) — 실행 중인 adb 서버 재사용 → USB 직접 연결 폴백. EFS/NV는 명시적으로 지정한 COM의 순수 Rust DIAG 세션. adb·EfsTools 바이너리 직접 실행 및 .NET 런타임 의존 금지.
+  - 레지스트리 판이 아니라 I/O 시간 상한을 넣은 사본 `src-tauri/vendor/adb_client`(3.2.3, `[patch.crates-io]`)을 쓴다. 고친 내용은 `vendor/adb_client/PATCHES.md`에 기록하고, 업그레이드할 때 다시 적용한다.
 
 ## 필수 작업 규칙
 

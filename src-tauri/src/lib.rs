@@ -1,11 +1,19 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod adb;
+mod apk_verify;
+mod app_paths;
 mod backup;
 mod efs;
+mod boot_image;
+mod device_io;
+mod fastboot;
 mod firmware;
 mod guard;
 mod host;
 mod journal;
+mod magisk;
+mod storage;
+mod tasks;
 mod usbmode;
 
 use tauri::Manager;
@@ -17,8 +25,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // USB 직접 연결용 ADB 인증 키 보관 위치
-            if let Ok(dir) = app.path().app_local_data_dir() {
-                adb::set_key_dir(dir);
+            // 실패하면 진행 기록·키·펌웨어 캐시가 모두 "앱 데이터 폴더 없음"으로 실패하므로 원인을 남긴다
+            match app.path().app_local_data_dir() {
+                Ok(dir) => app_paths::init(dir),
+                Err(e) => eprintln!("[rust] 앱 데이터 폴더 확인 실패: {e}"),
             }
             // 작업 중 Windows 종료 메시지 가로채기 (보호는 run_guard로 켤 때만 동작)
             guard::init(app.handle());
@@ -49,11 +59,22 @@ pub fn run() {
             firmware::firmware_fetch,
             firmware::firmware_versions,
             firmware::firmware_dir_check,
+            boot_image::boot_image_check,
             adb::root_check,
             journal::journal_save,
             journal::journal_load,
             journal::journal_archive,
             guard::run_guard,
+            fastboot::fastboot_getvar,
+            fastboot::fastboot_unlock,
+            fastboot::fastboot_lock,
+            fastboot::fastboot_flash,
+            fastboot::fastboot_reboot,
+            fastboot::relock_gate_check,
+            magisk::magisk_prepare,
+            magisk::magisk_patch,
+            magisk::magisk_install,
+            magisk::root_reboot,
             backup::backup_prepare,
             backup::contacts_restore_check,
             backup::backup_run,

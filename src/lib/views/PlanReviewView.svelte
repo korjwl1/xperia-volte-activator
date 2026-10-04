@@ -6,14 +6,17 @@
   import { TriangleAlert, FolderOpen, LoaderCircle } from "@lucide/svelte/icons";
   import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "$lib/components/ui/tooltip";
   import { wizard } from "$lib/stores/wizard.svelte";
-  import { api } from "$lib/api";
+  import { api, inDesktop as desktopRuntime } from "$lib/api";
   import { simIssue, type BackupItem } from "$lib/types";
+  import { stepHazard } from "$lib/domain/plan";
 
   // 선택 상태·실측 결과는 스토어에 보관 — 이전/다음으로 오가도 유지 (기기가 바뀔 때만 초기화)
   wizard.ensureOptions();
 
   let activeTab = $state<"backup" | "rooting">("backup");
   let showPathAlert = $state(false);
+  let pathAlertTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => () => clearTimeout(pathAlertTimer));
 
   const bootloaderKnown = $derived(wizard.device?.bootloader === "locked" || wizard.device?.bootloader === "unlocked");
   const sizesLoading = $derived(wizard.sizesState === "loading");
@@ -64,6 +67,7 @@
   $effect(() => {
     const path = wizard.backupPath.trim();
     freeBytes = null;
+    freeLoading = false;
     if (!path) return;
     freeLoading = true;
     let stale = false;
@@ -80,7 +84,7 @@
   const usageRatio = $derived(freeBytes === null ? 0 : freeBytes === 0 ? Infinity : selectedBytes / freeBytes);
   const diskWarning = $derived(freeBytes !== null && usageRatio > 0.85);
   // 데스크톱 앱에서 여유 공간을 확인하지 못했으면(조회 중·실패) 실행하지 않는다 — 브라우저 개발 환경은 조회 수단이 없어 제외
-  const inDesktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  const inDesktop = desktopRuntime();
   const diskUnknown = $derived(inDesktop && wizard.backupPath.trim() !== "" && (freeLoading || freeBytes === null));
 
   async function pickBackupFolder() {
@@ -117,10 +121,8 @@
   }
 
   // 실행 순서 — 실제 실행과 같은 계획(wizard.plan)에서 파생
-  // warn: 초기화(언락/리락) 또는 펌웨어 기록 — 툴팁·확인 모달 대상
-  const planSteps = $derived(
-    wizard.plan.map((s) => ({ title: s.title, wipe: s.wipe, flash: s.kind === "fw-flash", warn: s.wipe || s.kind === "fw-flash" })),
-  );
+  // hazard: 초기화·펌웨어/부트 이미지 기록·모뎀 설정 수정 — 툴팁·확인 모달 대상(domain/plan stepHazard)
+  const planSteps = $derived(wizard.plan.map((s) => ({ title: s.title, wipe: s.wipe, hazard: stepHazard(s) })));
   const patching = $derived(wizard.hasPatchTarget);
   // 패치 대상 슬롯의 SIM 문제(없음·PIN 잠김·통신사 미확인) — 기기·선택에 따라 고정
   const simProblems = $derived(
@@ -130,11 +132,11 @@
       .filter((x) => x.issue !== null),
   );
 
-  // 실행 전 확인 모달 — 초기화 또는 펌웨어 기록 단계가 포함된 계획에서만 (AGENTS 규칙 7)
+  // 실행 전 확인 모달 — 위험 단계(초기화·기록·모뎀 설정 수정)가 포함된 계획에서만 (AGENTS 규칙 7)
   let confirmOpen = $state(false);
   let wipeAck = $state(false);
   let noBackupAck = $state(false);
-  const riskySteps = $derived(planSteps.filter((s) => s.warn));
+  const riskySteps = $derived(planSteps.filter((s) => s.hazard !== null));
   const hasWipe = $derived(planSteps.some((s) => s.wipe));
   // 백업 미선택 이중 확인은 초기화가 있을 때만
   const canLaunch = $derived(wipeAck && (anyBackupChecked || !hasWipe || noBackupAck));
@@ -144,7 +146,9 @@
     // 용량 계산 중에는 여유 공간 판단이 불완전하므로 실행 보류
     if (anyBackupChecked && (!wizard.backupPath.trim() || diskWarning || diskUnknown || sizesLoading)) {
       showPathAlert = true;
-      setTimeout(() => (showPathAlert = false), 4000);
+      // 연속 클릭 시 이전 타이머가 새 알림을 일찍 닫지 않게 다시 건다
+      clearTimeout(pathAlertTimer);
+      pathAlertTimer = setTimeout(() => (showPathAlert = false), 4000);
       return;
     }
     showPathAlert = false;
@@ -326,8 +330,8 @@
       <div class="flex-1 overflow-y-auto p-2">
         <TooltipProvider delayDuration={150}>
         {#each planSteps as step, i (i)}
-          {#if step.warn}
-            <!-- 부트로더 언락/리락: ! 삼각형 + 목차/글자까지 행 전체가 초기화 안내 툴팁 트리거 -->
+          {#if step.hazard}
+            <!-- 위험 단계: ! 삼각형 + 목차/글자까지 행 전체가 위험 안내 툴팁 트리거 -->
             <Tooltip>
               <TooltipTrigger
                 class="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-destructive text-left cursor-help"
@@ -339,9 +343,7 @@
                 <TriangleAlert size={12} class="shrink-0 text-destructive/70" />
               </TooltipTrigger>
               <TooltipContent>
-                {step.flash
-                  ? "펌웨어를 기록합니다 — 사용자 데이터는 유지되지만, 중간에 연결이 끊기지 않도록 주의해 주세요."
-                  : "부트로더 언락/리락 단계는 핸드폰 데이터가 초기화될 수 있습니다. 백업을 권장합니다."}
+                {step.hazard.detail}
               </TooltipContent>
             </Tooltip>
           {:else}
@@ -389,7 +391,7 @@
   </footer>
 </div>
 
-<!-- 실행 전 확인 모달 — 초기화 단계 포함 시 (백업 미선택이면 추가 확인) -->
+<!-- 실행 전 확인 모달 — 위험 단계 포함 시 (초기화가 있고 백업 미선택이면 추가 확인) -->
 {#if confirmOpen}
   <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6" role="dialog">
     <div class="w-full max-w-md rounded-2xl border-2 border-destructive/40 bg-background elev-3 p-6 space-y-4">
@@ -398,7 +400,7 @@
           <TriangleAlert size={20} />
         </span>
         <div class="space-y-0.5">
-          <h2 class="text-base font-semibold">{hasWipe ? "핸드폰 데이터가 초기화됩니다" : "펌웨어를 기록합니다"}</h2>
+          <h2 class="text-base font-semibold">{hasWipe ? "핸드폰 데이터가 초기화됩니다" : "기기에 직접 기록하는 단계가 있습니다"}</h2>
           <p class="text-xs text-muted-foreground">실행 순서에 아래 되돌리기 어려운 단계가 포함되어 있습니다</p>
         </div>
       </div>
@@ -406,8 +408,9 @@
         {#each riskySteps as st (st.title)}
           <li class="flex items-center gap-2 text-destructive">
             <TriangleAlert size={12} class="shrink-0" />{st.title}
-            <span class="text-[11px] text-muted-foreground">{st.wipe ? "— 데이터 초기화" : "— 사용자 데이터 유지"}</span>
+            <span class="text-[11px] text-muted-foreground">— {st.hazard?.short}</span>
           </li>
+          {#if !st.wipe}<li class="pl-5 text-[11px] text-muted-foreground">{st.hazard?.detail}</li>{/if}
         {/each}
       </ul>
       <label class="flex items-center gap-2.5 rounded-lg border px-4 py-2.5 cursor-pointer {wipeAck ? 'border-destructive/40 bg-danger-container/40' : 'border-border'}">

@@ -4,12 +4,15 @@
 
 pub mod contacts;
 pub mod model;
+pub mod paths;
 pub mod puller;
 pub mod quarantine;
 pub mod restore;
 pub mod runner;
 pub mod settings;
+pub mod sms_role;
 pub mod smsie;
+pub mod verify;
 pub mod walker;
 pub mod winname;
 
@@ -19,9 +22,10 @@ pub mod fake_device;
 use model::BackupSummary;
 use puller::CancelFlag;
 use serde::Serialize;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 
@@ -37,11 +41,76 @@ pub struct ProgressPayload {
     pub bytes_total: u64,
 }
 
-/// 전역 취소 플래그 — backup_run 시작 시 리셋, backup_cancel로 설정
-static BACKUP_CANCEL: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+use crate::device_io::WriteOperation as Operation;
 
-fn shared_cancel() -> Arc<AtomicBool> {
-    Arc::clone(BACKUP_CANCEL.get_or_init(|| Arc::new(AtomicBool::new(false))))
+/// 백업 실행 단위 취소 — 프론트가 실행마다 만든 run_id로 대상을 지정한다.
+/// 실행이 시작되기 전에 도착한 취소도 기억해 그 실행은 시작 즉시 멈추고,
+/// 끝난(또는 다른) 실행의 취소가 다음 실행에 남지 않는다.
+#[derive(Default)]
+struct CancelRegistry {
+    current: Option<(String, Arc<AtomicBool>)>,
+    /// 아직 시작하지 않은 실행에 대한 취소(최근 것만 보관)
+    early: VecDeque<String>,
+}
+
+const EARLY_CANCEL_KEEP: usize = 16;
+
+impl CancelRegistry {
+    fn begin(&mut self, run_id: &str) -> Arc<AtomicBool> {
+        let cancelled = match self.early.iter().position(|id| id == run_id) {
+            Some(i) => {
+                self.early.remove(i);
+                true
+            }
+            None => false,
+        };
+        let flag = Arc::new(AtomicBool::new(cancelled));
+        self.current = Some((run_id.to_string(), Arc::clone(&flag)));
+        flag
+    }
+
+    fn end(&mut self, run_id: &str) {
+        if self.current.as_ref().is_some_and(|(id, _)| id == run_id) {
+            self.current = None;
+        }
+    }
+
+    /// run_id가 없으면 지금 실행 중인 백업만 취소한다
+    fn cancel(&mut self, run_id: Option<&str>) {
+        match (run_id, &self.current) {
+            (None, Some((_, flag))) => flag.store(true, Ordering::Relaxed),
+            (None, None) => {}
+            (Some(id), Some((current, flag))) if current == id => {
+                flag.store(true, Ordering::Relaxed)
+            }
+            (Some(id), _) => {
+                if !self.early.iter().any(|e| e == id) {
+                    if self.early.len() == EARLY_CANCEL_KEEP {
+                        self.early.pop_front();
+                    }
+                    self.early.push_back(id.to_string());
+                }
+            }
+        }
+    }
+}
+
+static BACKUP_CANCELS: Mutex<CancelRegistry> = Mutex::new(CancelRegistry {
+    current: None,
+    early: VecDeque::new(),
+});
+
+fn cancels() -> std::sync::MutexGuard<'static, CancelRegistry> {
+    // 잠금 중 패닉이 나도 취소 기록 자체는 유효하다
+    BACKUP_CANCELS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 실행이 끝나면(성공·실패·패닉) 현재 실행 등록을 해제한다
+struct RunRegistration(String);
+impl Drop for RunRegistration {
+    fn drop(&mut self) {
+        cancels().end(&self.0);
+    }
 }
 
 /// 진행 이벤트 방출기 — 50ms 쓰로틀(마지막 파일·항목 전환은 즉시)
@@ -49,19 +118,34 @@ struct Emitter50ms {
     app: tauri::AppHandle,
     event: &'static str,
     last: Instant,
+    /// 마지막으로 보낸 (항목, 단계) — 바뀌면 쓰로틀 없이 바로 보낸다(다음 항목 시작이 묻히지 않게)
+    last_key: Option<(String, &'static str)>,
 }
 
 impl Emitter50ms {
     fn new(app: tauri::AppHandle, event: &'static str) -> Self {
-        Self { app, event, last: Instant::now() - Duration::from_secs(1) }
+        Self {
+            app,
+            event,
+            last: Instant::now() - Duration::from_secs(1),
+            last_key: None,
+        }
     }
     fn emit(&mut self, p: runner::StepProgress) {
         let last_file = p.files_done == p.files_total && p.files_total > 0;
         let now = Instant::now();
-        if !last_file && now - self.last < Duration::from_millis(50) {
+        let terminal = matches!(p.phase, "done" | "partial" | "pending");
+        let changed = self
+            .last_key
+            .as_ref()
+            .is_none_or(|(id, phase)| *id != p.item_id || *phase != p.phase);
+        if !changed && !last_file && !terminal && now - self.last < Duration::from_millis(50) {
             return;
         }
         self.last = now;
+        if changed {
+            self.last_key = Some((p.item_id.clone(), p.phase));
+        }
         let payload = ProgressPayload {
             item_id: p.item_id,
             phase: p.phase.to_string(),
@@ -75,79 +159,9 @@ impl Emitter50ms {
     }
 }
 
-/// 기존 백업 폴더 검사(완결 게이트용) — manifest 로드 + 파일 존재·크기 확인 + 항목당 최대 3파일 해시 대조.
-/// 검사만 한다 — 사용자 백업 폴더의 manifest는 바꾸지 않는다
+/// Tauri 명령층은 순수 파일 검증 서비스에 위임한다.
 fn verify_backup_dir(dir: &std::path::Path) -> Result<BackupSummary, String> {
-    let mut manifest = model::load_manifest(dir)?;
-    let mut problems: Vec<String> = Vec::new();
-    use sha2::{Digest, Sha256};
-    for item in manifest.items.iter_mut() {
-        if item.status == model::ItemStatus::Skipped {
-            continue;
-        }
-        let mut hashed = 0u32;
-        let mut item_bad = false;
-        for e in item.entries.iter_mut() {
-            if e.error.is_some() {
-                continue;
-            }
-            if e.quarantined {
-                continue; // 세그먼트 존재는 아래에서 한 번만 확인
-            }
-            let path = dir.join(&e.local);
-            match std::fs::metadata(&path) {
-                Ok(m) if m.len() == e.size => {}
-                Ok(m) => {
-                    e.error = Some(format!("크기 불일치: manifest {}B, 실제 {}B", e.size, m.len()));
-                }
-                Err(err) => {
-                    e.error = Some(format!("파일 없음: {err}"));
-                }
-            }
-            if e.error.is_none() && hashed < 3 {
-                if let Ok(data) = std::fs::read(&path) {
-                    let got = hex::encode(Sha256::digest(&data));
-                    if Some(got.as_str()) != e.sha256.as_deref() {
-                        e.error = Some("해시 불일치(내용 변조·손상)".into());
-                    }
-                }
-                hashed += 1;
-            }
-            if let Some(err) = &e.error {
-                item_bad = true;
-                problems.push(format!("{}: {err}", e.remote));
-            }
-        }
-        // 이 항목에서 문제가 있을 때만 (앞 항목의 문제가 뒤 항목을 미완결로 만들지 않게)
-        if item_bad && item.status == model::ItemStatus::Done {
-            item.status = model::ItemStatus::Partial;
-        }
-        if !item.artifacts.is_empty() {
-            for a in &item.artifacts {
-                if !dir.join(a).exists() {
-                    item.status = model::ItemStatus::Partial;
-                    problems.push(format!("산출물 없음: {a}"));
-                }
-            }
-        }
-    }
-    // quarantine 세그먼트 존재 확인
-    let qdir = dir.join("quarantine");
-    if qdir.exists() {
-        let ok = std::fs::read_dir(&qdir)
-            .map(|rd| rd.filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().ends_with(".tar")))
-            .unwrap_or(false);
-        if !ok {
-            problems.push("quarantine 세그먼트가 비었거나 손상되었습니다".into());
-        }
-    }
-    let mut summary = BackupSummary::from(&manifest);
-    if !problems.is_empty() {
-        summary.complete = false;
-        summary.errors.extend(problems);
-    }
-    summary.dir = dir.to_string_lossy().to_string();
-    Ok(summary)
+    verify::backup_summary(dir)
 }
 
 #[tauri::command]
@@ -157,28 +171,39 @@ pub async fn backup_run(
     items: Vec<String>,
     dest: String,
     resume_dir: Option<String>,
+    run_id: String,
 ) -> Result<BackupSummary, String> {
     let dest_path = PathBuf::from(&dest);
     if dest.trim().is_empty() || !dest_path.is_dir() {
         return Err("백업 저장 위치 폴더가 없습니다 — 먼저 지정해 주세요".into());
     }
-    let cancel_arc = shared_cancel();
-    cancel_arc.store(false, Ordering::Relaxed);
-    let cancel = CancelFlag::from_shared(cancel_arc);
+    if run_id.trim().is_empty() {
+        return Err("백업 실행 식별값이 필요합니다".into());
+    }
+    let operation = Operation::acquire()?;
+    // 실행권을 얻은 뒤 등록 — 시작 전에 온 이 실행의 취소는 그대로 반영된다
+    let cancel = CancelFlag::from_shared(cancels().begin(&run_id));
+    let registration = RunRegistration(run_id);
     let emitter = Emitter50ms::new(app.clone(), "backup:progress");
     let resume = resume_dir.filter(|d| !d.is_empty()).map(PathBuf::from);
 
     let work = move || {
+        let _operation = operation;
+        let _registration = registration;
         let mut emitter = emitter;
         let mut sink: runner::ProgressSink = Box::new(move |p| emitter.emit(p));
         crate::adb::with_first_device(&serial, |dev| {
-            runner::run_backup_items(dev, &items, &dest_path, resume.as_deref(), &cancel, &mut sink)
+            runner::run_backup_items(
+                dev,
+                &items,
+                &dest_path,
+                resume.as_deref(),
+                &cancel,
+                &mut sink,
+            )
         })
     };
-    match tauri::async_runtime::spawn_blocking(work).await {
-        Ok(r) => r,
-        Err(e) => Err(format!("백업 작업 스레드 오류: {e}")),
-    }
+    crate::tasks::blocking("백업 작업", work).await
 }
 
 /// 백업 시작 — 지정 폴더 아래 시작 시각 기준 폴더를 만들고 절대 경로를 반환(진행 기록에 먼저 저장)
@@ -188,14 +213,13 @@ pub async fn backup_prepare(serial: Option<String>, dest: String) -> Result<Stri
     if dest.trim().is_empty() || !dest_path.is_dir() {
         return Err("백업 저장 위치 폴더가 없습니다 — 먼저 지정해 주세요".into());
     }
+    let operation = Operation::acquire()?;
     let work = move || {
+        let _operation = operation;
         crate::adb::with_first_device(&serial, |dev| runner::prepare_backup_root(dev, &dest_path))
             .map(|p| p.to_string_lossy().to_string())
     };
-    match tauri::async_runtime::spawn_blocking(work).await {
-        Ok(r) => r,
-        Err(e) => Err(format!("백업 준비 스레드 오류: {e}")),
-    }
+    crate::tasks::blocking("백업 준비", work).await
 }
 
 #[derive(Serialize)]
@@ -207,21 +231,26 @@ pub struct ContactsCheck {
 
 /// 연락처 가져오기 확인 — 백업한 수와 지금 폰의 수 비교용
 #[tauri::command]
-pub async fn contacts_restore_check(serial: Option<String>, dir: String) -> Result<ContactsCheck, String> {
+pub async fn contacts_restore_check(
+    serial: Option<String>,
+    dir: String,
+) -> Result<ContactsCheck, String> {
     let backup_dir = PathBuf::from(&dir);
     let work = move || {
-        crate::adb::with_first_device(&serial, |dev| contacts::restore_check(dev, &backup_dir))
-            .map(|(backed_up, on_device)| ContactsCheck { backed_up, on_device })
+        crate::adb::with_first_device(&serial, |dev| contacts::restore_check(dev, &backup_dir)).map(
+            |(backed_up, on_device)| ContactsCheck {
+                backed_up,
+                on_device,
+            },
+        )
     };
-    match tauri::async_runtime::spawn_blocking(work).await {
-        Ok(r) => r,
-        Err(e) => Err(format!("연락처 확인 스레드 오류: {e}")),
-    }
+    crate::tasks::blocking("연락처 확인", work).await
 }
 
+/// run_id를 주면 그 실행만(시작 전이면 시작 즉시) 취소, 없으면 지금 실행 중인 백업을 취소
 #[tauri::command]
-pub async fn backup_cancel() -> Result<(), String> {
-    shared_cancel().store(true, Ordering::Relaxed);
+pub async fn backup_cancel(run_id: Option<String>) -> Result<(), String> {
+    cancels().cancel(run_id.as_deref().filter(|id| !id.is_empty()));
     Ok(())
 }
 
@@ -232,7 +261,7 @@ pub async fn backup_manifest_check(dir: String) -> Result<Option<BackupSummary>,
     if !path.is_dir() {
         return Ok(None);
     }
-    verify_backup_dir(&path).map(Some)
+    crate::tasks::blocking("백업 검사", move || verify_backup_dir(&path).map(Some)).await
 }
 
 #[derive(Serialize)]
@@ -246,46 +275,72 @@ pub struct SmsIeOutcome {
 /// SMS Import/Export 준비 — 설치·권한·임시 폴더 (download=false면 미설치 오류)
 #[tauri::command]
 pub async fn smsie_prepare(serial: Option<String>, download: bool) -> Result<Vec<String>, String> {
-    let cache = crate::adb::app_data_dir()
+    let cache = crate::app_paths::data_dir()
         .map(|d| d.join("cache").join("smsie"))
         .ok_or("앱 데이터 폴더를 확인할 수 없습니다")?;
+    let operation = Operation::acquire()?;
     let work = move || {
-        crate::adb::with_first_device(&serial, |dev| smsie::prepare(dev, &cache, download))
+        let _operation = operation;
+        // 다운로드(수십 초)는 USB 연결을 잡지 않은 채로 한다 — 그동안 기기 조회가 막히지 않게
+        let installed = crate::adb::with_first_device(&serial, |dev| smsie::installed(dev))?;
+        let apk = if !installed && download {
+            Some(smsie::download_apk(&cache)?)
+        } else {
+            None
+        };
+        crate::adb::with_first_device(&serial, |dev| smsie::prepare(dev, apk.as_ref()))
     };
-    match tauri::async_runtime::spawn_blocking(work).await {
-        Ok(r) => r,
-        Err(e) => Err(format!("준비 스레드 오류: {e}")),
-    }
+    crate::tasks::blocking("준비", work).await
 }
 
 /// SMS Import/Export 수집 — 임시 폴더의 산출물을 manifest에 병합
 #[tauri::command]
-pub async fn smsie_collect(serial: Option<String>, backup_dir: String) -> Result<SmsIeOutcome, String> {
+pub async fn smsie_collect(
+    serial: Option<String>,
+    backup_dir: String,
+) -> Result<SmsIeOutcome, String> {
     let dir = PathBuf::from(&backup_dir);
     if !dir.is_dir() {
         return Err("백업 폴더를 찾을 수 없습니다".into());
     }
+    let operation = Operation::acquire()?;
     let work = move || {
+        let _operation = operation;
         crate::adb::with_first_device(&serial, |dev| -> Result<SmsIeOutcome, String> {
-            match smsie::collect(dev, &dir)? {
-                smsie::CollectState::NotReady => Ok(SmsIeOutcome { ready: false, summary: None }),
+            // 백업에 고른 문자·통화 기록 항목만 병합한다(정리 판단도 이 기준)
+            let mut manifest = model::load_manifest(&dir)?;
+            let selected: Vec<String> = manifest
+                .items
+                .iter()
+                .filter(|item| {
+                    item.kind == model::ItemKind::SmsIe && item.status != model::ItemStatus::Skipped
+                })
+                .map(|item| item.id.clone())
+                .collect();
+            let selected_ids: Vec<&str> = selected.iter().map(String::as_str).collect();
+            match smsie::collect(dev, &dir, &selected_ids)? {
+                smsie::CollectState::NotReady => Ok(SmsIeOutcome {
+                    ready: false,
+                    summary: None,
+                }),
                 smsie::CollectState::Records(records) => {
-                    let mut manifest = model::load_manifest(&dir)?;
                     for (_, rec) in records {
-                        manifest.record(rec);
+                        if selected.contains(&rec.id) {
+                            manifest.record(rec);
+                        }
                     }
                     model::save_manifest_atomic(&manifest, &dir)?;
                     let mut summary = BackupSummary::from(&manifest);
                     summary.dir = dir.to_string_lossy().to_string();
-                    Ok(SmsIeOutcome { ready: true, summary: Some(summary) })
+                    Ok(SmsIeOutcome {
+                        ready: true,
+                        summary: Some(summary),
+                    })
                 }
             }
         })
     };
-    match tauri::async_runtime::spawn_blocking(work).await {
-        Ok(r) => r,
-        Err(e) => Err(format!("수집 스레드 오류: {e}")),
-    }
+    crate::tasks::blocking("수집", work).await
 }
 
 #[derive(Serialize)]
@@ -316,44 +371,94 @@ pub async fn restore_run(
         }
     });
     let smsie_selected = items.iter().any(|i| i == "sms" || i == "calllog");
+    let operation = Operation::acquire()?;
     let work = move || {
+        let _operation = operation;
         crate::adb::with_first_device(&serial, |dev| {
             let out = restore::run_restore(dev, &backup_dir, &items, &sink);
             Ok(RestoreOutcomeOut {
                 logs: out.logs,
                 failures: out.failures,
-                smsie_pending: smsie_selected,
+                // 무결성 검증에서 멈췄다면 수동 문자 복원을 이어 안내하지 않는다
+                smsie_pending: smsie_selected && out.verified,
             })
         })
     };
-    match tauri::async_runtime::spawn_blocking(work).await {
-        Ok(r) => r,
-        Err(e) => Err(format!("복구 스레드 오류: {e}")),
-    }
+    crate::tasks::blocking("복구", work).await
 }
 
 /// 문자·통화 기록 복원 준비 — 파일 전송 + 기본 문자 앱 역할(비행기 모드 안내 문구 반환)
 #[tauri::command]
-pub async fn smsie_restore_stage(serial: Option<String>, dir: String) -> Result<String, String> {
+pub async fn smsie_restore_stage(
+    serial: Option<String>,
+    dir: String,
+    items: Vec<String>,
+) -> Result<String, String> {
     let backup_dir = PathBuf::from(&dir);
-    let work = move || crate::adb::with_first_device(&serial, |dev| smsie::restore_stage(dev, &backup_dir));
-    match tauri::async_runtime::spawn_blocking(work).await {
-        Ok(r) => r,
-        Err(e) => Err(format!("준비 스레드 오류: {e}")),
-    }
+    let state_dir = crate::app_paths::data_dir()
+        .ok_or("앱 데이터 폴더를 확인할 수 없습니다")?
+        .join("sms-role");
+    let operation = Operation::acquire()?;
+    let work = move || {
+        let _operation = operation;
+        crate::adb::with_first_device(&serial, |dev| {
+            smsie::restore_stage(dev, &backup_dir, &items, &state_dir)
+        })
+    };
+    crate::tasks::blocking("준비", work).await
 }
 
 /// 문자·통화 기록 복원 마무리 — 기본 문자 앱 역할 원복 + 임시 정리(안내 로그 반환)
 #[tauri::command]
 pub async fn smsie_restore_finish(serial: Option<String>) -> Result<Vec<String>, String> {
-    let work = move || crate::adb::with_first_device(&serial, smsie::restore_finish);
-    match tauri::async_runtime::spawn_blocking(work).await {
-        Ok(r) => r,
-        Err(e) => Err(format!("마무리 스레드 오류: {e}")),
-    }
+    let state_dir = crate::app_paths::data_dir()
+        .ok_or("앱 데이터 폴더를 확인할 수 없습니다")?
+        .join("sms-role");
+    let operation = Operation::acquire()?;
+    let work = move || {
+        let _operation = operation;
+        crate::adb::with_first_device(&serial, |dev| smsie::restore_finish(dev, &state_dir))
+    };
+    crate::tasks::blocking("마무리", work).await
 }
 
 /// 로그·manifest에 남기는 문자열 정리 — 백업 항목 경로는 사용자 파일명뿐이라 추가 스크럽 불필요
 pub(crate) fn scrub(s: &str) -> String {
     s.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancel_before_start_applies_only_to_that_run() {
+        let mut reg = CancelRegistry::default();
+        // 준비~시작 사이에 온 취소는 그 실행이 시작되자마자 반영된다
+        reg.cancel(Some("run-1"));
+        let first = reg.begin("run-1");
+        assert!(first.load(Ordering::Relaxed));
+        reg.end("run-1");
+        // 이전 실행의 취소가 다음 실행에 남지 않는다
+        let second = reg.begin("run-2");
+        assert!(!second.load(Ordering::Relaxed));
+        // 다른 실행 대상 취소는 지금 실행을 멈추지 않는다
+        reg.cancel(Some("run-old"));
+        assert!(!second.load(Ordering::Relaxed));
+        // 식별값 없는 취소는 지금 실행 중인 것만
+        reg.cancel(None);
+        assert!(second.load(Ordering::Relaxed));
+        reg.end("run-2");
+        reg.cancel(None);
+        assert!(reg.current.is_none());
+    }
+
+    #[test]
+    fn early_cancels_are_bounded() {
+        let mut reg = CancelRegistry::default();
+        for i in 0..100 {
+            reg.cancel(Some(&format!("never-started-{i}")));
+        }
+        assert_eq!(reg.early.len(), EARLY_CANCEL_KEEP);
+    }
 }

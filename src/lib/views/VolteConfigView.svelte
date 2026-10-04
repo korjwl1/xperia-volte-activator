@@ -31,7 +31,9 @@
   wizard.ensureFirmwareVersions();
   const installed = $derived(wizard.device?.firmware ?? "");
   const versionRows = $derived.by(() => {
-    const list = wizard.fwVersions?.versions ?? [];
+    // 서버 목록의 중복 버전은 한 줄로 — each 키(version)가 겹치면 화면이 깨진다
+    const seen = new Set<string>();
+    const list = (wizard.fwVersions?.versions ?? []).filter((v) => !seen.has(v.version) && !!seen.add(v.version));
     // 서버 목록에 설치된 버전이 없더라도 "현재 설치된 버전"은 항상 첫 줄
     return list.some((v) => v.version === installed)
       ? list

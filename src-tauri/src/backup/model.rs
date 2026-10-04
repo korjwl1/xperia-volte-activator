@@ -73,6 +73,38 @@ pub struct ItemRecord {
     pub errors: Vec<String>,
 }
 
+impl ItemRecord {
+    /// 빈 기록(진행 전)
+    pub fn new(id: &str, kind: ItemKind) -> Self {
+        Self {
+            id: id.to_string(),
+            kind,
+            status: ItemStatus::Pending,
+            files: 0,
+            bytes: 0,
+            entries: vec![],
+            artifacts: vec![],
+            errors: vec![],
+        }
+    }
+
+    /// 오류 0 → Done, 아니면 Partial
+    pub fn finalize(&mut self) {
+        self.status = if self.errors.is_empty() {
+            ItemStatus::Done
+        } else {
+            ItemStatus::Partial
+        };
+    }
+
+    /// 오류 1건을 남기고 Partial로
+    pub fn fail(mut self, error: String) -> Self {
+        self.errors.push(error);
+        self.status = ItemStatus::Partial;
+        self
+    }
+}
+
 /// manifest.json — 백업 폴더의 단일 진실 공급원
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,6 +116,10 @@ pub struct Manifest {
     pub model: String,
     /// 전체 시리얼은 기록하지 않는다(마스킹만 — §12.5)
     pub serial_masked: String,
+    /// SHA-256(ro.serialno) — 이어서 백업할 때 같은 기기인지 확인(원본 시리얼은 남기지 않는다).
+    /// 이전 버전 manifest에는 없으므로 선택 필드.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_key: Option<String>,
     pub firmware: String,
     pub android: String,
     pub items: Vec<ItemRecord>,
@@ -98,6 +134,7 @@ impl Manifest {
             updated: now,
             model: model.to_string(),
             serial_masked: serial_masked.to_string(),
+            device_key: None,
             firmware: firmware.to_string(),
             android: android.to_string(),
             items: Vec::new(),
@@ -107,18 +144,31 @@ impl Manifest {
     /// 전체 완결 여부 — "전수 열거 완료 + 오류 0"(§6-2). 파괴 단계 게이트의 입력.
     /// skipped 항목은 판정에서 제외(선택하지 않은 것은 완결에 포함하지 않는다).
     pub fn complete(&self) -> bool {
-        self.items
+        let selected: Vec<_> = self
+            .items
             .iter()
             .filter(|i| i.status != ItemStatus::Skipped)
-            .all(|i| i.status == ItemStatus::Done)
+            .collect();
+        !selected.is_empty()
+            && selected.iter().all(|i| {
+                i.status == ItemStatus::Done
+                    && i.errors.is_empty()
+                    && i.entries.iter().all(|e| e.error.is_none())
+            })
     }
 
-    /// (선택 항목 중) 오류가 있는 항목id → 대표 사유 첫 줄
+    /// (선택 항목 중) 완결되지 않은 항목id → 대표 사유 첫 줄. 진행 전(Pending) 항목도 사유로 보인다.
     pub fn error_summary(&self) -> Vec<String> {
         self.items
             .iter()
-            .filter(|i| i.status == ItemStatus::Partial && !i.errors.is_empty())
-            .map(|i| format!("{}: {}", i.id, i.errors[0]))
+            .filter_map(|i| match i.status {
+                ItemStatus::Partial => Some(match i.errors.first() {
+                    Some(e) => format!("{}: {e}", i.id),
+                    None => format!("{}: 미완료", i.id),
+                }),
+                ItemStatus::Pending => Some(format!("{}: 미완료", i.id)),
+                _ => None,
+            })
             .collect()
     }
 
@@ -200,15 +250,10 @@ pub fn status_str(s: ItemStatus) -> String {
 
 /// manifest를 임시 파일에 쓴 뒤 원자 교체(journal.rs 패턴) — 중단 시 반쪽 파일이 남지 않게
 pub fn save_manifest_atomic(manifest: &Manifest, dir: &std::path::Path) -> Result<(), String> {
-    use std::io::Write;
     let path = dir.join("manifest.json");
-    let tmp = dir.join("manifest.json.tmp");
-    let json = serde_json::to_string_pretty(manifest).map_err(|e| format!("manifest 직렬화 실패: {e}"))?;
-    let mut f = std::fs::File::create(&tmp).map_err(|e| format!("manifest 임시 파일 생성 실패: {e}"))?;
-    f.write_all(json.as_bytes()).map_err(|e| format!("manifest 쓰기 실패: {e}"))?;
-    f.sync_all().ok();
-    drop(f);
-    std::fs::rename(&tmp, &path).map_err(|e| format!("manifest 교체 실패: {e}"))
+    let json =
+        serde_json::to_string_pretty(manifest).map_err(|e| format!("manifest 직렬화 실패: {e}"))?;
+    crate::storage::atomic_write(&path, json.as_bytes())
 }
 
 pub fn load_manifest(dir: &std::path::Path) -> Result<Manifest, String> {
@@ -241,10 +286,15 @@ mod tests {
     #[test]
     fn complete_requires_all_done_no_errors() {
         let mut m = Manifest::new("XQ-DQ44", "AB1234****", "67.2.A.3.178", "15");
-        assert!(m.complete()); // 항목 없음 = 완결(전부 선택 안 함)
+        assert!(!m.complete()); // 빈 manifest/취소 직후는 백업 완결의 증명이 아니다
         m.record(item("dcim", ItemKind::Files, ItemStatus::Done, vec![]));
         assert!(m.complete());
-        m.record(item("apk", ItemKind::Files, ItemStatus::Partial, vec!["3개 APK 실패".into()]));
+        m.record(item(
+            "apk",
+            ItemKind::Files,
+            ItemStatus::Partial,
+            vec!["3개 APK 실패".into()],
+        ));
         assert!(!m.complete());
         // 부분 상태의 오류는 요약에 보인다
         assert_eq!(m.error_summary().len(), 1);
@@ -253,10 +303,35 @@ mod tests {
     }
 
     #[test]
+    fn incomplete_items_always_have_a_reason() {
+        let mut m = Manifest::new("XQ-DQ44", "AB1234****", "67.2.A.3.178", "15");
+        m.record(ItemRecord::new("sms", ItemKind::SmsIe)); // 수동 단계 대기(Pending)
+        m.record(item("dcim", ItemKind::Files, ItemStatus::Partial, vec![])); // 사유 없는 Partial
+        m.record(item("apk", ItemKind::Files, ItemStatus::Done, vec![]));
+        assert!(!m.complete());
+        assert_eq!(m.error_summary(), vec!["sms: 미완료", "dcim: 미완료"]);
+    }
+
+    #[test]
+    fn manifest_without_device_key_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = Manifest::new("XQ", "AB1234****", "v", "15");
+        save_manifest_atomic(&m, dir.path()).unwrap();
+        let raw = std::fs::read_to_string(dir.path().join("manifest.json")).unwrap();
+        assert!(!raw.contains("deviceKey")); // 예전 형식과 같은 모양
+        assert!(load_manifest(dir.path()).unwrap().device_key.is_none());
+    }
+
+    #[test]
     fn manifest_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let mut m = Manifest::new("XQ-DQ44", "AB1234****", "67.2.A.3.178", "15");
-        m.record(item("contacts", ItemKind::Contacts, ItemStatus::Done, vec![]));
+        m.record(item(
+            "contacts",
+            ItemKind::Contacts,
+            ItemStatus::Done,
+            vec![],
+        ));
         save_manifest_atomic(&m, dir.path()).unwrap();
         let loaded = load_manifest(dir.path()).unwrap();
         assert_eq!(loaded.items.len(), 1);

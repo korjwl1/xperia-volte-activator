@@ -3,11 +3,12 @@
 //! §6-2: 전수 열거 대비 크기 불일치(백업 중 원본 변경)·pull 실패는 오류로 기록 → 완결 불가.
 
 use crate::backup::model::{FileEntry, ItemKind, ItemRecord, ItemStatus};
-use crate::backup::quarantine::{quarantine_tmp_path, quarantined_entry, HashingWriter, Quarantine};
-use crate::backup::winname;
+use crate::backup::quarantine::{
+    quarantine_tmp_path, quarantined_entry, HashingWriter, Quarantine,
+};
 use crate::backup::walker::WalkedEntry;
+use crate::backup::winname::{self, SeenPaths};
 use adb_client::ADBDeviceExt;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// 풀 대상 파일 — tag는 항목별 부가 키(apk의 패키지명 등). local_for가 로컬 경로를 정한다.
@@ -19,7 +20,10 @@ pub struct PullFile {
 
 impl PullFile {
     pub fn plain(entry: WalkedEntry) -> Self {
-        Self { entry, tag: String::new() }
+        Self {
+            entry,
+            tag: String::new(),
+        }
     }
 }
 
@@ -37,7 +41,9 @@ pub struct CancelFlag(std::sync::Arc<std::sync::atomic::AtomicBool>);
 
 impl CancelFlag {
     pub fn new() -> Self {
-        Self(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)))
+        Self(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            false,
+        )))
     }
     /// 전역(static) 취소 플래그와 연결 — backup_cancel 명령이 같은 플래그를 건드린다
     pub fn from_shared(arc: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
@@ -68,21 +74,14 @@ pub fn pull_item_files(
     files: &[PullFile],
     backup_root: &Path,
     local_for: &dyn Fn(&PullFile) -> PathBuf,
-    seen: &mut HashMap<String, PathBuf>,
+    seen: &mut SeenPaths,
     quarantine: &mut Quarantine,
     cancel: &CancelFlag,
     mut on_progress: impl FnMut(PullProgress),
 ) -> ItemRecord {
-    let mut rec = ItemRecord {
-        id: item_id.to_string(),
-        kind,
-        status: ItemStatus::Pending,
-        files: files.len() as u32,
-        bytes: 0,
-        entries: Vec::with_capacity(files.len()),
-        artifacts: vec![],
-        errors: vec![],
-    };
+    let mut rec = ItemRecord::new(item_id, kind);
+    rec.files = files.len() as u32;
+    rec.entries.reserve(files.len());
     let total_bytes: u64 = files.iter().map(|f| f.entry.size).sum();
     let mut bytes_done = 0u64;
     let mut nonce = 0u64;
@@ -94,8 +93,9 @@ pub fn pull_item_files(
         }
         let f = &pf.entry;
         let rel = local_for(pf);
-        let rel_str = rel.to_string_lossy().replace('\\', "/");
-        let issue = winname::check_relative_path(&rel_str, seen);
+        // `\`를 `/`로 바꾸지 않는다 — 기기 파일명 안의 `\`는 금지 문자로 판정돼 격리된다
+        let rel_str = rel.to_string_lossy();
+        let issue = winname::check_relative_path(&rel_str, &f.remote, seen);
         let entry = match issue {
             None => pull_to_disk(dev, &f.remote, &rel, backup_root, f.size, f.mtime),
             Some(_issue) => {
@@ -104,7 +104,7 @@ pub fn pull_item_files(
                 let tmp = quarantine_tmp_path(backup_root, nonce);
                 match pull_to_tmp(dev, &f.remote, &tmp, f.size) {
                     Ok((sha256, actual)) => {
-                        let qres = quarantine.add(&f.remote, actual, f.mtime, &tmp, &sha256);
+                        let qres = quarantine.add(&f.remote, actual, f.mtime, &tmp);
                         let _ = std::fs::remove_file(&tmp);
                         match qres {
                             Ok(()) => quarantined_entry(&f.remote, actual, f.mtime, &sha256),
@@ -119,10 +119,15 @@ pub fn pull_item_files(
             }
         };
         if entry.error.is_none() {
-            bytes_done += f.size;
-            rec.bytes += f.size;
+            // 목록 크기(32비트)가 아니라 검증된 실제 크기로 센다(4GiB 이상 파일)
+            bytes_done += entry.size;
+            rec.bytes += entry.size;
         } else {
-            rec.errors.push(format!("{}: {}", f.remote, entry.error.clone().unwrap_or_default()));
+            rec.errors.push(format!(
+                "{}: {}",
+                f.remote,
+                entry.error.clone().unwrap_or_default()
+            ));
         }
         on_progress(PullProgress {
             file: &f.remote,
@@ -133,12 +138,12 @@ pub fn pull_item_files(
         });
         rec.entries.push(entry);
     }
-    rec.status = if rec.errors.is_empty() { ItemStatus::Done } else { ItemStatus::Partial };
+    rec.finalize();
     rec
 }
 
 /// 파일 1개를 디스크로 — 부모 폴더 생성, 해시 래퍼로 pull, 크기 검증, mtime 적용
-fn pull_to_disk(
+pub(crate) fn pull_to_disk(
     dev: &mut dyn ADBDeviceExt,
     remote: &str,
     rel: &Path,
@@ -146,7 +151,10 @@ fn pull_to_disk(
     expected_size: u64,
     mtime: u32,
 ) -> FileEntry {
-    let dest = backup_root.join(rel);
+    let dest = match crate::backup::paths::write_target(backup_root, &rel.to_string_lossy()) {
+        Ok(path) => path,
+        Err(e) => return error_entry(remote, expected_size, mtime, e),
+    };
     let mut base = FileEntry {
         remote: remote.to_string(),
         local: rel.to_string_lossy().replace('\\', "/"),
@@ -178,6 +186,10 @@ fn pull_to_disk(
         return base;
     }
     let (file, sha256, written) = writer.finish();
+    if let Err(e) = file.sync_all() {
+        base.error = Some(format!("파일 디스크 저장 실패: {e}"));
+        return base;
+    }
     drop(file);
     match verify_size(dev, remote, expected_size, written) {
         Ok(actual) => base.size = actual,
@@ -189,7 +201,10 @@ fn pull_to_disk(
     }
     // mtime 보존(pull -a 상당) — ctime은 NTFS 한계로 보존 안 됨(§6-1 명시)
     let ft = filetime::FileTime::from_unix_time(mtime as i64, 0);
-    let _ = filetime::set_file_mtime(&dest, ft);
+    if let Err(e) = filetime::set_file_mtime(&dest, ft) {
+        base.error = Some(format!("파일 수정시각 보존 실패: {e}"));
+        return base;
+    }
     base.sha256 = Some(sha256);
     base
 }
@@ -203,8 +218,11 @@ fn pull_to_tmp(
 ) -> Result<(String, u64), String> {
     let file = std::fs::File::create(tmp).map_err(|e| format!("임시 파일 생성 실패: {e}"))?;
     let mut writer = HashingWriter::new(file);
-    dev.pull(&remote, &mut writer).map_err(|e| format!("전송 실패: {e}"))?;
+    dev.pull(&remote, &mut writer)
+        .map_err(|e| format!("전송 실패: {e}"))?;
     let (file, sha256, written) = writer.finish();
+    file.sync_all()
+        .map_err(|e| format!("임시 파일 디스크 저장 실패: {e}"))?;
     drop(file);
     let actual = verify_size(dev, remote, expected_size, written)?;
     Ok((sha256, actual))
@@ -212,7 +230,12 @@ fn pull_to_tmp(
 
 /// 크기 검증 — SYNC list의 size는 u32라 4GiB 이상 파일은 wrap될 수 있다.
 /// 불일치 시에만 셸 stat(64비트)으로 재확인한다(§6-2 소스 변경 감지와 구분).
-fn verify_size(dev: &mut dyn ADBDeviceExt, remote: &str, expected: u64, written: u64) -> Result<u64, String> {
+fn verify_size(
+    dev: &mut dyn ADBDeviceExt,
+    remote: &str,
+    expected: u64,
+    written: u64,
+) -> Result<u64, String> {
     if expected == written {
         return Ok(written);
     }
@@ -225,7 +248,9 @@ fn verify_size(dev: &mut dyn ADBDeviceExt, remote: &str, expected: u64, written:
             ext.size
         ));
     }
-    Err(format!("크기 불일치(원본 변경 감지): 예상 {expected}B, 수신 {written}B"))
+    Err(format!(
+        "크기 불일치(원본 변경 감지): 예상 {expected}B, 수신 {written}B"
+    ))
 }
 
 fn error_entry(remote: &str, size: u64, mtime: u32, err: String) -> FileEntry {
@@ -245,7 +270,13 @@ mod tests {
     use super::*;
     use crate::backup::fake_device::FakeADBDevice;
 
-    fn setup() -> (FakeADBDevice, tempfile::TempDir, Quarantine, HashMap<String, PathBuf>, CancelFlag) {
+    fn setup() -> (
+        FakeADBDevice,
+        tempfile::TempDir,
+        Quarantine,
+        SeenPaths,
+        CancelFlag,
+    ) {
         let mut d = FakeADBDevice::new();
         d.add_dir("/sdcard/DCIM");
         d.add_file("/sdcard/DCIM/ok.jpg", b"jpeg-ok", 1700000000, 0o644);
@@ -254,7 +285,7 @@ mod tests {
         d.fail_pull("/sdcard/DCIM/lost.jpg");
         let tmp = tempfile::tempdir().unwrap();
         let q = Quarantine::new(tmp.path()).unwrap();
-        (d, tmp, q, HashMap::new(), CancelFlag::new())
+        (d, tmp, q, SeenPaths::new(), CancelFlag::new())
     }
 
     fn walk_files(d: &mut FakeADBDevice) -> Vec<PullFile> {
@@ -276,7 +307,12 @@ mod tests {
             ItemKind::Files,
             &files,
             tmp.path(),
-            &|pf| PathBuf::from(format!("sdcard/{}", pf.entry.remote.trim_start_matches("/sdcard/"))),
+            &|pf| {
+                PathBuf::from(format!(
+                    "sdcard/{}",
+                    pf.entry.remote.trim_start_matches("/sdcard/")
+                ))
+            },
             &mut seen,
             &mut q,
             &cancel,
@@ -287,7 +323,11 @@ mod tests {
         assert_eq!(rec.errors.len(), 1);
         assert!(rec.errors[0].contains("lost.jpg"));
         // 정상 파일: 로컬 존재 + sha256 + mtime 적용
-        let ok = rec.entries.iter().find(|e| e.remote.ends_with("ok.jpg")).unwrap();
+        let ok = rec
+            .entries
+            .iter()
+            .find(|e| e.remote.ends_with("ok.jpg"))
+            .unwrap();
         assert!(ok.error.is_none());
         assert_eq!(ok.sha256.as_deref().map(|s| s.len()), Some(64));
         let local = tmp.path().join(&ok.local);
@@ -296,7 +336,11 @@ mod tests {
         let got_mtime = filetime::FileTime::from_last_modification_time(&meta).unix_seconds();
         assert_eq!(got_mtime as u32, 1700000000);
         // 비호환 파일: quarantine 세그먼트에 원본 경로로 들어 있음
-        let bad = rec.entries.iter().find(|e| e.remote.ends_with("bad?.jpg")).unwrap();
+        let bad = rec
+            .entries
+            .iter()
+            .find(|e| e.remote.ends_with("bad?.jpg"))
+            .unwrap();
         assert!(bad.quarantined);
         assert!(bad.error.is_none());
         assert_eq!(q.finish().unwrap(), 1);
@@ -328,8 +372,9 @@ mod tests {
         // SYNC list의 u32 크기가 실제와 다를 때(4GiB wrap 등) 셸 stat(64비트)으로 재확인해 오탐 방지
         let mut d = FakeADBDevice::new();
         d.add_dir("/sdcard/DCIM");
-        d.add_file("/sdcard/DCIM/wrap.bin", &vec![0u8; 100], 1700000000, 0o644);
-        d.list_size_override.insert("/sdcard/DCIM/wrap.bin".into(), 50); // list는 50B라고 보고
+        d.add_file("/sdcard/DCIM/wrap.bin", &[0u8; 100], 1700000000, 0o644);
+        d.list_size_override
+            .insert("/sdcard/DCIM/wrap.bin".into(), 50); // list는 50B라고 보고
         let tmp = tempfile::tempdir().unwrap();
         let mut q = Quarantine::new(tmp.path()).unwrap();
         let files: Vec<PullFile> = crate::backup::walker::walk(&mut d, "/sdcard/DCIM", &|_| false)
@@ -344,7 +389,7 @@ mod tests {
             &files,
             tmp.path(),
             &|_| PathBuf::from("sdcard/DCIM/wrap.bin"),
-            &mut HashMap::new(),
+            &mut SeenPaths::new(),
             &mut q,
             &CancelFlag::new(),
             |_| {},

@@ -1,20 +1,21 @@
 //! 읽기 전용 기기 질의 — `adb_client` 크레이트로 ADB 프로토콜 직접 통신.
 //! - 1순위: 실행 중인 adb 서버(localhost:5037)에 연결 — Android Studio 등이 띄운 서버 재사용
 //! - 2순위: USB 직접 연결 — 서버가 없을 때 크레이트가 프로토콜을 직접 구현해 통신
+//!
 //! adb 바이너리 설치/경로 탐색이 필요 없다.
 //! 규칙: 기기·PC에 영향을 주는(쓰기·설치·삭제·플래시) 명령은 이 모듈에 작성 금지.
 
+use crate::tasks::guarded;
 use adb_client::server::ADBServer;
 use adb_client::server_device::ADBServerDevice;
 use adb_client::usb::{find_all_connected_adb_devices, ADBUSBDevice};
 use adb_client::ADBDeviceExt;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 use std::path::PathBuf;
-use std::sync::mpsc;
-use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
 
 // ── 연결 관리 ──
@@ -69,18 +70,6 @@ fn lock_usb(wait: Duration) -> Result<MutexGuard<'static, Option<ADBUSBDevice>>,
 // adb_client는 키 파일이 없으면 연결할 때마다 임의 키를 새로 만들어 폰에 "USB 디버깅 허용" 팝업이 매번 뜬다.
 // → 표준 키(~/.android/adbkey)가 있으면 그대로 쓰고, 없으면 앱 데이터 폴더에 1회 생성해 재사용 (사용자 승인 2026-10-02)
 
-static APP_KEY_DIR: OnceLock<PathBuf> = OnceLock::new();
-
-/// 앱 시작 시 앱 데이터 폴더 지정 (lib.rs setup)
-pub fn set_key_dir(dir: PathBuf) {
-    let _ = APP_KEY_DIR.set(dir);
-}
-
-/// 앱 데이터 폴더 (펌웨어 캐시 등)
-pub(crate) fn app_data_dir() -> Option<PathBuf> {
-    APP_KEY_DIR.get().cloned()
-}
-
 fn standard_adb_key() -> Option<PathBuf> {
     // ANDROID_USER_HOME은 설정 폴더 자체(기본 ~/.android)를 가리킨다
     let base = std::env::var_os("ANDROID_USER_HOME")
@@ -94,15 +83,18 @@ fn adb_key_path() -> Result<PathBuf, String> {
     if let Some(key) = standard_adb_key() {
         return Ok(key);
     }
-    let dir = APP_KEY_DIR.get().ok_or("앱 데이터 폴더를 확인할 수 없습니다")?;
+    let dir = crate::app_paths::data_dir().ok_or("앱 데이터 폴더를 확인할 수 없습니다")?;
     let path = dir.join("adbkey");
     if !path.exists() {
         use rsa::pkcs8::{EncodePrivateKey, LineEnding};
-        std::fs::create_dir_all(dir).map_err(|e| format!("인증 키 폴더 생성 실패: {e}"))?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("인증 키 폴더 생성 실패: {e}"))?;
         let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048)
             .map_err(|e| format!("인증 키 생성 실패: {e}"))?;
-        let pem = key.to_pkcs8_pem(LineEnding::LF).map_err(|e| format!("인증 키 변환 실패: {e}"))?;
-        std::fs::write(&path, pem.as_bytes()).map_err(|e| format!("인증 키 저장 실패: {e}"))?;
+        let pem = key
+            .to_pkcs8_pem(LineEnding::LF)
+            .map_err(|e| format!("인증 키 변환 실패: {e}"))?;
+        crate::storage::atomic_write(&path, pem.as_bytes())
+            .map_err(|e| format!("인증 키 저장 실패: {e}"))?;
         eprintln!("[rust] ADB 인증 키 생성: 앱 데이터 폴더");
     }
     Ok(path)
@@ -124,7 +116,9 @@ fn open_usb() -> Result<ADBUSBDevice, String> {
     if devices.is_empty() {
         return Err("연결된 기기 없음".into());
     }
-    // 여러 대면 첫 번째 (동일 모델 중복 연결의 구분은 서버 모드에서만 가능 — 한계)
+    if devices.len() != 1 {
+        return Err("여러 대의 기기가 연결되어 있습니다".into());
+    }
     let info = &devices[0];
     ADBUSBDevice::new_with_custom_private_key(info.vendor_id, info.product_id, adb_key_path()?)
         .map_err(|e| format!("기기 연결 실패: {e}"))
@@ -154,55 +148,28 @@ fn server_devices() -> Option<Vec<ServerEntry>> {
     };
     let entries: Vec<ServerEntry> = list
         .into_iter()
-        .map(|d| ServerEntry { serial: d.identifier, state: d.state.to_string() })
+        .map(|d| ServerEntry {
+            serial: d.identifier,
+            state: d.state.to_string(),
+        })
         .collect();
-    let summary: Vec<String> =
-        entries.iter().map(|d| format!("{}={}", mask_serial(&d.serial), d.state)).collect();
+    let summary: Vec<String> = entries
+        .iter()
+        .map(|d| format!("{}={}", mask_serial(&d.serial), d.state))
+        .collect();
     eprintln!("[rust] adb 서버 기기: {}", summary.join(", "));
     Some(entries)
 }
 
 // ── 타임아웃 보장 실행 ──
 
-/// `work`를 별도 스레드에서 실행하고 `limit` 안에 끝나지 않으면 시간 초과로 반환.
-/// (기기 응답이 멈춰도 UI/IPC가 죽지 않도록)
-pub(crate) async fn guarded<T: Send + 'static>(
-    limit: Duration,
-    work: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(work());
-    });
-    let blocking = tauri::async_runtime::spawn_blocking(move || match rx.recv_timeout(limit) {
-        Ok(r) => r,
-        Err(mpsc::RecvTimeoutError::Timeout) => Err("기기 응답 시간 초과".into()),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err("기기 질의 중 내부 오류가 발생했습니다".into()),
-    });
-    match blocking.await {
-        Ok(r) => r,
-        Err(e) => Err(format!("작업 스레드 오류: {e}")),
-    }
-}
-
 // ── 셸 실행 ──
 
 pub(crate) fn shell(dev: &mut dyn ADBDeviceExt, cmd: &str) -> Result<String, String> {
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    dev.shell_command(&cmd, Some(&mut out), Some(&mut err))
-        .map_err(|e| {
-            let e = e.to_string();
-            if err.is_empty() {
-                e
-            } else {
-                format!("{e}: {}", String::from_utf8_lossy(&err).trim())
-            }
-        })?;
-    String::from_utf8(out).map_err(|e| format!("출력 해석 실패: {e}"))
+    crate::device_io::shell(dev, cmd)
 }
 
-/// 서버 모드 우선, 없으면 USB 직접 연결로 `f` 실행 (오류 시 연결 재수립 1회)
+/// 서버 모드 우선, 없으면 USB 직접 연결로 실행. 오류 시 연결만 버리고 작업을 재실행하지 않는다.
 pub(crate) fn with_first_device<T>(
     serial: &Option<String>,
     mut f: impl FnMut(&mut dyn ADBDeviceExt) -> Result<T, String>,
@@ -213,11 +180,20 @@ pub(crate) fn with_first_device<T>(
     if let Some(devs) = server_devices() {
         let ready: Vec<&ServerEntry> = devs.iter().filter(|d| d.ready()).collect();
         let entry = match wanted {
-            Some(s) => *ready.iter().find(|d| d.serial == s).ok_or("지정한 기기를 찾을 수 없습니다")?,
+            Some(s) => *ready
+                .iter()
+                .find(|d| d.serial == s)
+                .ok_or("지정한 기기를 찾을 수 없습니다")?,
             None if ready.len() > 1 => return Err("여러 대의 기기가 연결되어 있습니다".into()),
             None => *ready.first().ok_or("연결된 기기가 없습니다")?,
         };
-        return f(&mut entry.handle()).map_err(|e| scrub_serial(e, &entry.serial));
+        let mut device = entry.handle();
+        let manufacturer = shell(&mut device, "getprop ro.product.manufacturer")
+            .map_err(|e| scrub_serial(e, &entry.serial))?;
+        if !manufacturer.trim().eq_ignore_ascii_case("sony") {
+            return Err("Sony 기기만 작업할 수 있습니다".into());
+        }
+        return f(&mut device).map_err(|e| scrub_serial(e, &entry.serial));
     }
 
     // 2) USB 직접 연결 — 기기 구분 수단이 없으므로 1대일 때만, serial 지정 시 연결 후 일치 확인
@@ -241,13 +217,10 @@ pub(crate) fn with_first_device<T>(
         f(dev)
     };
     let first = run(&mut guard);
-    let result = if first.is_err() {
-        // 커넥션이 끊겼을 수 있으므로 버리고 재연결 후 1회 재시도
+    if first.is_err() {
         *guard = None;
-        run(&mut guard)
-    } else {
-        first
-    };
+    }
+    let result = first;
     result.map_err(|e| match wanted {
         Some(s) => scrub_serial(e, s),
         None => e,
@@ -271,11 +244,14 @@ fn status_work() -> AdbStatus {
         return AdbStatus {
             available: true,
             mode: "adb-server".into(),
-            detail: Some(format!("준비된 기기 {}대", devs.iter().filter(|d| d.ready()).count())),
+            detail: Some(format!(
+                "준비된 기기 {}대",
+                devs.iter().filter(|d| d.ready()).count()
+            )),
         };
     }
-    // USB 직접 연결 수단 점검
-    match find_all_connected_adb_devices() {
+    // USB 직접 연결 수단 점검 — device_list와 같은 기준(Sony 기기만)으로 센다
+    match sony_usb_adb_devices() {
         Ok(list) if !list.is_empty() => AdbStatus {
             available: true,
             mode: "usb-direct".into(),
@@ -334,6 +310,44 @@ fn product_name(reported: &str, model: &str) -> String {
     }
 }
 
+/// 루팅 여부 — 프론트 TriState(true | false | "unknown")와 같은 JSON으로 보낸다
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rooted {
+    Yes,
+    No,
+    Unknown,
+}
+
+impl Serialize for Rooted {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Rooted::Yes => s.serialize_bool(true),
+            Rooted::No => s.serialize_bool(false),
+            Rooted::Unknown => s.serialize_str("unknown"),
+        }
+    }
+}
+
+/// `which su` 출력에 su 실행 파일 경로가 있는지 (USB 직접 연결은 오류 문구도 섞여 오므로 경로 형태만 인정)
+fn su_visible(su_raw: &str) -> bool {
+    su_raw
+        .lines()
+        .map(str::trim)
+        .any(|l| l.starts_with('/') && l.ends_with("/su"))
+}
+
+/// su가 보이면 루팅. 안 보여도 부트로더가 잠김으로 확정된 경우에만 "아님" —
+/// 언락 상태에서는 su를 셸에 숨긴 Magisk(앱 전용 권한 등)를 구분할 수 없어 판별 불가로 둔다.
+/// su 구간 표식이 없으면(출력 끊김) 판별 불가.
+fn root_state(su_raw: Option<&str>, bootloader: &str) -> Rooted {
+    match su_raw {
+        None => Rooted::Unknown,
+        Some(raw) if su_visible(raw) => Rooted::Yes,
+        Some(_) if bootloader == "locked" => Rooted::No,
+        Some(_) => Rooted::Unknown,
+    }
+}
+
 /// 부트로더 상태 — `ro.boot.flash.locked`와 `ro.boot.vbmeta.device_state`가 일치할 때만 확정.
 /// 루팅(su 존재)인데 잠김으로 보고되면 위장(PIF 등) 가능성 → 판별 불가
 fn bootloader_state(flash_locked: &str, vbmeta_state: &str, rooted: bool) -> &'static str {
@@ -354,7 +368,11 @@ fn bootloader_state(flash_locked: &str, vbmeta_state: &str, rooted: bool) -> &'s
     if locked && rooted {
         return "unknown";
     }
-    if locked { "locked" } else { "unlocked" }
+    if locked {
+        "locked"
+    } else {
+        "unlocked"
+    }
 }
 
 /// `getprop` 덤프를 key→value 맵으로
@@ -362,8 +380,12 @@ pub(crate) fn parse_getprop(out: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for line in out.lines() {
         // 형식: [key]: [value]
-        let Some(rest) = line.strip_prefix('[') else { continue };
-        let Some(mid) = rest.find("]: ") else { continue };
+        let Some(rest) = line.strip_prefix('[') else {
+            continue;
+        };
+        let Some(mid) = rest.find("]: ") else {
+            continue;
+        };
         let key = &rest[..mid];
         let val = rest[mid + 3..].trim_start_matches('[');
         let val = val.strip_suffix(']').unwrap_or(val);
@@ -405,7 +427,12 @@ fn parse_ims_voice(out: &str) -> HashMap<u8, ImsVoice> {
     for line in out.lines() {
         let t = line.trim();
         if let Some(v) = t.strip_prefix("mPhoneId=") {
-            phone = v.trim().parse::<i32>().ok().filter(|n| *n >= 0).map(|n| (n + 1) as u8);
+            phone = v
+                .trim()
+                .parse::<i32>()
+                .ok()
+                .filter(|n| *n >= 0)
+                .map(|n| (n + 1) as u8);
             continue;
         }
         let Some(slot) = phone else { continue };
@@ -439,7 +466,9 @@ fn slot_prop(p: &HashMap<String, String>, key: &str, idx: usize) -> String {
     if !v.is_empty() || idx == 0 {
         return v;
     }
-    p.get(&format!("{key}.{}", idx + 1)).map(|s| s.trim().to_string()).unwrap_or_default()
+    p.get(&format!("{key}.{}", idx + 1))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
 }
 
 /// `dumpsys isub`의 "simSlotIndex=N portIndex=P isEmbedded=E" 줄에서 슬롯별 eSIM 여부
@@ -500,7 +529,7 @@ pub struct DeviceOut {
     android: String,
     mode: String,
     bootloader: String,
-    rooted: bool,
+    rooted: Rooted,
     sims: Vec<SimOut>,
     usb: UsbOut,
     /// 언락 사전 조건 (판별 불가 시 None)
@@ -540,11 +569,16 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
            | grep -E 'mPhoneId=|mMmTelCapabilities=|mImsMmTelRegistrationState|handleImsRegistered' || true; echo __DEV__;          settings get global development_settings_enabled; settings get global adb_enabled",
     )?;
     let (props_raw, rest) = raw.split_once("__SU__").unwrap_or((&raw, ""));
-    let (su_raw, rest) = rest.split_once("__ISUB__").unwrap_or((rest, ""));
+    // su 구간은 두 표식이 모두 있어야 유효(없으면 루팅 판별 불가)
+    let su_raw = rest.split_once("__ISUB__").map(|(su, _)| su);
+    let (_, rest) = rest.split_once("__ISUB__").unwrap_or((rest, ""));
     let (isub_raw, rest) = rest.split_once("__IMS__").unwrap_or((rest, ""));
     let (ims_raw, dev_raw) = rest.split_once("__DEV__").unwrap_or((rest, ""));
     let mut dev_lines = dev_raw.lines().map(|l| l.trim()).filter(|l| !l.is_empty());
-    let (dev_opt, adb_on) = (dev_lines.next().unwrap_or(""), dev_lines.next().unwrap_or(""));
+    let (dev_opt, adb_on) = (
+        dev_lines.next().unwrap_or(""),
+        dev_lines.next().unwrap_or(""),
+    );
     let embedded = parse_embedded_slots(isub_raw);
     let ims_voice = parse_ims_voice(ims_raw);
     let p = parse_getprop(props_raw);
@@ -563,14 +597,23 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
         serial = "unknown".into();
     }
 
-    let rooted = !su_raw.trim().is_empty();
-    let bootloader =
-        bootloader_state(&get("ro.boot.flash.locked"), &get("ro.boot.vbmeta.device_state"), rooted);
+    let bootloader = bootloader_state(
+        &get("ro.boot.flash.locked"),
+        &get("ro.boot.vbmeta.device_state"),
+        su_raw.is_some_and(su_visible),
+    );
+    let rooted = root_state(su_raw, bootloader);
 
     let sim_state = get("gsm.sim.state");
     let states: Vec<&str> = sim_state.split(',').collect();
-    let alphas = [slot_prop(&p, "gsm.sim.operator.alpha", 0), slot_prop(&p, "gsm.sim.operator.alpha", 1)];
-    let numerics = [slot_prop(&p, "gsm.sim.operator.numeric", 0), slot_prop(&p, "gsm.sim.operator.numeric", 1)];
+    let alphas = [
+        slot_prop(&p, "gsm.sim.operator.alpha", 0),
+        slot_prop(&p, "gsm.sim.operator.alpha", 1),
+    ];
+    let numerics = [
+        slot_prop(&p, "gsm.sim.operator.numeric", 0),
+        slot_prop(&p, "gsm.sim.operator.numeric", 1),
+    ];
 
     let sims = (1..=2u8)
         .map(|slot| {
@@ -588,7 +631,11 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
                 slot,
                 sim_type: if is_esim { "esim" } else { "physical" },
                 carrier: loaded.then(|| {
-                    if alphas[idx].is_empty() { "통신사 확인 불가".to_string() } else { alphas[idx].clone() }
+                    if alphas[idx].is_empty() {
+                        "통신사 확인 불가".to_string()
+                    } else {
+                        alphas[idx].clone()
+                    }
                 }),
                 state,
                 // IMS 음성 등록 상태(실측) 우선 — 덤프에서 못 읽으면 판별 불가
@@ -606,7 +653,9 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
     // 펌웨어: ro.build.id(실측 "67.2.A.3.178") — display.id는 " release-keys"가 붙음
     let mut firmware = get("ro.build.id");
     if firmware.is_empty() {
-        firmware = get("ro.build.display.id").trim_end_matches(" release-keys").to_string();
+        firmware = get("ro.build.display.id")
+            .trim_end_matches(" release-keys")
+            .to_string();
     }
     Ok(DeviceOut {
         sony: get("ro.product.manufacturer").eq_ignore_ascii_case("sony"),
@@ -646,7 +695,7 @@ fn placeholder(state: &str, serial: String, serial_masked: String, name: &str) -
         android: String::new(),
         mode: "android".into(),
         bootloader: "unknown".into(),
-        rooted: false,
+        rooted: Rooted::Unknown,
         sims: vec![],
         usb: UsbOut {
             topology: String::new(),
@@ -668,13 +717,21 @@ fn device_list_work() -> Result<Vec<DeviceOut>, String> {
         for entry in &devs {
             if !entry.ready() {
                 if sony_usb {
-                    out.push(placeholder(&entry.state, entry.serial.clone(), mask_serial(&entry.serial), "Xperia"));
+                    out.push(placeholder(
+                        &entry.state,
+                        entry.serial.clone(),
+                        mask_serial(&entry.serial),
+                        "Xperia",
+                    ));
                 }
                 continue;
             }
             match device_status(&mut entry.handle(), &entry.serial) {
                 Ok(d) if d.sony => out.push(d),
-                Ok(_) => eprintln!("[rust] Xperia가 아닌 기기 제외({})", mask_serial(&entry.serial)),
+                Ok(_) => eprintln!(
+                    "[rust] Xperia가 아닌 기기 제외({})",
+                    mask_serial(&entry.serial)
+                ),
                 Err(e) => {
                     failed += 1;
                     eprintln!(
@@ -685,7 +742,10 @@ fn device_list_work() -> Result<Vec<DeviceOut>, String> {
                 }
             }
         }
-        eprintln!("[rust] device_list(server) -> {} device(s), 실패 {failed}", out.len());
+        eprintln!(
+            "[rust] device_list(server) -> {} device(s), 실패 {failed}",
+            out.len()
+        );
         // 준비된 기기를 하나도 읽지 못했으면 "기기 없음"이 아니라 조회 실패 — 프론트는 연속 실패 시에만 카드를 지운다
         if out.is_empty() && failed > 0 {
             return Err("기기 정보를 읽지 못했습니다".into());
@@ -701,7 +761,10 @@ fn device_list_work() -> Result<Vec<DeviceOut>, String> {
     }
     if found.len() > 1 {
         // USB 직접 연결은 기기별 셸을 구분해 열 수 없음 → 식별 정보만 담아 반환 (프론트 다중 기기 경고용)
-        eprintln!("[rust] device_list(usb) -> {} device(s), 다중 연결", found.len());
+        eprintln!(
+            "[rust] device_list(usb) -> {} device(s), 다중 연결",
+            found.len()
+        );
         return Ok(found
             .iter()
             .enumerate()
@@ -711,7 +774,11 @@ fn device_list_work() -> Result<Vec<DeviceOut>, String> {
                     "usb",
                     format!("usb-{i}"),
                     format!("USB #{}", i + 1),
-                    if name.is_empty() { "알 수 없는 기기" } else { name },
+                    if name.is_empty() {
+                        "알 수 없는 기기"
+                    } else {
+                        name
+                    },
                 )
             })
             .collect());
@@ -727,7 +794,7 @@ fn device_list_work() -> Result<Vec<DeviceOut>, String> {
             *guard = None;
             ensure_usb(&mut guard)?;
             let d = device_status(guard.as_mut().expect("재연결 보장됨"), "")?;
-            Ok(vec![d])
+            Ok(if d.sony { vec![d] } else { vec![] })
         }
     };
     if let Ok(list) = &result {
@@ -739,7 +806,7 @@ fn device_list_work() -> Result<Vec<DeviceOut>, String> {
 /// 연결된 기기의 상태 목록 (읽기 전용)
 #[tauri::command]
 pub async fn device_list() -> Result<Vec<DeviceOut>, String> {
-    guarded(Duration::from_secs(30), || device_list_work()).await
+    guarded(Duration::from_secs(30), device_list_work).await
 }
 
 // ── 백업 경로별 용량 ──
@@ -765,7 +832,9 @@ fn build_storage_script() -> String {
     let mut s = String::from("(");
     for (_, path) in FOLDER_PATHS.iter() {
         // 없는 폴더는 0으로 명시, 있는데 du가 결과를 못 내면 줄이 없어 "측정 불가"로 남는다
-        s.push_str(&format!("(if [ -e {path} ]; then du -sk {path} 2>/dev/null; else printf '0\t{path}\n'; fi) & "));
+        s.push_str(&format!(
+            "(if [ -e {path} ]; then du -sk {path} 2>/dev/null; else printf '0\t{path}\n'; fi) & "
+        ));
     }
     s.push_str(
         "(for l in $(pm list packages -3 -f); do a=${l#package:}; a=${a%=*}; \
@@ -797,7 +866,10 @@ fn parse_storage_output(raw: &str) -> Value {
                     (Some(kb), Some(path)) => {
                         if let (Ok(kb), Some(id)) = (
                             kb.parse::<u64>(),
-                            FOLDER_PATHS.iter().find(|(_, p)| *p == path).map(|(id, _)| *id),
+                            FOLDER_PATHS
+                                .iter()
+                                .find(|(_, p)| *p == path)
+                                .map(|(id, _)| *id),
                         ) {
                             sizes.insert(id.to_string(), kb * 1024);
                         }
@@ -812,13 +884,11 @@ fn parse_storage_output(raw: &str) -> Value {
                     _ => {}
                 }
             }
-            2 => {
-                if !t.starts_with("Filesystem") && !t.is_empty() {
-                    let parts: Vec<&str> = t.split_whitespace().collect();
-                    if parts.len() >= 4 {
-                        if let Ok(kb) = parts[3].parse::<u64>() {
-                            free_kb = kb;
-                        }
+            2 if !t.starts_with("Filesystem") && !t.is_empty() => {
+                let parts: Vec<&str> = t.split_whitespace().collect();
+                if parts.len() >= 4 {
+                    if let Ok(kb) = parts[3].parse::<u64>() {
+                        free_kb = kb;
                     }
                 }
             }
@@ -851,10 +921,7 @@ fn storage_sizes_work(serial: Option<String>) -> Result<Value, String> {
 /// 백업 경로별 실제 용량 (모두 읽기 전용)
 #[tauri::command]
 pub async fn storage_sizes(serial: Option<String>) -> Result<Value, String> {
-    guarded(Duration::from_secs(180), move || {
-        storage_sizes_work(serial)
-    })
-    .await
+    guarded(Duration::from_secs(180), move || storage_sizes_work(serial)).await
 }
 
 // ── 앱별 백업 자격 (recovery.md 2-2 판정 신호) ──
@@ -969,7 +1036,9 @@ pub async fn open_settings_screen(serial: Option<String>, screen: String) -> Res
         _ => return Err("알 수 없는 설정 화면입니다".into()),
     };
     guarded(Duration::from_secs(15), move || {
-        with_first_device(&serial, |dev| shell(dev, &format!("am start -a {action}")).map(|_| ()))
+        with_first_device(&serial, |dev| {
+            shell(dev, &format!("am start -a {action}")).map(|_| ())
+        })
     })
     .await
 }
@@ -980,8 +1049,10 @@ pub async fn open_settings_screen(serial: Option<String>, screen: String) -> Res
 // 결과가 15자리 + Luhn 검증을 통과할 때만 채택 (엉뚱한 값을 IMEI로 쓰지 않도록). IMEI는 로그에 남기지 않는다.
 
 /// (호출, 확인 환경) — getDeviceIdForPhone(phoneId=0 → 슬롯 1)
-const IMEI1_CALLS: [(&str, &str); 1] =
-    [("service call iphonesubinfo 4 i32 0 s16 com.android.shell", "Android 15 / XQ-DQ44 실측")];
+const IMEI1_CALLS: [(&str, &str); 1] = [(
+    "service call iphonesubinfo 4 i32 0 s16 com.android.shell",
+    "Android 15 / XQ-DQ44 실측",
+)];
 
 /// `service call` Parcel 출력에서 문자열 부분(따옴표 안)의 숫자만
 fn parcel_digits(out: &str) -> String {
@@ -1008,20 +1079,28 @@ fn luhn_ok(n: &str) -> bool {
             let d = (b - b'0') as u32;
             if i % 2 == 1 {
                 let x = d * 2;
-                if x > 9 { x - 9 } else { x }
+                if x > 9 {
+                    x - 9
+                } else {
+                    x
+                }
             } else {
                 d
             }
         })
         .sum();
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 /// 루트 권한 확인 — `su -c id`가 uid=0이면 승인됨 (Magisk 허용 창이 뜨면 사용자가 허용해야 함, 기기 변경 없음)
 #[tauri::command]
 pub async fn root_check(serial: Option<String>) -> Result<bool, String> {
     guarded(Duration::from_secs(30), move || {
-        with_first_device(&serial, |dev| Ok(shell(dev, "su -c id 2>&1")?.contains("uid=0")))
+        with_first_device(&serial, |dev| {
+            // su 없음(127)·거부(1)는 조회 실패가 아니라 "루트 아님"이다
+            let out = crate::device_io::shell_run(dev, "su -c id 2>&1")?;
+            Ok(out.code == 0 && String::from_utf8_lossy(&out.stdout).contains("uid=0"))
+        })
     })
     .await
 }
@@ -1055,7 +1134,11 @@ const RESTORE_SETTINGS: [(&str, &str, &str); 7] = [
     ("system", "screen_brightness_mode", "자동 밝기"),
     ("system", "screen_off_timeout", "화면 자동 꺼짐 시간"),
     ("system", "font_scale", "글꼴 크기"),
-    ("global", "stay_on_while_plugged_in", "충전 중 화면 켜짐 유지"),
+    (
+        "global",
+        "stay_on_while_plugged_in",
+        "충전 중 화면 켜짐 유지",
+    ),
 ];
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -1086,7 +1169,9 @@ fn build_settings_script() -> String {
         "for n in system secure global; do echo \"C|$n|$(settings list $n | wc -l)\"; done; ",
     );
     for (ns, key, _) in RESTORE_SETTINGS.iter() {
-        s.push_str(&format!("echo \"V|{ns}|{key}|$(settings get {ns} {key})\"; "));
+        s.push_str(&format!(
+            "echo \"V|{ns}|{key}|$(settings get {ns} {key})\"; "
+        ));
     }
     s.push_str("echo \"I|$(dumpsys deviceidle whitelist | grep -c '^user,')\"");
     s
@@ -1113,7 +1198,10 @@ fn parse_settings_overview(raw: &str) -> SettingsOverviewOut {
                 }
             }
             ["V", ns, key, value] => {
-                if let Some((_, _, label)) = RESTORE_SETTINGS.iter().find(|(n, k, _)| n == ns && k == key) {
+                if let Some((_, _, label)) = RESTORE_SETTINGS
+                    .iter()
+                    .find(|(n, k, _)| n == ns && k == key)
+                {
                     out.restore_items.push(SettingValueOut {
                         namespace: ns.to_string(),
                         key: key.to_string(),
@@ -1154,11 +1242,16 @@ V|system|screen_off_timeout|600000\n\
 V|global|stay_on_while_plugged_in|0\n\
 I|6\n";
         let o = parse_settings_overview(raw);
-        assert_eq!((o.system_count, o.secure_count, o.global_count), (100, 210, 295));
+        assert_eq!(
+            (o.system_count, o.secure_count, o.global_count),
+            (100, 210, 295)
+        );
         assert_eq!(o.battery_exempt_apps, 6);
         assert_eq!(o.restore_items.len(), 3);
         assert_eq!(o.restore_items[0].label, "빠른 설정 타일 순서");
-        assert!(o.restore_items[0].value.contains("custom(com.google.android.gms/.nearby.sharing.SharingTileService)"));
+        assert!(o.restore_items[0]
+            .value
+            .contains("custom(com.google.android.gms/.nearby.sharing.SharingTileService)"));
         assert_eq!(o.restore_items[1].value, "600000");
     }
 
@@ -1200,8 +1293,24 @@ __GBACKUP__\n";
         let v = parse_app_flags(&raw);
         assert_eq!(v.len(), 2);
         // instagram: 구글 전송에 있지만 0 bytes → 백업 기록 없음
-        assert_eq!(v[0], AppFlagOut { pkg: "com.instagram.android".into(), allow_backup: true, has_external_data: true, google_backed_up: false });
-        assert_eq!(v[1], AppFlagOut { pkg: "kr.co.tmoney.tia".into(), allow_backup: false, has_external_data: false, google_backed_up: true });
+        assert_eq!(
+            v[0],
+            AppFlagOut {
+                pkg: "com.instagram.android".into(),
+                allow_backup: true,
+                has_external_data: true,
+                google_backed_up: false
+            }
+        );
+        assert_eq!(
+            v[1],
+            AppFlagOut {
+                pkg: "kr.co.tmoney.tia".into(),
+                allow_backup: false,
+                has_external_data: false,
+                google_backed_up: true
+            }
+        );
     }
 
     use super::*;
@@ -1235,7 +1344,10 @@ __GBACKUP__\n";
         let m = parse_ims_voice(raw);
         assert_eq!(m[&2].reg_state, Some(2));
         assert_eq!(m[&2].volte(), "wifi"); // 마지막 등록이 WLAN → VoLTE 아님
-        let cellular = raw.replace("21:10:00.000000 - handleImsRegistered: onImsMmTelConnected imsRadioTech=WLAN", "21:10:00.000000 - handleImsRegistered: onImsMmTelConnected imsRadioTech=WWAN");
+        let cellular = raw.replace(
+            "21:10:00.000000 - handleImsRegistered: onImsMmTelConnected imsRadioTech=WLAN",
+            "21:10:00.000000 - handleImsRegistered: onImsMmTelConnected imsRadioTech=WWAN",
+        );
         assert_eq!(parse_ims_voice(&cellular)[&2].volte(), "on");
     }
 
@@ -1250,7 +1362,8 @@ __GBACKUP__\n";
         assert_eq!(slot_prop(&p, "gsm.sim.operator.alpha", 1), "SK Telecom");
         assert_eq!(slot_prop(&p, "gsm.sim.operator.numeric", 1), "45005");
         // .2 형식 기종 폴백
-        let q = parse_getprop("[gsm.sim.operator.alpha]: [KT]\n[gsm.sim.operator.alpha.2]: [LG U+]\n");
+        let q =
+            parse_getprop("[gsm.sim.operator.alpha]: [KT]\n[gsm.sim.operator.alpha.2]: [LG U+]\n");
         assert_eq!(slot_prop(&q, "gsm.sim.operator.alpha", 0), "KT");
         assert_eq!(slot_prop(&q, "gsm.sim.operator.alpha", 1), "LG U+");
     }
@@ -1346,6 +1459,30 @@ Filesystem     1K-blocks      Used Available Use% Mounted on\n\
         assert_eq!(bootloader_state("1", "unlocked", false), "unknown");
         assert_eq!(bootloader_state("", "", false), "unknown");
         assert_eq!(bootloader_state("0", "", false), "unknown"); // 한쪽만으로는 확정하지 않음
+    }
+
+    #[test]
+    fn root_state_is_unknown_unless_su_is_seen_or_bootloader_is_locked() {
+        assert_eq!(
+            root_state(Some("/system/bin/su\n"), "unlocked"),
+            Rooted::Yes
+        );
+        assert_eq!(root_state(Some("\n"), "locked"), Rooted::No);
+        // 언락 상태에서 su가 안 보이면 셸에 숨긴 루팅과 구분할 수 없다
+        assert_eq!(root_state(Some(""), "unlocked"), Rooted::Unknown);
+        assert_eq!(root_state(Some(""), "unknown"), Rooted::Unknown);
+        // USB 직접 연결에서 섞여 오는 오류 문구는 su 경로가 아니다
+        assert_eq!(
+            root_state(Some("/system/bin/sh: which: not found\n"), "locked"),
+            Rooted::No
+        );
+        // 출력이 끊겨 su 구간이 없으면 판별 불가
+        assert_eq!(root_state(None, "locked"), Rooted::Unknown);
+        assert_eq!(
+            serde_json::to_value(Rooted::Unknown).unwrap(),
+            json!("unknown")
+        );
+        assert_eq!(serde_json::to_value(Rooted::No).unwrap(), json!(false));
     }
 
     #[test]

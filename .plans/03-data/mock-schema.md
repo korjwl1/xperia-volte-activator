@@ -2,6 +2,8 @@
 
 status: implemented
 
+2026-10-04: 실제 실행 계획은 `src/lib/domain/plan.ts`로 이동했다. 공통 `ApiResult<T>`와 nullable 진행 파일 필드는 `types.ts`, 디스크 진행 기록의 런타임 검증은 `domain/journal.ts`를 사용한다. mock은 개발용 데이터와 백업 항목 시드만 제공한다.
+
 ## 시드 출처
 - 기기/프롭: 현재 실측(`tasks/recovery.md` 1-3, 2026-09-29, XQ-DQ44 / 67.2.A.3.178 / Android 15)
 - 앱 분류: `tasks/recovery.md` 2-3 실측(B_OK 31/B_NO 60 + 큐레이션)

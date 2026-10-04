@@ -1,12 +1,11 @@
 import type { EfsConfiguration, EfsError, EfsLogEvent, EfsPreflight, EfsProgress, EfsResult, EfsSnapshotResult, EfsToolCheck, EfsUploadResult, EfsVerifyReport } from "$lib/types";
 import { EFS_PRESETS } from "$lib/data/efsPresets";
+import { inDesktop as inTauri, transport } from "./transport";
 
-const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 let browserConfiguration: EfsConfiguration | null = null;
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<EfsResult<T>> {
   try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return { ok: true, value: await invoke<T>(command, args) };
+    return { ok: true, value: await transport.invoke<T>(command, args) };
   } catch (e) {
     if (e && typeof e === "object" && "code" in e && "message" in e) {
       const details = e as EfsError;
@@ -36,9 +35,7 @@ function mockUpload(presetDir: string): EfsUploadResult {
   return { errors: [], filesSeen: count - skipped, planned: count, skipped, warnings };
 }
 async function listen<T>(event: string, cb: (value: T) => void): Promise<() => void> {
-  if (!inTauri()) return () => {};
-  try { const { listen } = await import("@tauri-apps/api/event"); return await listen<T>(event, e => cb(e.payload)); }
-  catch { return () => {}; }
+  return transport.subscribe<T>(event, cb);
 }
 export interface EfsApi {
   efsValidatePresets(folders: string[]): Promise<EfsResult<null>>;

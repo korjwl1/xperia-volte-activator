@@ -1,15 +1,14 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
-  import { CircleCheck, TriangleAlert, Usb, Smartphone, ArrowRight } from "@lucide/svelte/icons";
+  import { onMount } from "svelte";
+  import { CircleCheck, TriangleAlert, Usb, Smartphone, ArrowRight, Lock, LockOpen } from "@lucide/svelte/icons";
   import { api } from "$lib/api";
   import { wizard } from "$lib/stores/wizard.svelte";
-  import { simStateLabel, type DeviceStatus, type EnvCheckItem } from "$lib/types";
+  import { simStateLabel, type DeviceStatus } from "$lib/types";
 
   const CAFE_URL = "https://cafe.naver.com/x1smart";
   const GITHUB_URL = "https://github.com/korjwl1";
 
   let devices = $state<DeviceStatus[]>([]);
-  let env = $state<EnvCheckItem[]>([]);
   let loading = $state(true);
   let linkError = $state<string | null>(null); // 연결 수단 점검 실패 — 재시도 팝업 표시
   let linkDismissed = $state(false);
@@ -40,8 +39,8 @@
       }
       devices = list ?? [];
       wizard.device = devices.length === 1 && devices[0].state === "device" ? devices[0] : null;
-      if (env.length === 0) env = await api.envCheck();
       const st = await api.adbStatus();
+      if (!alive) return;
       linkError = st && !st.available ? (st.detail ?? "기기 연결 기능을 사용할 수 없습니다") : null;
     } finally {
       inFlight = false;
@@ -53,15 +52,17 @@
     refresh();
   }
 
-  onMount(async () => {
-    await refresh();
-    loading = false;
+  onMount(() => {
+    alive = true;
+    void refresh().finally(() => {
+      if (alive) loading = false;
+    });
+    // 폴링은 첫 조회 결과와 무관하게 바로 건다 — 첫 조회가 오래 걸려도 이후 조회가 막히지 않는다(겹침은 inFlight가 막음)
     pollTimer = setInterval(refresh, 3000);
-  });
-
-  onDestroy(() => {
-    alive = false;
-    if (pollTimer) clearInterval(pollTimer);
+    return () => {
+      alive = false;
+      if (pollTimer) clearInterval(pollTimer);
+    };
   });
 
   function start() {
@@ -86,7 +87,7 @@
           </div>
         </div>
         <div class="space-y-2">
-          {#each devices as d (d.serial)}
+          {#each devices as d (d.serial ?? d.serialMasked)}
             <div class="flex items-center gap-3 rounded-lg border bg-card px-4 py-3">
               <Smartphone size={18} class="text-muted-foreground shrink-0" />
               <span class="text-sm font-medium">{d.productName}</span>
@@ -115,7 +116,7 @@
               <p class="text-sm opacity-80">{device.firmware} · Android {device.android}</p>
               <div class="flex flex-wrap gap-2 pt-1">
                 <div class="rounded-lg bg-white/15 px-3 py-1.5 text-xs font-medium">
-                  {#if device.bootloader === "locked"}🔒 부트로더 잠김{:else if device.bootloader === "unlocked"}🔓 언락{:else}부트로더 확인 불가{/if}
+                  {#if device.bootloader === "locked"}<Lock size={12} class="inline mr-1" />부트로더 잠김{:else if device.bootloader === "unlocked"}<LockOpen size={12} class="inline mr-1" />언락{:else}부트로더 확인 불가{/if}
                 </div>
                 <div class="rounded-lg bg-white/15 px-3 py-1.5 text-xs font-medium">
                   {#if device.rooted === true}루팅됨{:else if device.rooted === false}루팅 미감지{:else}루팅 확인 불가{/if}

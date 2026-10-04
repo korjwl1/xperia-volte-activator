@@ -1,4 +1,6 @@
 // 도메인 타입 — .plans/03-data/mock-schema.md 참조
+export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string };
+export type Unsubscribe = () => void;
 export type DeviceMode = "android" | "bootloader-fastboot" | "fastbootd" | "flashmode";
 
 export type TriState = boolean | "unknown";
@@ -60,15 +62,20 @@ export interface AdbStatus {
 
 export type Profile = "clean-return" | "keep-root" | "unroot-only";
 
-export type StepKind =
-  | "backup" | "unlock" | "setup" | "root" | "efs-preflight" | "efs" | "verify" | "volte-props"
-  | "fw-download" | "fw-flash" | "fw-verify"
-  | "unroot" | "relock" | "final-verify" | "restore" | "dexopt";
+/** 진행 기록 검증(domain/journal.ts)도 이 목록을 쓴다 — 타입과 검증 목록이 어긋나지 않게 한 곳에서 정의 */
+export const STEP_KINDS = [
+  "backup", "unlock", "setup", "root", "efs-preflight", "efs", "verify", "volte-props",
+  "fw-download", "fw-flash", "fw-verify",
+  "unroot", "relock", "final-verify", "restore", "dexopt",
+] as const;
+export type StepKind = (typeof STEP_KINDS)[number];
 
-export type ManualId =
-  | "usb-debug" | "su-grant" | "magisk-patch" | "oem-toggle" | "mode-wait" | "ims-check"
-  | "unlock-code" | "firmware-select" | "backup-notice" | "flash-mode" | "ims-precheck"
-  | "smsie-export" | "smsie-import" | "contacts-import";
+export const MANUAL_IDS = [
+  "usb-debug", "su-grant", "magisk-patch", "oem-toggle", "mode-wait", "ims-check",
+  "unlock-code", "firmware-select", "backup-notice", "flash-mode", "ims-precheck",
+  "smsie-export", "smsie-import", "contacts-import",
+] as const;
+export type ManualId = (typeof MANUAL_IDS)[number];
 
 /** 수동 개입 모달 내용 — input이 있으면 입력 완료 전까지 [완료] 비활성 */
 export interface ManualPrompt {
@@ -219,7 +226,7 @@ export interface BackupSummary {
 export interface BackupProgress {
   itemId: string;
   phase: string;
-  file?: string;
+  file?: string | null;
   filesDone: number;
   filesTotal: number;
   bytesDone: number;
@@ -238,6 +245,37 @@ export interface RestoreOutcome {
   failures: string[];
   /** 문자·통화 기록(smsie) 수동 복원이 남아 있음 — 수동 개입 단계로 진행 */
   smsiePending: boolean;
+}
+
+/** fastboot getvar 결과 — unlocked·current-slot·slot-successful:a/b·max-download-size … */
+export type FastbootVars = Record<string, string>;
+
+/** 언락/리락 실행 결과 — getvar로 이중 확인한 값 */
+export interface UnlockResult {
+  unlocked: boolean;
+}
+
+/** 리락 게이트(§3-3) 사전 점검 결과 — 백엔드 relock_gate_check */
+export interface RelockGate {
+  ok: boolean;
+  reasons: string[];
+  checked: { partition: string; slot: string; ok: boolean; detail: string }[];
+}
+
+/** Magisk APK 확보 결과 — 백엔드 magisk_prepare */
+export interface MagiskPrepared {
+  version: string;
+  apkPath: string;
+  sha256: string;
+}
+
+/** 부트 패치 결과 — 백엔드 magisk_patch (ANDROID!·크기·해시 검증 통과분) */
+export interface PatchResult {
+  path: string;
+  origSha256: string;
+  patchedSha256: string;
+  bytes: number;
+  log: string[];
 }
 
 export type RunStatus =
@@ -269,6 +307,8 @@ export interface RunJournal {
   backupPath: string;
   /** 실전 백업이 만든 백업 폴더(manifest.json 위치) — 복구·이어받기에 사용 */
   backupDir?: string;
+  /** 실전 루팅 산출물의 경로 — 언루팅 입력으로 사용하지 않는다. */
+  patchedImage?: string;
   /** 선택한 백업 항목 id */
   backupItems: string[];
   steps: PlanStep[];
@@ -302,3 +342,22 @@ export interface EfsVerifyReport { ok: boolean; files: number; matched: number; 
 export interface EfsSnapshotResult { path: string; filesSeen: number; warnings: EfsWarning[] }
 export interface EfsProgress { operation: string; file: string; n: number; total: number }
 export interface EfsLogEvent { cmd: string; line: string }
+
+/** 수동 SIN 추출 결과 — path는 실제 패치·기록에 사용할 raw IMG 경로다. */
+export interface FirmwareDirInfo {
+  file: string;
+  path: string;
+  fingerprint: string;
+  imageBytes: number;
+}
+
+/** Magisk 패치 입력 — 사전 준비 이미지·APK 해시와 현재 펌웨어 지문을 포함한다. */
+export interface MagiskPatchRequest {
+  serial: string;
+  apkPath: string;
+  imagePath: string;
+  partition: "boot" | "init_boot";
+  imageSha256: string;
+  fingerprint: string;
+  apkSha256: string;
+}

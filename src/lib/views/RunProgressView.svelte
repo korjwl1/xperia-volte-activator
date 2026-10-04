@@ -10,11 +10,15 @@
   import { LINKS, maskImei } from "$lib/data/links";
 
   let imeiCopied = $state(false);
+  let copiedTimer: ReturnType<typeof setTimeout> | undefined;
   async function copyImei() {
     if (!wizard.imei1) return;
     imeiCopied = await api.copyText(wizard.imei1);
-    if (imeiCopied) setTimeout(() => (imeiCopied = false), 2500);
+    // 연속 복사 시 이전 타이머가 새 표시를 일찍 지우지 않게 다시 건다
+    clearTimeout(copiedTimer);
+    if (imeiCopied) copiedTimer = setTimeout(() => (imeiCopied = false), 2500);
   }
+  $effect(() => () => clearTimeout(copiedTimer));
   const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1)} MB`;
   import BackupNotice from "$lib/components/BackupNotice.svelte";
   import GuideSlides from "$lib/components/GuideSlides.svelte";
@@ -33,12 +37,19 @@
 
   let consoleEl: HTMLDivElement | undefined = $state();
 
-  const allLogs = $derived(
-    wizard.runSteps.flatMap((s) => s.logs.map((l) => ({ step: s.title, text: l }))),
-  );
+  // 단계별 로그를 합치지 않고 그대로 그린다 — 줄마다 전체 로그를 다시 복사하지 않도록 단계별 시작 번호만 계산
+  const logOffsets = $derived.by(() => {
+    let n = 0;
+    return wizard.runSteps.map((s) => {
+      const start = n;
+      n += s.logs.length;
+      return start;
+    });
+  });
+  const logCount = $derived(wizard.runSteps.reduce((n, s) => n + s.logs.length, 0));
 
   $effect(() => {
-    allLogs.length;
+    logCount;
     if (consoleEl) consoleEl.scrollTop = consoleEl.scrollHeight;
   });
 
@@ -110,8 +121,10 @@
           {#if !wizard.finished}
             {#if wizard.running}
               <Button size="sm" variant="outline" onclick={() => wizard.pause()}><Pause size={13} class="mr-1" />일시정지</Button>
-            {:else}
-              <Button size="sm" disabled={wizard.usbError || !!wizard.stepError} onclick={() => wizard.begin()}><Play size={13} class="mr-1" />{wizard.runSteps.some((s) => s.status !== "pending") ? "이어서" : "실행"}</Button>
+            {:else if wizard.busy === 0}
+              <!-- 기기 작업(엔진·완결 게이트·펌웨어 받기)이 진행 중이면 [이어서]를 두지 않는다 -->
+
+              <Button size="sm" disabled={wizard.usbError || !!wizard.stepError} onclick={() => wizard.resumeRun()}><Play size={13} class="mr-1" />{wizard.runSteps.some((s) => s.status !== "pending") ? "이어서" : "실행"}</Button>
             {/if}
             <Button size="sm" variant="destructive" onclick={() => wizard.abort()}><Square size={12} class="mr-1" />중단</Button>
           {:else}
@@ -132,12 +145,14 @@
     </CardHeader>
     <CardContent class="flex-1 p-0 min-h-0">
       <div bind:this={consoleEl} class="console-bg h-full overflow-y-auto px-4 py-3 font-mono text-[11.5px] leading-relaxed">
-        {#each allLogs as entry, li (li)}
-          <div class="flex gap-2">
-            <span class="text-zinc-600 shrink-0 select-none">{String(li + 1).padStart(3, "0")}</span>
-            <span class="text-zinc-500 shrink-0 hidden md:inline">[{entry.step}]</span>
-            <span class={lineColor(entry.text)}>{entry.text}</span>
-          </div>
+        {#each wizard.runSteps as s, si (s.id)}
+          {#each s.logs as text, j (j)}
+            <div class="flex gap-2">
+              <span class="text-zinc-600 shrink-0 select-none">{String(logOffsets[si] + j + 1).padStart(3, "0")}</span>
+              <span class="text-zinc-500 shrink-0 hidden md:inline">[{s.title}]</span>
+              <span class={lineColor(text)}>{text}</span>
+            </div>
+          {/each}
         {/each}
         {#if wizard.running && !wizard.manualCurrent}
           <div class="flex gap-2 text-primary">
@@ -348,6 +363,12 @@
                 : "완료하면 다음 단계로 진행됩니다"}
           </span>
           <div class="flex shrink-0 gap-2">
+            {#if wizard.manualSetupState === "failed" && wizard.manualCurrent.id === "smsie-export"}
+              <Button variant="outline" onclick={() => wizard.smsiePrepare()}>준비 다시 시도</Button>
+            {/if}
+            {#if wizard.manualSetupState === "failed" && wizard.manualCurrent.id === "smsie-import"}
+              <Button variant="outline" onclick={() => wizard.smsieRestoreStage()}>준비 다시 시도</Button>
+            {/if}
             {#if wizard.manualSkippable}
               <Button variant="ghost" class="text-muted-foreground" onclick={() => wizard.skipManual()}>(목업) 건너뛰기</Button>
             {/if}

@@ -180,3 +180,23 @@ function bootloaderOnlyPlan(device: DeviceStatus, only: "unlock" | "relock", opt
   }
   return steps;
 }
+
+/** 실행 전 확인·위험 표시 대상 단계의 안내 — 초기화, 펌웨어·부트 이미지 기록, 모뎀 설정(EFS) 수정.
+ *  확인 모달·실행 순서 툴팁·창 닫기 보호가 같은 기준을 쓴다 (AGENTS 규칙 7). 대상이 아니면 null */
+export function stepHazard(step: Pick<PlanStep, "kind" | "wipe">): { short: string; detail: string } | null {
+  if (step.wipe) {
+    return { short: "데이터 초기화", detail: "부트로더 언락/리락 단계는 핸드폰 데이터가 초기화될 수 있습니다. 백업을 권장합니다." };
+  }
+  switch (step.kind) {
+    case "fw-flash":
+      return { short: "사용자 데이터 유지", detail: "펌웨어를 기록합니다 — 사용자 데이터는 유지되지만, 중간에 연결이 끊기지 않도록 주의해 주세요." };
+    case "root":
+      return { short: "부트 이미지 수정 기록", detail: "Magisk로 수정한 부트 이미지를 양쪽 슬롯에 기록합니다 — 기록 중 연결이 끊기면 부팅되지 않을 수 있습니다." };
+    case "unroot":
+      return { short: "순정 부트 이미지 재기록", detail: "순정 부트 이미지를 양쪽 슬롯에 다시 기록합니다 — 기록 중 연결이 끊기면 부팅되지 않을 수 있습니다." };
+    case "efs":
+      return { short: "모뎀 설정(EFS) 수정", detail: "모뎀 설정(EFS)을 직접 수정합니다 — 잘못 기록되면 통화·데이터가 안 될 수 있어, 적용 후 전수 확인합니다." };
+    default:
+      return null;
+  }
+}
