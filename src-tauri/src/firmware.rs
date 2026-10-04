@@ -76,15 +76,30 @@ struct ChunkedFile {
     downloaded: u64,
 }
 
-impl ChunkedFile {
+/// 범위 읽기 추상 — HTTP 조각(펌웨어)과 로컬 파일(APK 등)에서 같은 ZIP 코드를 쓴다.
+pub(crate) trait RangeRead {
+    fn total(&self) -> Result<u64, String>;
+    fn read_at(&mut self, offset: u64, len: u64) -> Result<Vec<u8>, String>;
+}
+
+impl RangeRead for ChunkedFile {
     fn total(&self) -> Result<u64, String> {
+        self.total_impl()
+    }
+    fn read_at(&mut self, offset: u64, len: u64) -> Result<Vec<u8>, String> {
+        self.read_at_impl(offset, len)
+    }
+}
+
+impl ChunkedFile {
+    fn total_impl(&self) -> Result<u64, String> {
         self.chunks.iter().try_fold(0u64, |sum, (size, _)| {
             sum.checked_add(*size)
                 .ok_or("펌웨어 크기 합계가 올바르지 않습니다".into())
         })
     }
 
-    fn read_at(&mut self, mut offset: u64, mut len: u64) -> Result<Vec<u8>, String> {
+    fn read_at_impl(&mut self, mut offset: u64, mut len: u64) -> Result<Vec<u8>, String> {
         if len > MAX_ENTRY
             || offset
                 .checked_add(len)
@@ -291,7 +306,7 @@ const MAX_ENTRY: u64 = 256 * 1024 * 1024;
 fn find_central_directory(
     tail: &[u8],
     tail_start: u64,
-    f: &mut ChunkedFile,
+    f: &mut dyn RangeRead,
 ) -> Result<(u64, u64), String> {
     let eocd = (0..tail.len().saturating_sub(21))
         .rev()
@@ -383,7 +398,7 @@ fn parse_central_directory(cd: &[u8]) -> Result<Vec<ZipEntry>, String> {
 }
 
 /// 항목 하나만 받아 압축 해제 + CRC 확인
-fn read_entry(f: &mut ChunkedFile, e: &ZipEntry) -> Result<Vec<u8>, String> {
+fn read_entry(f: &mut dyn RangeRead, e: &ZipEntry) -> Result<Vec<u8>, String> {
     let header = f.read_at(e.local_offset, 30)?;
     if e.comp_size > MAX_ENTRY || e.uncomp_size > MAX_ENTRY {
         return Err(format!("{} 항목 크기가 비정상적입니다", e.name));
@@ -412,6 +427,72 @@ fn read_entry(f: &mut ChunkedFile, e: &ZipEntry) -> Result<Vec<u8>, String> {
         return Err(format!("{} 무결성 검사(CRC) 실패", e.name));
     }
     Ok(data)
+}
+
+/// 로컬 ZIP 파일(APK 등) — HTTP 조각과 같은 ZIP 파서를 쓴다(seek+read)
+pub(crate) struct LocalZip {
+    file: std::fs::File,
+    size: u64,
+}
+
+impl LocalZip {
+    pub(crate) fn open(path: &std::path::Path) -> Result<Self, String> {
+        let file = std::fs::File::open(path).map_err(|e| format!("ZIP 파일 열기 실패: {e}"))?;
+        let size = file.metadata().map_err(|e| e.to_string())?.len();
+        Ok(Self { file, size })
+    }
+}
+
+impl RangeRead for LocalZip {
+    fn total(&self) -> Result<u64, String> {
+        Ok(self.size)
+    }
+
+    fn read_at(&mut self, offset: u64, len: u64) -> Result<Vec<u8>, String> {
+        use std::io::{Read, Seek, SeekFrom};
+        if len > MAX_ENTRY || offset.checked_add(len).is_none_or(|end| end > self.size) {
+            return Err("ZIP 읽기 범위/크기가 올바르지 않습니다".into());
+        }
+        self.file
+            .seek(SeekFrom::Start(offset))
+            .map_err(|e| format!("ZIP 탐색 실패: {e}"))?;
+        let mut buf = vec![0u8; len as usize];
+        self.file
+            .read_exact(&mut buf)
+            .map_err(|e| format!("ZIP 읽기 실패: {e}"))?;
+        Ok(buf)
+    }
+}
+
+/// ZIP에서 지정한 이름의 항목들을 읽는다(전부 필수) — tail → central directory → 항목
+pub(crate) fn zip_extract_named(
+    f: &mut dyn RangeRead,
+    names: &[&str],
+) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let total = f.total()?;
+    let tail_len = total.min(128 * 1024);
+    let tail_start = total - tail_len;
+    let tail = f.read_at(tail_start, tail_len)?;
+    let (cd_off, cd_size) = find_central_directory(&tail, tail_start, f)?;
+    let cd_end = cd_off
+        .checked_add(cd_size)
+        .filter(|end| *end <= total)
+        .ok_or(ZIP_BAD)?;
+    let cd = if cd_off >= tail_start {
+        tail[(cd_off - tail_start) as usize..(cd_off - tail_start + cd_size) as usize].to_vec()
+    } else {
+        f.read_at(cd_off, cd_size)?
+    };
+    let entries = parse_central_directory(&cd)?;
+    let mut out = Vec::with_capacity(names.len());
+    for name in names {
+        let e = entries
+            .iter()
+            .find(|e| e.name == *name)
+            .ok_or_else(|| format!("ZIP에 {name} 항목이 없습니다"))?;
+        out.push((e.name.clone(), read_entry(f, e)?));
+    }
+    Ok(out)
 }
 
 /// update.xml의 지문(<FINGERPRINT>)
@@ -718,6 +799,92 @@ pub async fn firmware_versions(serial: Option<String>) -> Result<FirmwareVersion
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 테스트용 stored 방식 ZIP 빌더 — 로컬 헤더 + 데이터 + central directory + EOCD
+    pub(crate) fn build_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        fn le16(v: u16) -> [u8; 2] {
+            v.to_le_bytes()
+        }
+        fn le32(v: u32) -> [u8; 4] {
+            v.to_le_bytes()
+        }
+        let mut out = Vec::new();
+        let mut central = Vec::new();
+        let mut offsets = Vec::new();
+        for (name, data) in entries {
+            offsets.push(out.len() as u32);
+            let crc = crc32fast::hash(data);
+            out.extend_from_slice(b"PK\x03\x04");
+            out.extend_from_slice(&le16(20)); // version needed
+            out.extend_from_slice(&le16(0)); // flags
+            out.extend_from_slice(&le16(0)); // method: stored
+            out.extend_from_slice(&le16(0)); // time
+            out.extend_from_slice(&le16(0)); // date
+            out.extend_from_slice(&le32(crc));
+            out.extend_from_slice(&le32(data.len() as u32));
+            out.extend_from_slice(&le32(data.len() as u32));
+            out.extend_from_slice(&le16(name.len() as u16));
+            out.extend_from_slice(&le16(0)); // extra len
+            out.extend_from_slice(name.as_bytes());
+            out.extend_from_slice(data);
+        }
+        let cd_offset = out.len() as u32;
+        for ((name, data), off) in entries.iter().zip(&offsets) {
+            let crc = crc32fast::hash(data);
+            central.extend_from_slice(b"PK\x01\x02");
+            central.extend_from_slice(&le16(20)); // version made by
+            central.extend_from_slice(&le16(20)); // version needed
+            central.extend_from_slice(&le16(0)); // flags
+            central.extend_from_slice(&le16(0)); // method
+            central.extend_from_slice(&le16(0)); // time
+            central.extend_from_slice(&le16(0)); // date
+            central.extend_from_slice(&le32(crc));
+            central.extend_from_slice(&le32(data.len() as u32));
+            central.extend_from_slice(&le32(data.len() as u32));
+            central.extend_from_slice(&le16(name.len() as u16));
+            central.extend_from_slice(&le16(0)); // extra
+            central.extend_from_slice(&le16(0)); // comment
+            central.extend_from_slice(&le16(0)); // disk start
+            central.extend_from_slice(&le16(0)); // internal attrs
+            central.extend_from_slice(&le32(0)); // external attrs
+            central.extend_from_slice(&le32(*off));
+            central.extend_from_slice(name.as_bytes());
+        }
+        out.extend_from_slice(&central);
+        let cd_size = central.len() as u32;
+        out.extend_from_slice(b"PK\x05\x06");
+        out.extend_from_slice(&le16(0)); // disk
+        out.extend_from_slice(&le16(0)); // cd disk
+        out.extend_from_slice(&le16(entries.len() as u16));
+        out.extend_from_slice(&le16(entries.len() as u16));
+        out.extend_from_slice(&le32(cd_size));
+        out.extend_from_slice(&le32(cd_offset));
+        out.extend_from_slice(&le16(0)); // comment len
+        out
+    }
+
+    #[test]
+    fn local_zip_extract_named_roundtrip() {
+        let apk = build_zip(&[
+            ("lib/arm64-v8a/libbusybox.so", b"busybox-bytes"),
+            ("assets/boot_patch.sh", b"#!/script"),
+            ("unrelated.txt", b"skip me"),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Magisk-v30.7.apk");
+        std::fs::write(&path, apk).unwrap();
+        let mut z = LocalZip::open(&path).unwrap();
+        let got = zip_extract_named(
+            &mut z,
+            &["lib/arm64-v8a/libbusybox.so", "assets/boot_patch.sh"],
+        )
+        .unwrap();
+        assert_eq!(got[0].1, b"busybox-bytes");
+        assert_eq!(got[1].1, b"#!/script");
+        // 누락 항목은 오류
+        let mut z2 = LocalZip::open(&path).unwrap();
+        assert!(zip_extract_named(&mut z2, &["lib/arm64-v8a/libmagisk.so"]).is_err());
+    }
 
     #[test]
     fn range_responses_require_exact_status_header_and_body() {
