@@ -1,6 +1,9 @@
 import type { EfsConfiguration, EfsError, EfsLogEvent, EfsPreflight, EfsProgress, EfsResult, EfsSnapshotResult, EfsToolCheck, EfsUploadResult, EfsVerifyReport } from "$lib/types";
 import { EFS_PRESETS } from "$lib/data/efsPresets";
 import { inDesktop as inTauri, transport } from "./transport";
+import { REAL_STEPS } from "$lib/data/runMode";
+
+const disabled = { ok: false as const, error: "EFS 실전 실행이 비활성화되어 있습니다" };
 
 let browserConfiguration: EfsConfiguration | null = null;
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<EfsResult<T>> {
@@ -49,6 +52,7 @@ export interface EfsApi {
   efsSnapshot(dest: string, presetDir: string): Promise<EfsResult<EfsSnapshotResult>>;
   efsRollback(snapshot: string): Promise<EfsResult<EfsUploadResult>>;
   efsCancel(): Promise<EfsResult<null>>;
+  voltePropsSet(serial: string | undefined): Promise<EfsResult<string[]>>;
   onEfsLog(cb: (event: EfsLogEvent) => void): Promise<() => void>;
   onEfsProgress(cb: (event: EfsProgress) => void): Promise<() => void>;
 }
@@ -69,31 +73,43 @@ export const efsApi: EfsApi = {
   async efsConfiguration() { return inTauri() ? invoke("efs_config_get") : { ok: true, value: browserConfiguration }; },
   async efsToolCheck() { return inTauri() ? invoke("efs_tool_check") : { ok: true, value: { version: "native-rust-v1 (mock)", path: "built-in", native: true, deviceExecution: false } }; },
   async efsDiagOpen(serial) {
+    if (!REAL_STEPS.efs) return disabled;
     if (!inTauri()) return { ok: true, value: null };
     if (!serial) return { ok: false, error: "DIAG 전환에는 선택한 기기의 ADB 일련번호가 필요합니다" };
     return invoke("efs_diag_open", { serial });
   },
   async efsPreflight() {
+    if (!REAL_STEPS.efs) return disabled;
     if (!inTauri()) return { ok: true, value: { log: ["시뮬레이션 EFS 점검"], errors: [], warnings: [mockWarning.message], parameters: [] } };
     const cfg = await configuration(); return cfg.ok ? invoke("efs_preflight", { port: cfg.value.port }) : cfg;
   },
   async efsUpload(presetDir) {
+    if (!REAL_STEPS.efs) return disabled;
     if (!inTauri()) return { ok: true, value: mockUpload(presetDir) };
     const args = await argsFor(presetDir); return args.ok ? invoke("efs_upload", args.value) : args;
   },
   async efsVerify(presetDir) {
+    if (!REAL_STEPS.efs) return disabled;
     if (!inTauri()) { const mock = mockUpload(presetDir); return { ok: true, value: { ok: true, files: mock.filesSeen, matched: mock.filesSeen, planned: mock.planned, skipped: mock.skipped, missing: [], mismatches: [], warnings: mock.warnings } }; }
     const args = await argsFor(presetDir); return args.ok ? invoke("efs_verify", args.value) : args;
   },
   async efsSnapshot(dest, presetDir) {
+    if (!REAL_STEPS.efs) return disabled;
     if (!inTauri()) return { ok: true, value: { path: dest, filesSeen: mockUpload(presetDir).filesSeen, warnings: [mockWarning] } };
     const args = await argsFor(presetDir); return args.ok ? invoke("efs_snapshot", { ...args.value, dest }) : args;
   },
   async efsRollback(snapshot) {
+    if (!REAL_STEPS.efs) return disabled;
     if (!inTauri()) return { ok: true, value: mockUpload("") };
     const cfg = await configuration(); return cfg.ok ? invoke("efs_rollback", { port: cfg.value.port, snapshot }) : cfg;
   },
   async efsCancel() { return inTauri() ? invoke("efs_cancel") : { ok: true, value: null }; },
+  async voltePropsSet(serial) {
+    if (!REAL_STEPS.efs) return disabled;
+    if (!serial) return { ok: false, error: "VoLTE 설정에는 선택한 기기의 ADB 일련번호가 필요합니다" };
+    if (!inTauri()) return { ok: true, value: [mockWarning.message] };
+    return invoke("volte_props_set", { serial });
+  },
   onEfsLog: cb => listen("efs:log", cb),
   onEfsProgress: cb => listen("efs:progress", cb),
 };

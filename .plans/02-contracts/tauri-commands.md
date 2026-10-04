@@ -216,6 +216,7 @@ invoke('efs_upload', { port, presetDir }) → EfsUploadResult  // 슬롯당 1회
 invoke('efs_verify', { port, presetDir }) → EfsVerifyReport // 모든 비어 있지 않은 EFS/NV 대상 리드백
 invoke('efs_rollback', { port, snapshot }) → EfsUploadResult // snapshot = 스냅샷 폴더, 전수 사전 검사 후 복원·리드백
 invoke('efs_cancel') → void                               // 소유 작업의 토큰만 취소, 기본 차단 빌드에서도 사용 가능
+invoke('volte_props_set', { serial }) → string[]            // 명시한 ADB 기기에 persist.dbg 4종 설정 후 재부팅; EFS 게이트·작업 소유권·취소 공유
 // EfsToolCheck = { version, path:"built-in", native:true, deviceExecution }
 // EfsUploadResult = { errors:[], filesSeen, planned, skipped, warnings }
 // EfsVerifyReport = { ok, files, matched, planned, skipped, missing, mismatches, warnings }

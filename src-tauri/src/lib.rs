@@ -55,6 +55,7 @@ pub fn run() {
             efs::efs_snapshot,
             efs::efs_rollback,
             efs::efs_cancel,
+            efs::volte::volte_props_set,
             host::disk_free,
             firmware::firmware_fetch,
             firmware::firmware_versions,

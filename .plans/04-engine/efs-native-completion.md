@@ -1,8 +1,8 @@
 # Native EFS/NV completion — 2026-10-04
 
-Ready for coordinator review on `korjwl1/efs-native-rust`.
+Preserved and integrated on `feat/efs-native` in `../xperia-volte-activator-efs-native`.
 Implementation commit: `baef37ef7a9af40b6f11a1f9ce13e7107f9d8efe`.
-This report is committed separately. Worktree/session registration is left intact for coordinator preservation and cleanup; no merge or push was performed.
+The original report was committed separately as `ed7c316`. The temporary Orca terminal, managed worktree, added project registration and duplicate `korjwl1/efs-native-rust` branch have now been removed after preservation. No push was performed.
 
 Implemented the Rust COM/HDLC/DIAG session, EFS and independent numeric NV operations, bounded manifests and snapshot loading, contextual structured errors, cancellation/descriptor cleanup, scoped snapshot/verified rollback, offline preset-set conflict validation, and the configured facade/wizard path with per-slot two-pass upload and readback. Design, compatibility evidence, reproduction inputs and caller migration: [efs-native.md](efs-native.md). Contracts and affected view/mock documents are updated in the implementation commit.
 
@@ -53,4 +53,18 @@ The fake tests exercise fragmented/coalesced frames, CRC corruption, partial wri
 - Snapshots cover planned active targets, not the whole modem filesystem. Restore verifies content and EFS mode/type; captured timestamps are not reapplied, and newly created parent directories remain. No automatic rollback occurs. Sequential slot snapshots must be restored in reverse capture order to unwind shared targets.
 - COM configuration has a concrete facade/app-local JSON path, with no selection screen or guessed port. Direct callers must validate their full selected preset set before device operations. Physical phone association remains the caller's responsibility.
 
-Implementation and offline checks are complete. Awaiting coordinator review/preservation with this worktree intact.
+## Reviewed application integration — 2026-10-05
+
+The native branch includes committed `fix/full-review` (`9323498`) through merge `9a419e9` and consolidates `feat/efs-wrapper` (`ccd4806`) with both histories retained. Claude's uncommitted work in the main checkout was neither copied nor changed. Driver and verification worktrees remain separate.
+
+The old `src-tauri/src/efstools` subprocess implementation and `scripts/build-efstools.ps1` are removed. Existing VoLTE property/reboot and IMS communication/final verification stages remain connected to the reviewed wizard engine. `volte_props_set` now uses explicit selected-device ADB with the native EFS execution gate, exclusive operation owner and cancellation token. The EFS facade uses the existing transport boundary, preserving structured native errors. Generation checks release late event listeners and prevent a cancelled/reset run from starting DIAG. Both the frontend and Rust execution gates remain off by default.
+
+Final integrated validation:
+
+- Full default Rust library suite: **186 passed, 7 ignored, 0 failed** (193 tests).
+- All-feature EFS suite: **15 passed, 1 ignored, 0 failed**; the separately selected read-only stock manifest test also passed.
+- Rust builds with all features and then default gates: both passed; executables were not launched.
+- Frontend suite: **53 passed, 0 failed**, including six native integration tests covering facade gates, structured failures/COM arguments, reset races, whole-selection conflict validation, per-slot snapshots/two uploads/single dispatch, and retained VoLTE/IMS stages.
+- Svelte check: **0 errors, 0 warnings**. Frontend production build passed.
+
+The original DLL parity and device limitations above still apply. This completes local implementation and branch consolidation; it does not establish real-phone compatibility or deploy the changes into Claude's active checkout.

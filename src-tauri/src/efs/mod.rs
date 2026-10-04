@@ -11,6 +11,7 @@ mod session;
 mod tests;
 mod transport;
 mod wire;
+pub mod volte;
 
 use error::{Error, Result};
 use serde::Serialize;

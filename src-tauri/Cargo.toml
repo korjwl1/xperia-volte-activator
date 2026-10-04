@@ -40,10 +40,6 @@ filetime = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 serialport = { version = "4", default-features = false }
 
-[features]
-default = []
-efs-write = []
-
 [dev-dependencies]
 tempfile = "3"
 
@@ -52,6 +48,7 @@ tempfile = "3"
 default = []
 fastboot-write = []
 root-write = []
+efs-write = []
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

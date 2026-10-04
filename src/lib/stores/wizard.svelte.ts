@@ -229,6 +229,7 @@ export class Wizard {
 
   /** 실행 진행 상태 초기화 — 새 실행·재개·세션 변경·처음으로 공통 (실행 결과물·입력값은 유지) */
   private resetExecution() {
+    void api.efsCancel();
     this.runGen++;
     this.pause();
     this.stopWatch();
@@ -751,6 +752,12 @@ export class Wizard {
         return REAL_STEPS.root
           ? { start: () => this.runRealRoot(cur), resume: () => this.dispatchEngine(() => this.finishRealRoot(cur)), danger: true }
           : null;
+      case "volte-props":
+        return REAL_STEPS.efs ? { start: () => this.runRealVolteProps(cur), danger: true } : null;
+      case "comm-check":
+        return REAL_STEPS.efs ? { start: () => this.runRealCommCheck(cur), danger: false } : null;
+      case "final-verify":
+        return REAL_STEPS.efs ? { start: () => this.runRealFinalVerify(cur), danger: false } : null;
       case "efs-preflight":
       case "efs":
       case "verify":
@@ -1526,6 +1533,64 @@ export class Wizard {
     }
   }
 
+  // ── 실전 VoLTE 설정·통신/최종 확인 (REAL_STEPS.efs) ──
+
+  /** VoLTE 활성화 설정 — persist.dbg 4종 setprop 후 재부팅, adb 복귀 대기 */
+  private async runRealVolteProps(cur: RunStep) {
+    const gen = this.runGen;
+    cur.progress = 0.3;
+    this.log(cur, "[설정] VoLTE·영상통화·Wi-Fi 통화 프롭 적용 — 루트 권한 필요");
+    const r = await api.voltePropsSet(this.device?.serial);
+    if (gen !== this.runGen) return;
+    if (!r.ok) return this.failStep(`VoLTE 설정 실패: ${r.error}`);
+    for (const p of r.value) this.log(cur, `[설정] ${p}`);
+    this.log(cur, "[재부팅] 설정 적용 후 재부팅 — 폰이 다시 부팅될 때까지 기다립니다");
+    void this.persist(true);
+    // adb 복귀 대기
+    const back = await this.waitFor(gen, () => this.usbDebugReady(), 240_000);
+    if (gen !== this.runGen) return;
+    if (!back) {
+      return this.failStep("재부팅 후 기기 연결이 확인되지 않습니다 — 설정은 적용됐으므로 폰을 확인한 뒤 이 단계를 다시 시도해 주세요");
+    }
+    cur.progress = 1;
+    this.log(cur, "[완료] VoLTE 설정 적용 — 다음 단계(최종 확인)에서 IMS 등록을 확인합니다");
+    this.stepDone(cur);
+  }
+
+  /** 통신 확인 — ims-precheck 수동 개입 + imsReady 자동 판정 */
+  private async runRealCommCheck(cur: RunStep) {
+    const gen = this.runGen;
+    cur.progress = 0.5;
+    // imsReady 호출 — IMS 등록 + 슬롯별 상태 표시
+    const ready = await this.imsReady();
+    if (gen !== this.runGen) return;
+    if (ready) {
+      cur.progress = 1;
+      this.log(cur, "[확인] VoLTE(IMS) 등록 확인됨");
+      this.stepDone(cur);
+      return;
+    }
+    // 미등록 — 수동 개열(ims-precheck)이 아직 처리 안 됐으면 수동으로 넘김
+    // (ims-precheck는 PlanStep.manual에 있으므로 openManual이 처리)
+    // 여기까지 왔다는 건 수동도 끝났는데도 미등록 → 실패
+    this.failStep("통신이 확인되지 않습니다 — [다시 패치]로 VoLTE 적용부터 다시 진행할 수 있습니다");
+  }
+
+  /** 최종 확인 — imsReady 자동 판정 (ims-check 수동 개입이 먼저 처리됨) */
+  private async runRealFinalVerify(cur: RunStep) {
+    const gen = this.runGen;
+    cur.progress = 0.5;
+    const ready = await this.imsReady();
+    if (gen !== this.runGen) return;
+    if (ready) {
+      cur.progress = 1;
+      this.log(cur, "[완료] VoLTE 등록 확인 — 작업 완료");
+      this.stepDone(cur);
+    } else {
+      this.failStep("최종 VoLTE 확인이 실패했습니다 — 신호가 잡힐 때까지 기다리거나 [이 단계 다시 시도]해 주세요");
+    }
+  }
+
   /** Native EFS: explicit COM, before-image, two passes per slot and target readback. */
   private async runRealNativeEfs(cur: RunStep) {
     const gen = this.runGen;
@@ -1541,11 +1606,12 @@ export class Wizard {
       const validation = await api.efsValidatePresets(selected as string[]);
       if (gen !== this.runGen) return;
       if (!validation.ok) return this.failStep(validation.error);
-      unlog = await api.onEfsLog(ev => { if (gen === this.runGen) cur.logs.push(`[EFS/${ev.cmd}] ${ev.line}`); });
-      unprogress = await api.onEfsProgress(ev => { if (gen === this.runGen) cur.logs.push(`[진행] ${ev.file} ${ev.n}/${ev.total}`); });
+      unlog = await api.onEfsLog(ev => { if (gen === this.runGen) this.log(cur, `[EFS/${ev.cmd}] ${ev.line}`); });
+      if (gen !== this.runGen) return;
+      unprogress = await api.onEfsProgress(ev => { if (gen === this.runGen) this.log(cur, `[진행] ${ev.file} ${ev.n}/${ev.total}`); });
       if (gen !== this.runGen) return;
       const showWarnings = (warnings: { code: string; target: string; message: string }[]) => {
-        for (const w of warnings) cur.logs.push(`[경고/${w.code}] ${w.target}: ${w.message}`);
+        for (const w of warnings) this.log(cur, `[경고/${w.code}] ${w.target}: ${w.message}`);
       };
       if (cur.id === "efs-preflight") {
         const diag = await api.efsDiagOpen(this.device?.serial);
@@ -1554,8 +1620,8 @@ export class Wizard {
         const r = await api.efsPreflight();
         if (gen !== this.runGen) return;
         if (!r.ok) return this.failStep(r.error);
-        cur.logs.push(...r.value.log);
-        for (const w of r.value.warnings) cur.logs.push(`[경고/setup] ${w}`);
+        for (const line of r.value.log) this.log(cur, line);
+        for (const w of r.value.warnings) this.log(cur, `[경고/setup] ${w}`);
         if (r.value.errors.length) return this.failStep(r.value.errors.join(" / "));
       } else {
         const targets = this.volteConfig.sims.filter(s => s.carrier !== null);
@@ -1568,16 +1634,16 @@ export class Wizard {
             const snap = await api.efsSnapshot(dest, preset.folder);
             if (gen !== this.runGen) return;
             if (!snap.ok) return this.failStep(snap.error);
-            cur.logs.push(`[before-image] SIM${target.slot}: ${snap.value.path}`);
+            this.log(cur, `[before-image] SIM${target.slot}: ${snap.value.path}`);
             showWarnings(snap.value.warnings);
             for (let round = 1; round <= 2; round++) {
-              cur.logs.push(`[EFS] SIM${target.slot} ${round}차 업로드`);
+              this.log(cur, `[EFS] SIM${target.slot} ${round}차 업로드`);
               const r = await api.efsUpload(preset.folder);
               if (gen !== this.runGen) return;
               if (!r.ok) return this.failStep(r.error);
               showWarnings(r.value.warnings);
               if (r.value.errors.length) return this.failStep(r.value.errors.join(" / "));
-              cur.logs.push(`[EFS] 쓴 항목 ${r.value.filesSeen}/${r.value.planned}, 건너뜀 ${r.value.skipped}`);
+              this.log(cur, `[EFS] 쓴 항목 ${r.value.filesSeen}/${r.value.planned}, 건너뜀 ${r.value.skipped}`);
             }
           } else {
             const r = await api.efsVerify(preset.folder);
@@ -1585,7 +1651,7 @@ export class Wizard {
             if (!r.ok) return this.failStep(r.error);
             showWarnings(r.value.warnings);
             if (!r.value.ok) return this.failStep(`SIM${target.slot} 리드백 실패: ${[...r.value.missing, ...r.value.mismatches].join(" / ")}`);
-            cur.logs.push(`[검증] SIM${target.slot} ${r.value.matched}/${r.value.files} 일치, 제외 ${r.value.skipped}`);
+            this.log(cur, `[검증] SIM${target.slot} ${r.value.matched}/${r.value.files} 일치, 제외 ${r.value.skipped}`);
           }
           cur.progress = (index + 1) / targets.length;
           void this.persist(true);
