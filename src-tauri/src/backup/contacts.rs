@@ -58,9 +58,10 @@ const ENTITY_KEYS: &[&str] = &[
 /// content query 출력 → 행별 (키 → 값). 값 안의 개행(메모 등)은 다음 "Row: " 전까지 이어 붙인다.
 /// 값 경계는 투영 순서대로 ", <다음 키>=" 위치로 찾는다(값에 쉼표가 있어도 깨지지 않게)
 fn parse_rows(text: &str, keys: &[&str]) -> Vec<std::collections::HashMap<String, String>> {
+    // 새 행은 "Row: <다음 번호> "로만 시작한다 — 메모 안에 "Row: "로 시작하는 줄이 있어도 행이 갈라지지 않게
     let mut joined: Vec<String> = Vec::new();
     for line in text.lines() {
-        if line.starts_with("Row: ") {
+        if line.starts_with(&format!("Row: {} ", joined.len())) {
             joined.push(line.to_string());
         } else if let Some(last) = joined.last_mut() {
             last.push('\n');
@@ -115,12 +116,22 @@ fn build_vcard(rows: &[&std::collections::HashMap<String, String>]) -> String {
     };
     let mut out = String::from("BEGIN:VCARD\r\nVERSION:3.0\r\n");
     let mut fn_name: Option<String> = None;
+    let mut has_name = false;
     let mut body = String::new();
+    // 여러 계정이 합쳐진 연락처는 같은 번호·이메일이 계정마다 반복된다 — 한 번만 넣는다
+    let mut seen = std::collections::HashSet::new();
+    let mut push = |body: &mut String, key: String, line: String| {
+        if seen.insert(key) {
+            body.push_str(&line);
+        }
+    };
     for r in rows {
         let mime = r.get("mimetype").map(String::as_str).unwrap_or("");
         match mime {
-            "vnd.android.cursor.item/name" => {
-                fn_name = g(r, "data1").or(fn_name);
+            // vCard 3.0은 N이 하나여야 한다 — 합쳐진 연락처의 첫 이름 행만 쓴다
+            "vnd.android.cursor.item/name" if !has_name => {
+                has_name = true;
+                fn_name = g(r, "data1");
                 let n = [g(r, "data3"), g(r, "data2"), g(r, "data5"), g(r, "data4"), g(r, "data6")]
                     .iter()
                     .map(|v| v.as_deref().map(esc).unwrap_or_default())
@@ -140,7 +151,16 @@ fn build_vcard(rows: &[&std::collections::HashMap<String, String>]) -> String {
                         Some("7") => "OTHER",
                         _ => "VOICE",
                     };
-                    body.push_str(&format!("TEL;TYPE={t}:{}\r\n", esc(&num)));
+                    // 표기만 다른 같은 번호(공백·하이픈)는 하나로
+                    let key: String = num
+                        .chars()
+                        .filter(|c| c.is_ascii_digit() || *c == '+')
+                        .collect();
+                    push(
+                        &mut body,
+                        format!("TEL:{key}"),
+                        format!("TEL;TYPE={t}:{}\r\n", esc(&num)),
+                    );
                 }
             }
             "vnd.android.cursor.item/email_v2" => {
@@ -150,7 +170,11 @@ fn build_vcard(rows: &[&std::collections::HashMap<String, String>]) -> String {
                         Some("2") => "INTERNET,WORK",
                         _ => "INTERNET",
                     };
-                    body.push_str(&format!("EMAIL;TYPE={t}:{}\r\n", esc(&v)));
+                    push(
+                        &mut body,
+                        format!("EMAIL:{}", v.to_lowercase()),
+                        format!("EMAIL;TYPE={t}:{}\r\n", esc(&v)),
+                    );
                 }
             }
             "vnd.android.cursor.item/organization" => {
@@ -203,7 +227,7 @@ fn build_vcard(rows: &[&std::collections::HashMap<String, String>]) -> String {
         .and_then(|r| g(r, "data1"))
         .unwrap_or_else(|| "(이름 없음)".into());
     out.push_str(&format!("FN:{}\r\n", esc(&fn_name.unwrap_or(fallback))));
-    if !body.contains("\nN:") && !body.starts_with("N:") {
+    if !has_name {
         out.push_str("N:;;;;\r\n");
     }
     out.push_str(&body);
@@ -329,6 +353,33 @@ Row: 3 contact_id=63, deleted=0, mimetype=vnd.android.cursor.item/phone_v2, data
             ENTITIES,
         );
         d
+    }
+
+    #[test]
+    fn merged_contacts_get_one_name_and_no_duplicate_numbers() {
+        let text = "Row: 0 contact_id=7, deleted=0, mimetype=vnd.android.cursor.item/name, data1=홍길동, data2=길동, data3=홍, data4=NULL, data5=NULL, data6=NULL
+\nRow: 1 contact_id=7, deleted=0, mimetype=vnd.android.cursor.item/name, data1=Gildong Hong, data2=Gildong, data3=Hong, data4=NULL, data5=NULL, data6=NULL
+\nRow: 2 contact_id=7, deleted=0, mimetype=vnd.android.cursor.item/phone_v2, data1=010-1234-5678, data2=2, data3=NULL, data4=NULL, data5=NULL, data6=NULL
+\nRow: 3 contact_id=7, deleted=0, mimetype=vnd.android.cursor.item/phone_v2, data1=010 1234 5678, data2=2, data3=NULL, data4=NULL, data5=NULL, data6=NULL
+\nRow: 4 contact_id=7, deleted=0, mimetype=vnd.android.cursor.item/note, data1=메모
+Row: 9 처럼 보이는 줄, data2=NULL, data3=NULL, data4=NULL, data5=NULL, data6=NULL
+";
+        let rows = parse_rows(text, ENTITY_KEYS);
+        // 메모 안의 "Row: 9 …" 줄은 새 행이 아니다
+        assert_eq!(rows.len(), 5);
+        assert!(rows[4]["data1"].contains("Row: 9 처럼 보이는 줄"));
+        let card = build_vcard(&rows.iter().collect::<Vec<_>>());
+        assert_eq!(
+            card.matches(
+                "
+N:"
+            )
+            .count(),
+            1,
+            "{card}"
+        );
+        assert!(card.contains("FN:홍길동"));
+        assert_eq!(card.matches("TEL;").count(), 1, "{card}");
     }
 
     #[test]
