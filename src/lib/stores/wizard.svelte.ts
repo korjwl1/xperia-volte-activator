@@ -198,6 +198,7 @@ export class Wizard {
       this.setGuard(false);
       this.runGen++;
       this.backupDir = "";
+      this.patchedImage = "";
       this.backupSummary = null;
       this.runSteps = [];
       this.steps = [];
@@ -305,6 +306,8 @@ export class Wizard {
   backupSummary: BackupSummary | null = $state(null);
   /** 실전 백업이 만든 폴더(manifest 위치) — 재시도 이어받기·복구·journal에 저장 */
   backupDir = $state("");
+  /** 실전 루팅이 만든 패치 이미지 경로 — 언루팅(순정 재기록)·journal에 저장 */
+  patchedImage = $state("");
   // 실행 중 입력값 — 언락 코드는 UI/로그에 마스킹해서만 표시
   unlockCode = $state("");
   firmwareDir = $state(""); // 수동 지정(폴백)
@@ -327,6 +330,7 @@ export class Wizard {
   private restoreRanGen = -1;
   private unlockRanGen = -1;
   private relockRanGen = -1;
+  private rootRanGen = -1;
   private timer: ReturnType<typeof setInterval> | undefined;
   private cursor = 0;
 
@@ -400,6 +404,7 @@ export class Wizard {
     if (key) void this.journalWrites.push(() => api.journalArchive(key, "discarded"));
     this.pendingJournal = null;
     this.backupDir = "";
+    this.patchedImage = "";
     this.backupSummary = null;
     this.view = "step1";
   }
@@ -418,6 +423,7 @@ export class Wizard {
     this.opts = { ...j.opts };
     this.backupPath = j.backupPath;
     this.backupDir = j.backupDir ?? "";
+    this.patchedImage = j.patchedImage ?? "";
     this.backupSummary = null; // 이어서 진행 시 백업 결과는 단계 재검증으로 다시 채운다
     this.firmware = j.firmware;
     this.firmwareState = j.firmware ? "done" : "idle";
@@ -498,6 +504,7 @@ export class Wizard {
       opts: { ...this.opts },
       backupPath: this.backupPath,
       backupDir: this.backupDir || undefined,
+      patchedImage: this.patchedImage || undefined,
       backupItems: this.groups.flatMap((g) => g.items.filter((i) => i.checked).map((i) => i.id)),
       steps: $state.snapshot(this.steps),
       runSteps: this.runSteps.map((st) => ({ ...$state.snapshot(st), logs: st.logs.slice(-300) })),
@@ -703,6 +710,21 @@ export class Wizard {
       }
       return;
     }
+    // 실전 루팅 — Magisk 엔진 (REAL_STEPS.root 전환 시). 2단계: 패치·기록·설치 → su 승인 검증
+    if (cur.id === "root" && REAL_STEPS.root) {
+      if (cur.status === "running") {
+        if (this.rootRanGen !== this.runGen) {
+          this.rootRanGen = this.runGen;
+          this.pause();
+          void this.runRealRoot(cur);
+        } else {
+          // su-grant 수동 완료 후 재진입 — 최종 확인
+          this.pause();
+          void this.finishRealRoot(cur);
+        }
+      }
+      return;
+    }
     cur.progress = Math.min(1, cur.progress + 0.04 + Math.random() * 0.05);
     if (Math.random() < 0.35) cur.logs.push(this.mockLog(cur.id, cur.progress));
     if (cur.sub) {
@@ -879,6 +901,14 @@ export class Wizard {
     if (id === "mode-wait") this.watchManual(cur, id, "부트로더(fastboot) 모드 진입 확인", () => this.usbModeIs("fastboot"), 1500);
     if (id === "flash-mode") this.watchManual(cur, id, "플래시 모드 진입 확인", () => this.usbModeIs("flashmode"), 1500);
     if (id === "ims-check") this.watchManual(cur, id, "VoLTE(IMS) 등록 확인", () => this.imsReady(), 5000);
+    if (id === "su-grant")
+      this.watchManual(
+        cur,
+        id,
+        "루트 권한(uid=0) 확인",
+        async () => (await api.rootCheck(this.device?.serial)) === true,
+        3000,
+      );
     if (id === "smsie-export")
       this.watchManual(
         cur,
@@ -1496,6 +1526,109 @@ export class Wizard {
     this.failStep("리락 차단: 검증된 순정 이미지와 부트 체인·슬롯별 플래시 이력 게이트가 아직 구현되지 않았습니다 (§3-3)");
   }
 
+  /** 실전 루팅 — 검증된 절차(계약 root 절): 패치 → 부트로더 → 기록 → 복귀 → 앱 설치 → su 승인(수동) */
+  private async runRealRoot(cur: RunStep) {
+    const gen = this.runGen;
+    const partition = this.partition;
+    if (!partition) {
+      this.failStep("이 기종의 부트 파티션이 확인되지 않아 루팅할 수 없습니다");
+      return;
+    }
+    // 순정 이미지 — 사전 준비(firmware_fetch) 결과 또는 직접 지정 폴더
+    const imagePath = this.firmware?.path
+      ?? (this.firmwareDir && this.firmwareDirInfo ? `${this.firmwareDir}/${this.firmwareDirInfo.file}` : null);
+    if (!imagePath) {
+      this.failStep("순정 부트 이미지가 준비되지 않았습니다 — 사전 준비 단계에서 펌웨어를 먼저 받아 주세요");
+      return;
+    }
+    // 1) Magisk APK 확보(캐시 재사용)
+    cur.progress = 0.05;
+    const prep = await api.magiskPrepare();
+    if (gen !== this.runGen) return;
+    if (!prep.ok) return this.failStep(`Magisk 다운로드 실패: ${prep.error}`);
+    cur.logs.push(`[루팅] Magisk ${prep.value.version} 준비 (sha256 ${prep.value.sha256.slice(0, 12)}…)`);
+    void this.persist(true);
+    // 2) 부트 패치(스테이징·스크립트·검증·수신)
+    cur.progress = 0.15;
+    const un = await api.onMagiskLog((line) => {
+      if (gen !== this.runGen) return;
+      cur.logs.push(`[magisk] ${line}`);
+      void this.persist();
+    });
+    const patch = await api.magiskPatch(this.device?.serial, prep.value.apkPath, imagePath);
+    un();
+    if (gen !== this.runGen) return;
+    if (!patch.ok) return this.failStep(`부트 패치 실패: ${patch.error}`);
+    this.patchedImage = patch.value.path;
+    cur.logs.push(`[루팅] 패치 완료 — ${(patch.value.bytes / 1024 ** 2).toFixed(1)} MiB · 원본과 해시 상이 확인`);
+    void this.persist(true);
+    // 3) 부트로더 진입 → fastboot 감지 대기
+    cur.progress = 0.5;
+    cur.logs.push("[루팅] 부트로더 모드로 재부팅합니다");
+    const rb = await api.rootReboot(this.device?.serial, "bootloader");
+    if (gen !== this.runGen) return;
+    if (!rb.ok) return this.failStep(`부트로더 재부팅 실패: ${rb.error}`);
+    const inFastboot = await this.waitFor(gen, () => this.usbModeIs("fastboot"), 90_000);
+    if (gen !== this.runGen) return;
+    if (!inFastboot) return this.failStep("부트로더 모드 진입이 감지되지 않습니다 — USB 연결을 확인해 주세요");
+    // 4) 패치 이미지 기록(양 슬롯) — fastboot 엔진 재사용
+    cur.progress = 0.7;
+    const flash = await api.fastbootFlash(partition, this.patchedImage, true);
+    if (gen !== this.runGen) return;
+    if (!flash.ok) return this.failStep(`부트 이미지 기록 실패: ${flash.error}`);
+    cur.logs.push(`[루팅] ${partition}_a/_b 기록 완료`);
+    // 5) 재부팅 → adb 복귀 대기
+    await api.fastbootReboot("os");
+    const back = await this.waitFor(gen, () => this.usbDebugReady(), 240_000);
+    if (gen !== this.runGen) return;
+    if (!back) return this.failStep("기기가 다시 연결되지 않습니다 — 재부팅 후 USB 디버깅 승인을 확인해 주세요");
+    // 6) Magisk 앱 설치
+    cur.progress = 0.9;
+    const inst = await api.magiskInstall(this.device?.serial, prep.value.apkPath);
+    if (gen !== this.runGen) return;
+    if (!inst.ok) return this.failStep(`Magisk 앱 설치 실패: ${inst.error}`);
+    // 7) su 승인(수동 개입) — 확인 버튼·자동 감지가 root_check로 검증
+    const stepDef = this.steps.find((s) => s.id === "root");
+    if (stepDef && !stepDef.manual?.includes("su-grant")) stepDef.manual = [...(stepDef.manual ?? []), "su-grant"];
+    cur.manualDone = 0;
+    cur.status = "manual-wait";
+    this.pause();
+    void this.openManual(cur, "su-grant");
+  }
+
+  /** su 승인 후 최종 확인 — root_check로 uid=0 검증 */
+  private async finishRealRoot(cur: RunStep) {
+    const ok = await api.rootCheck(this.device?.serial);
+    if (ok) {
+      cur.logs.push("[완료] 루트 권한 확인(su -c id = uid=0)");
+      cur.progress = 1;
+      this.stepDone(cur);
+    } else {
+      this.failStep("루트 권한이 확인되지 않습니다 — 폰의 Magisk 권한 요청을 '허용'한 뒤 다시 확인해 주세요");
+    }
+  }
+
+  /** 조건 폴링 대기 — 세대 가드·타임아웃 포함 (모드 전환 대기 공용) */
+  private waitFor(gen: number, check: () => Promise<boolean>, timeoutMs: number, everyMs = 2000): Promise<boolean> {
+    return new Promise((resolve) => {
+      const start = Date.now();
+      const t = setInterval(async () => {
+        if (gen !== this.runGen) {
+          clearInterval(t);
+          return resolve(false);
+        }
+        if (await check()) {
+          clearInterval(t);
+          return resolve(true);
+        }
+        if (Date.now() - start > timeoutMs) {
+          clearInterval(t);
+          return resolve(false);
+        }
+      }, everyMs);
+    });
+  }
+
   /** smsie 수동 복원 마무리 — 기본 문자 앱 역할 원복 + 안내 로그 */
   private async finishRealRestore(cur: RunStep) {
     const gen = this.runGen;
@@ -1668,6 +1801,7 @@ export class Wizard {
     this.restoreRanGen = -1;
     this.unlockRanGen = -1;
     this.relockRanGen = -1;
+    this.rootRanGen = -1;
     this.journalSims = undefined;
     this.sessionFor = null;
     this.pendingJournal = null;

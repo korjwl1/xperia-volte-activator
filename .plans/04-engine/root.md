@@ -1,6 +1,6 @@
 # 루팅 엔진 (M4) — Magisk 자동 패치·기록·설치 구현 설계
 
-status: draft (사용자 승인 2026-10-04 — 실전 코드 작성, 실기기 테스트 금지, 이중 게이트)
+status: implemented (실기기 검증 대기 — 단위 테스트 121통과, REAL_STEPS.root + root-write 이중 게이트)
 
 - 상위 정책: `tasks/plan.md` §12(Magisk 산출물 근거 강화)·M4 마일스톤, §3-3(의존성)
 - 절차 근거: `.plans/02-contracts/tauri-commands.md` root 절 — **2026-10-03 XQ-DQ44·Android 15·Magisk v30.7 실기기 검증 절차**(사용자 조작 없음)
@@ -92,9 +92,9 @@ invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb r
 
 ## 구현 순서 (커밋 단위)
 
-1. `docs(plans)`: 이 문서 + AGENTS 예외 + 02-contracts root 절 정정
-2. `refactor(firmware)`: RangeRead 트레이트 제네릭화 + LocalZip + zip_extract_named(테스트 포함)
-3. `feat(magisk)`: 페이로드 추출·patch.rs 핵심(FakeADBDevice 테스트)·GitHub 다운로드
-4. `feat(magisk)`: Tauri 명령 4종(root-write feature 게이트) + facade + REAL_STEPS.root
-5. `feat(front)`: wizard 루팅 단계 실전 연결(모드 전환 2회·su-grant 마무리)
-6. `docs(plans)`: 상태 배지 갱신
+1. ✅ `docs(plans)`: 이 문서 + AGENTS 예외 + 02-contracts root 절 정정
+2. ✅ `refactor(firmware)`: RangeRead 트레이트 제네릭화 + LocalZip + zip_extract_named(테스트 포함)
+3. ✅ `feat(magisk)`: 페이로드 추출·patch.rs 핵심(FakeADBDevice 테스트)·GitHub 다운로드
+4. ✅ `feat(magisk)`: Tauri 명령 4종(root-write feature 게이트) + facade + REAL_STEPS.root
+5. ✅ `feat(front)`: wizard 루팅 단계 실전 연결(모드 전환 2회·su-grant 마무리·waitFor 폴링)
+6. ✅ `docs(plans)`: 상태 배지 갱신

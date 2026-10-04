@@ -3,7 +3,7 @@
 // 단계별 실행 플래그는 data/runMode.ts에서 관리. fastboot 쓰기/재부팅은 facade에서도 차단.
 // 컴포넌트에서 @tauri-apps/api 직접 import 금지.
 
-import type { AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FastbootVars, FirmwareResult, FirmwareVersions, RestoreOutcome, SettingsOverview, SmsIeOutcome, UnlockResult } from "$lib/types";
+import type { AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FastbootVars, FirmwareResult, FirmwareVersions, MagiskPrepared, PatchResult, RestoreOutcome, SettingsOverview, SmsIeOutcome, UnlockResult } from "$lib/types";
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
 import type { ApiResult } from "$lib/types";
 import { REAL_STEPS } from "$lib/data/runMode";
@@ -91,6 +91,18 @@ export interface Api {
   fastbootReboot(target: "os" | "bootloader"): Promise<boolean>;
   /** fastboot 로그 이벤트 구독 (INFO 프레임·명령·민감값 마스킹) */
   onFastbootLog(cb: (line: string) => void): Promise<() => void>;
+  /** fastboot 파티션 기록 — download → flash <partition>_a/_b (fastboot-write 게이트) */
+  fastbootFlash(partition: string, path: string, confirm: boolean): Promise<ApiResult<null>>;
+  /** Magisk 최신 APK 확보(GitHub·캐시) — 기기 무관 준비 단계 */
+  magiskPrepare(): Promise<ApiResult<MagiskPrepared>>;
+  /** 부트 패치 — 스테이징·boot_patch.sh·검증(ANDROID!·크기·해시)·pull·정리 (root-write 게이트) */
+  magiskPatch(serial: string | undefined, apkPath: string, imagePath: string): Promise<ApiResult<PatchResult>>;
+  /** Magisk 앱 설치 (root-write 게이트) */
+  magiskInstall(serial: string | undefined, apkPath: string): Promise<ApiResult<null>>;
+  /** adb 재부팅 — os | bootloader (root-write 게이트) */
+  rootReboot(serial: string | undefined, target: "os" | "bootloader"): Promise<ApiResult<null>>;
+  /** Magisk 패치 로그 이벤트 구독 */
+  onMagiskLog(cb: (line: string) => void): Promise<() => void>;
 }
 
 const hybridApi: Api = {
@@ -279,6 +291,34 @@ const hybridApi: Api = {
 
   async onFastbootLog(cb) {
     return transport.subscribe<string>("fastboot:log", cb);
+  },
+
+  async fastbootFlash(partition, path, confirm) {
+    if (!REAL_STEPS.fastboot) return { ok: false, error: "fastboot 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<null>("fastboot_flash", { partition, path, confirm });
+  },
+
+  async magiskPrepare() {
+    return await invokeResult<MagiskPrepared>("magisk_prepare");
+  },
+
+  async magiskPatch(serial, apkPath, imagePath) {
+    if (!REAL_STEPS.root) return { ok: false, error: "루팅 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<PatchResult>("magisk_patch", { serial: serial ?? null, apkPath, imagePath });
+  },
+
+  async magiskInstall(serial, apkPath) {
+    if (!REAL_STEPS.root) return { ok: false, error: "루팅 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<null>("magisk_install", { serial: serial ?? null, apkPath });
+  },
+
+  async rootReboot(serial, target) {
+    if (!REAL_STEPS.root) return { ok: false, error: "루팅 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<null>("root_reboot", { serial: serial ?? null, target });
+  },
+
+  async onMagiskLog(cb) {
+    return transport.subscribe<string>("magisk:log", cb);
   },
 
   async openExternal(url) {

@@ -250,6 +250,22 @@ export interface UnlockResult {
   unlocked: boolean;
 }
 
+/** Magisk APK 확보 결과 — 백엔드 magisk_prepare */
+export interface MagiskPrepared {
+  version: string;
+  apkPath: string;
+  sha256: string;
+}
+
+/** 부트 패치 결과 — 백엔드 magisk_patch (ANDROID!·크기·해시 검증 통과분) */
+export interface PatchResult {
+  path: string;
+  origSha256: string;
+  patchedSha256: string;
+  bytes: number;
+  log: string[];
+}
+
 export type RunStatus =
   | "pending" | "running" | "done" | "failed" | "skipped" | "manual-wait";
 
@@ -279,6 +295,8 @@ export interface RunJournal {
   backupPath: string;
   /** 실전 백업이 만든 백업 폴더(manifest.json 위치) — 복구·이어받기에 사용 */
   backupDir?: string;
+  /** 실전 루팅이 만든 패치 이미지 경로 — 언루팅(순정 재기록)에 재사용 */
+  patchedImage?: string;
   /** 선택한 백업 항목 id */
   backupItems: string[];
   steps: PlanStep[];

@@ -95,6 +95,8 @@ invoke('open_settings_screen', { serial?, screen: 'developer'|'about' }) → voi
 
 ## root (M4 — 설계 `.plans/04-engine/root.md`, 사용자 승인 2026-10-04)
 
+**구현 상태**: 4 명령 전부 ✅ 구현(src-tauri/src/magisk/ — FakeADBDevice·ZIP 픽스처 단위 테스트, 이 구현의 실기기 테스트 미실시). wizard 루팅 단계 실전 연결(패치→부트로더→기록→복귀→설치→su 승인) 포함.
+
 Magisk 자동 패치 (사용자 조작 없음) — 2026-10-03 XQ-DQ44 / Android 15 / Magisk v30.7로 검증된 절차:
 
 ```ts
