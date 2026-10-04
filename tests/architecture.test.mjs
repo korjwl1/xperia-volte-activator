@@ -4,7 +4,7 @@ import path from "node:path";
 import { after, before, beforeEach, test } from "node:test";
 import { createServer } from "vite";
 
-let server, Wizard, api, flags, originalApi, originalFlags, createTransport, AsyncQueue, decodeJournal, buildPlan, stepHazard;
+let server, Wizard, api, flags, originalApi, originalFlags, createTransport, AsyncQueue, decodeJournal, buildPlan, stepHazard, firmwareUpdateProblems;
 before(async () => {
   server = await createServer({ server: { middlewareMode: true, watch: null, hmr: false, ws: false }, appType: "custom" });
   ({ Wizard } = await server.ssrLoadModule("/src/lib/stores/wizard.svelte.ts"));
@@ -14,6 +14,7 @@ before(async () => {
   ({ AsyncQueue } = await server.ssrLoadModule("/src/lib/domain/asyncQueue.ts"));
   ({ decodeJournal } = await server.ssrLoadModule("/src/lib/domain/journal.ts"));
   ({ buildPlan, stepHazard } = await server.ssrLoadModule("/src/lib/domain/plan.ts"));
+  ({ firmwareUpdateProblems } = await server.ssrLoadModule("/src/lib/domain/verify.ts"));
   originalApi = { ...api };
   originalFlags = { ...flags };
 });
@@ -396,4 +397,158 @@ test("a failed driver re-check keeps the previous notice instead of hiding it", 
   await w.loadEnv();
   assert.equal(w.diagDriverMissing?.detail, "없음");
   assert.equal(w.envLoading, false);
+});
+
+const FP = (v, region = "XQ-DQ44") => `Sony/${region}/${region}:15/${v}/1234:user/release-keys`;
+
+test("firmware update check requires the target version, its fingerprint and the same device", () => {
+  const target = "67.2.A.3.200";
+  const before = FP("67.2.A.3.178");
+  assert.deepEqual(firmwareUpdateProblems(target, { firmware: target, fingerprint: FP(target) }, { before }), []);
+  assert.equal(firmwareUpdateProblems(target, { firmware: "67.2.A.3.178", fingerprint: before }, { before }).length, 2);
+  // 다른 지역 펌웨어
+  assert.equal(firmwareUpdateProblems(target, { firmware: target, fingerprint: FP(target, "XQ-DQ72") }, { before }).length, 1);
+  // 지문을 못 읽으면 통과시키지 않는다
+  assert.equal(firmwareUpdateProblems(target, { firmware: target }, { before }).length, 1);
+  // 받아 둔 대상 펌웨어 지문이 있으면 정확히 같아야 한다
+  assert.deepEqual(firmwareUpdateProblems(target, { firmware: target, fingerprint: FP(target) }, { expected: FP(target) }), []);
+  assert.equal(firmwareUpdateProblems(target, { firmware: target, fingerprint: FP(target) + "x" }, { expected: FP(target) }).length, 1);
+});
+
+/** 실전 확인 단계용 위자드 — openManual은 기록만, 끝나면 cleanup으로 남은 대기를 취소 */
+function verifyWizard(id) {
+  const w = wizard();
+  w.steps = [{ id, kind: "final-verify", title: id, desc: "", risk: "safe", wipe: false, optional: false, enabled: true, estSec: 1,
+    manual: id === "final-verify" ? ["ims-check"] : undefined }];
+  w.runSteps = [{ id, title: id, status: "running", progress: 0, logs: [], manualDone: 0 }];
+  w.cursor = 0;
+  w.opened = [];
+  w.openManual = async (_cur, manualId) => { w.opened.push(manualId); };
+  return w;
+}
+const cancelWaits = w => { w.runGen++; };
+/** 재부팅 요청 뒤 첫 조회 한 번만 끊긴 것으로 보이는 가짜 기기 목록(타이머 없음) */
+function rebootingPhone(w, calls) {
+  let offlineReads = 0;
+  api.rootReboot = async (_s, target) => { calls.push(`reboot:${target}`); offlineReads = 1; return { ok: true, value: null }; };
+  api.deviceList = async () => (offlineReads-- > 0 ? [] : [w.device]);
+}
+
+test("real final check reboots first, then opens the VoLTE registration prompt", async () => {
+  flags.verify = true;
+  const w = verifyWizard("final-verify");
+  try {
+    const calls = [];
+    rebootingPhone(w, calls);
+    await w.runRealFinalVerify(w.runSteps[0]);
+    assert.deepEqual(calls, ["reboot:os"]);
+    assert.deepEqual(w.opened, ["ims-check"]);
+    assert.equal(w.runSteps[0].status, "manual-wait");
+    w.finishRealFinalVerify(w.runSteps[0]);
+    assert.equal(w.runSteps[0].status, "done");
+  } finally {
+    cancelWaits(w);
+    flags.verify = false;
+  }
+});
+
+test("resuming the final check after the reboot checkpoint does not reboot again", async () => {
+  flags.verify = true;
+  const w = verifyWizard("final-verify");
+  try {
+    const calls = [];
+    rebootingPhone(w, calls);
+    w.runSteps[0].sub = { list: ["재부팅", "네트워크 등록", "VoLTE 활성 확인"], done: 1 };
+    await w.runRealFinalVerify(w.runSteps[0]);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(w.opened, ["ims-check"]);
+  } finally {
+    cancelWaits(w);
+    flags.verify = false;
+  }
+});
+
+test("finishing the final check without registration is logged as unverified", () => {
+  const w = verifyWizard("final-verify");
+  w.runSteps[0].sub = { list: ["재부팅", "네트워크 등록", "VoLTE 활성 확인"], done: 1 };
+  w.imsUnverified = true;
+  w.finishRealFinalVerify(w.runSteps[0]);
+  assert.equal(w.runSteps[0].sub.done, 1);
+  assert.ok(w.runSteps[0].logs.some(line => line.startsWith("[미확인]")));
+  assert.equal(w.runSteps[0].status, "done");
+});
+
+test("a failed reboot request fails the final check with the backend reason", async () => {
+  flags.verify = true;
+  const w = verifyWizard("final-verify");
+  try {
+    api.rootReboot = async () => ({ ok: false, error: "disabled" });
+    await w.runRealFinalVerify(w.runSteps[0]);
+    assert.equal(w.runSteps[0].status, "failed");
+    assert.match(w.stepError, /disabled/);
+  } finally {
+    cancelWaits(w);
+    flags.verify = false;
+  }
+});
+
+test("tick runs the real final check engine before the plan's registration prompt", async () => {
+  flags.verify = true;
+  const w = verifyWizard("final-verify");
+  try {
+    w.runSteps[0].status = "pending";
+    const calls = [];
+    rebootingPhone(w, calls);
+    w.tick();
+    for (let i = 0; i < 200 && w.opened.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.deepEqual(calls, ["reboot:os"]);
+    assert.deepEqual(w.opened, ["ims-check"]);
+  } finally {
+    cancelWaits(w);
+    flags.verify = false;
+  }
+});
+
+test("real firmware check fails fast while flashing is simulated, and compares version and fingerprint", async () => {
+  flags.verify = true;
+  const target = "67.2.A.3.200";
+  try {
+    const simulated = verifyWizard("fw-verify");
+    simulated.volteConfig = { ...simulated.volteConfig, firmware: target };
+    await simulated.runRealFwVerify(simulated.runSteps[0]);
+    assert.equal(simulated.runSteps[0].status, "failed");
+    assert.match(simulated.stepError, /펌웨어 기록이 아직/);
+
+    const mismatch = verifyWizard("fw-verify");
+    mismatch.hasRealEngine = () => true;
+    mismatch.volteConfig = { ...mismatch.volteConfig, firmware: target };
+    mismatch.device = { ...mismatch.device, fingerprint: FP("67.2.A.3.178") };
+    api.deviceList = async () => [{ ...mismatch.device, firmware: "67.2.A.3.178", fingerprint: FP("67.2.A.3.178") }];
+    await mismatch.runRealFwVerify(mismatch.runSteps[0]);
+    assert.equal(mismatch.runSteps[0].status, "failed");
+    assert.match(mismatch.stepError, /설치된 버전/);
+
+    const ok = verifyWizard("fw-verify");
+    ok.hasRealEngine = () => true;
+    ok.volteConfig = { ...ok.volteConfig, firmware: target };
+    ok.firmware = { version: target, fingerprint: FP(target) };
+    api.deviceList = async () => [{ ...ok.device, firmware: target, fingerprint: FP(target) }];
+    await ok.runRealFwVerify(ok.runSteps[0]);
+    assert.equal(ok.runSteps[0].status, "done");
+  } finally {
+    flags.verify = false;
+  }
+});
+
+test("the mock skip button is unavailable while real checks are on", () => {
+  const w = verifyWizard("final-verify");
+  w.manualCurrent = { id: "ims-check" };
+  const skippable = w.manualSkippable;
+  flags.verify = true;
+  try {
+    assert.equal(w.manualSkippable, false);
+  } finally {
+    flags.verify = false;
+  }
+  assert.equal(w.manualSkippable, skippable);
 });

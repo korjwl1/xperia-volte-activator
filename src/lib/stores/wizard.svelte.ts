@@ -5,6 +5,7 @@ import { LINKS, maskSecret } from "$lib/data/links";
 import { bootPartition } from "$lib/data/devices";
 import { mockBackupGroups } from "$lib/mock/apps";
 import { bootloaderOnly, buildPlan, stepHazard, updateTarget, type PlanOptions } from "$lib/domain/plan";
+import { firmwareUpdateProblems } from "$lib/domain/verify";
 import { SIMULATED_RUN, REAL_STEPS } from "$lib/data/runMode";
 import { EFS_PRESET_MODE, EFS_PRESET_VERSION, efsPreset } from "$lib/data/efsPresets";
 import type { BackupProgress, BackupSummary } from "$lib/types";
@@ -800,6 +801,13 @@ export class Wizard {
         return REAL_STEPS.restore
           ? { start: () => this.runRealRestore(cur), resume: () => this.dispatchEngine(() => this.finishRealRestore(cur)), danger: true }
           : null;
+      case "fw-verify":
+        return REAL_STEPS.verify ? { start: () => this.runRealFwVerify(cur), danger: false } : null;
+      case "final-verify":
+        // 재부팅·재연결 후 VoLTE 등록 확인(수동 안내) → 재진입하면 마무리
+        return REAL_STEPS.verify
+          ? { start: () => this.runRealFinalVerify(cur), resume: () => this.finishRealFinalVerify(cur), danger: false }
+          : null;
       case "unlock":
         return REAL_STEPS.fastboot ? { start: () => this.runRealUnlock(cur), danger: true } : null;
       case "relock":
@@ -864,6 +872,11 @@ export class Wizard {
     if ((cur.id === "root" || cur.id === "unroot") && (REAL_STEPS.root || REAL_STEPS.fastboot) && !this.realBootFlowReady()) return;
     // 리락은 이력만으로 안전성을 증명할 수 없어 모드 전환 전에도 차단한다.
     if (cur.id === "relock" && REAL_STEPS.fastboot) return this.failStep("리락은 순정 출처·AVB·전체 부트 체인 검증이 구현될 때까지 차단됩니다");
+    // 실전 최종 확인은 재부팅을 먼저 하고, 그 뒤에 VoLTE 등록 확인 안내를 연다(계획의 수동 안내보다 엔진이 먼저)
+    if (cur.id === "final-verify" && this.engineRan.get(cur.id) !== this.runGen) {
+      const first = this.engineFor(cur);
+      if (first) return this.runEngineStep(cur, first);
+    }
     const step = this.steps.find((s) => s.id === cur.id);
     const manuals = step?.manual ?? [];
     if (cur.manualDone < manuals.length) {
@@ -1314,7 +1327,7 @@ export class Wizard {
 
   /** 목업 실행에서만 — 폰이 실제로 재부팅되지 않아 확인할 수 없는 단계 건너뛰기 */
   get manualSkippable(): boolean {
-    return SIMULATED_RUN && !REAL_STEPS.fastboot && !REAL_STEPS.root && (this.manualVerifiable || this.manualCurrent?.id === "firmware-select");
+    return SIMULATED_RUN && !REAL_STEPS.fastboot && !REAL_STEPS.root && !REAL_STEPS.verify && (this.manualVerifiable || this.manualCurrent?.id === "firmware-select");
   }
 
   /** 직접 지정한 펌웨어 폴더 — 고르는 즉시 검사 */
@@ -1583,6 +1596,83 @@ export class Wizard {
       const detail = s.errors.slice(0, 3).join(" / ");
       this.failStep(`백업 미완결(완결 게이트 실패)${detail ? ` — ${detail}` : ""} — 로그를 확인하고 [이 단계 다시 시도]로 재시도할 수 있습니다`);
     }
+  }
+
+  /** 실전 엔진이 있는 단계인지 (엔진을 시작하지는 않는다) */
+  private hasRealEngine(id: string): boolean {
+    return this.engineFor({ id } as RunStep) !== null;
+  }
+
+  /** 실전 업데이트 확인 — 업데이트 후 폰이 다시 연결되면 버전·지문을 대조(재부팅은 펌웨어 기록 뒤 폰이 스스로 한다) */
+  private async runRealFwVerify(cur: RunStep) {
+    const gen = this.runGen;
+    // 대상은 선택값(진행 기록에 남음)에서 — 재시작 뒤 기기 정보가 업데이트 후 값으로 바뀌어도 그대로
+    const target = this.volteConfig.firmware;
+    if (!target) return this.failStep("업데이트 대상 버전을 알 수 없습니다 — 계획을 다시 만들어 주세요");
+    // 펌웨어 기록이 시뮬레이션이면 버전이 바뀔 수 없다 — 오래 기다리지 않고 바로 알린다
+    if (!this.hasRealEngine("fw-flash")) {
+      return this.failStep("펌웨어 기록이 아직 실전으로 구현되지 않아 업데이트를 실제로 확인할 수 없습니다");
+    }
+    // 대상 버전 펌웨어를 받아 둔 경우 그 지문(기기·지역 대조를 이미 거친 값)과 정확히 같아야 한다
+    const expected = this.firmware?.version === target ? this.firmware.fingerprint : undefined;
+    this.log(cur, `[확인] 업데이트 후 폰이 부팅되어 다시 연결되기를 기다립니다 (대상 ${target}) — USB는 연결한 채로 두세요`);
+    // 업데이트 후 첫 부팅은 오래 걸릴 수 있다(최적화 포함)
+    const back = await this.waitFor(gen, () => this.usbDebugReady(), 900_000, 3000);
+    if (gen !== this.runGen) return;
+    if (!back) return this.failStep("업데이트 후 폰이 다시 연결되지 않습니다 — 부팅이 끝났는지, USB 디버깅이 켜져 있는지 확인해 주세요");
+    this.markSub(cur, 1);
+    cur.progress = 1 / 3;
+    const d = (await api.deviceList())?.find((x) => x.state === "device" && x.serial === this.device?.serial);
+    if (gen !== this.runGen) return;
+    if (!d) return this.failStep("폰 정보를 읽지 못했습니다 — 연결을 확인한 뒤 [이 단계 다시 시도]를 눌러 주세요");
+    const problems = firmwareUpdateProblems(target, d, { before: this.device?.fingerprint, expected });
+    if (problems.length > 0) return this.failStep(`업데이트 확인 실패 — ${problems.join(" / ")}`);
+    this.log(cur, `[확인] 버전 ${d.firmware} · 지문 일치`);
+    this.markSub(cur, 3);
+    cur.progress = 1;
+    this.stepDone(cur);
+  }
+
+  /** adb로 OS 재부팅 → 연결 끊김 → 다시 연결 대기. 실패 사유 또는 null (호출부에서 세대 확인) */
+  private async rebootOsAndReconnect(gen: number): Promise<string | null> {
+    const rb = await api.rootReboot(this.device?.serial, "os");
+    if (gen !== this.runGen) return null;
+    if (!rb.ok) return `재부팅 요청 실패: ${rb.error}`;
+    // 재부팅 요청 직후에는 아직 연결돼 있을 수 있다 — 끊겼다가 다시 붙는 것까지 확인
+    const down = await this.waitFor(gen, async () => !(await this.usbDebugReady()), 60_000);
+    if (gen !== this.runGen) return null;
+    if (!down) return "재부팅이 감지되지 않습니다 — 폰 화면을 확인한 뒤 [이 단계 다시 시도]를 눌러 주세요";
+    const back = await this.waitFor(gen, () => this.usbDebugReady(), 300_000, 3000);
+    if (gen !== this.runGen) return null;
+    return back ? null : "재부팅 후 폰이 다시 연결되지 않습니다 — 부팅이 끝났는지, USB 디버깅 허용을 확인해 주세요";
+  }
+
+  /** 실전 최종 확인 — OS 재부팅 → 재연결 → VoLTE 등록 확인(수동 안내창이 자동 감지) */
+  private async runRealFinalVerify(cur: RunStep) {
+    const gen = this.runGen;
+    // 이어서 진행할 때 이미 재부팅을 마쳤으면 다시 하지 않는다([이 단계 다시 시도]는 체크포인트를 지워 처음부터)
+    if ((cur.sub?.done ?? 0) < 1) {
+      this.log(cur, "[재부팅] 설정을 반영하기 위해 폰을 다시 시작합니다");
+      const error = await this.rebootOsAndReconnect(gen);
+      if (gen !== this.runGen) return;
+      if (error) return this.failStep(error);
+      this.markSub(cur, 1);
+    }
+    cur.progress = 1 / 3;
+    this.log(cur, "[확인] 네트워크·VoLTE 등록을 확인합니다");
+    // 등록 대기는 수동 안내창의 자동 감지(imsReady 폴링)가 맡는다 — 미확인 종료 경로도 그대로
+    this.openEngineManual(cur, "ims-check");
+  }
+
+  /** 최종 확인 마무리 — VoLTE 등록 확인(또는 확인 없이 마무리) 뒤 재진입 */
+  private finishRealFinalVerify(cur: RunStep) {
+    if (this.imsUnverified) {
+      this.log(cur, "[미확인] VoLTE 등록을 확인하지 못한 채 단계를 마칩니다");
+    } else {
+      this.markSub(cur, 3);
+    }
+    cur.progress = 1;
+    this.stepDone(cur);
   }
 
   /** 단계 완료 공통 처리 — 시뮬레이션 tick의 완료 블록과 같은 규칙 */

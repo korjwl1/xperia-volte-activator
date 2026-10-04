@@ -332,9 +332,9 @@ const hybridApi: Api = {
   },
 
   async rootReboot(serial, target) {
-    // 언락·리락(fastboot) 흐름도 부트로더 진입에 adb 재부팅을 쓴다 — 두 엔진 중 하나만 켜져도 허용
-    if (!REAL_STEPS.root && !REAL_STEPS.fastboot) {
-      return { ok: false, error: "루팅/fastboot 실전 실행이 비활성화되어 있습니다" };
+    // 언락·리락(fastboot)·루팅 흐름의 부트로더 진입·복귀는 root/fastboot, 최종 확인(verify)은 OS 재부팅만 허용
+    if (!REAL_STEPS.root && !REAL_STEPS.fastboot && !(REAL_STEPS.verify && target === "os")) {
+      return { ok: false, error: "기기 재부팅 실전 실행이 비활성화되어 있습니다" };
     }
     return await invokeResult<null>("root_reboot", { serial: serial ?? null, target });
   },

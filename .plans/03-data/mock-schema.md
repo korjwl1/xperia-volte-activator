@@ -13,7 +13,7 @@ status: implemented
 
 ```ts
 DeviceMode = 'android'|'bootloader-fastboot'|'fastbootd'|'flashmode'
-DeviceStatus { serialMasked, model:'XQ-DQ44', productName:'Xperia 1 V', firmware, android,
+DeviceStatus { serialMasked, model:'XQ-DQ44', productName:'Xperia 1 V', firmware, fingerprint?(ro.build.fingerprint — 백엔드 실측, mock에는 없음), android,
   mode, bootloader:'locked'|'unlocked'|'unknown', rooted:bool|'unknown',
   sims: { slot, type:'physical'|'esim', carrier|null, volte:'on'|'off'|'unknown', patchedWith? }[],
   usb{topology,controller,speed} }

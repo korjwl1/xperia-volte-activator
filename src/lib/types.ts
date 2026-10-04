@@ -30,6 +30,8 @@ export interface DeviceStatus {
   model: string;
   productName: string;
   firmware: string;
+  /** ro.build.fingerprint — 업데이트 확인용(백엔드 실측, mock에는 없을 수 있음) */
+  fingerprint?: string;
   android: string;
   mode: DeviceMode;
   bootloader: "locked" | "unlocked" | "unknown";
