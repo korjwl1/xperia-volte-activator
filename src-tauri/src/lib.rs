@@ -8,6 +8,7 @@ mod firmware;
 mod guard;
 mod host;
 mod journal;
+mod magisk;
 mod storage;
 mod tasks;
 mod usbmode;
@@ -51,6 +52,10 @@ pub fn run() {
             fastboot::fastboot_lock,
             fastboot::fastboot_flash,
             fastboot::fastboot_reboot,
+            magisk::magisk_prepare,
+            magisk::magisk_patch,
+            magisk::magisk_install,
+            magisk::root_reboot,
             backup::backup_prepare,
             backup::contacts_restore_check,
             backup::backup_run,

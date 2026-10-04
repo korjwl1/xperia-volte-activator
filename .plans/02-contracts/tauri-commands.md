@@ -93,19 +93,31 @@ invoke('open_settings_screen', { serial?, screen: 'developer'|'about' }) → voi
 // ✅ 구현: am start -a APPLICATION_DEVELOPMENT_SETTINGS / DEVICE_INFO_SETTINGS — 화면만 띄움(사용자 승인 2026-10-03)
 ```
 
-## root (M4 — 실기기 검증된 절차, 구현은 백엔드 단계)
+## root (M4 — 설계 `.plans/04-engine/root.md`, 사용자 승인 2026-10-04)
 
-Magisk 자동 패치 (사용자 조작 없음) — 2026-10-03 XQ-DQ44 / Android 15 / Magisk v30.7로 검증:
-1. GitHub releases API(topjohnwu/Magisk latest)에서 Magisk-v<ver>.apk 다운로드 → 앱 데이터 캐시
-2. APK에서 추출: lib/arm64-v8a/libmagiskboot.so→magiskboot, libmagiskinit.so→magiskinit, libmagisk.so→magisk,
-   libinit-ld.so→init-ld, libbusybox.so→busybox, assets/boot_patch.sh, assets/util_functions.sh, assets/stub.apk
-3. 위 파일 + 순정 `<partition>.img`(firmware_fetch 결과)를 /data/local/tmp/<작업폴더>/ 로 push, chmod 755
-4. `KEEPVERITY=true KEEPFORCEENCRYPT=true PATCHVBMETAFLAG=false RECOVERYMODE=false LEGACYSAR=false
-   ./busybox sh -o standalone ./boot_patch.sh <img>` (셸 권한, 루트 불필요) → new-boot.img
-   실측 로그: "Stock boot image detected → Patching ramdisk → Repack", 종료 코드 0
-5. new-boot.img pull → ANDROID! 매직·크기(8 MB) 확인, 원본과 해시가 달라야 함 → 폰의 작업 폴더 삭제
-6. fastboot로 <partition>_a/_b 기록(원본 CLI fastbootFlash와 동일) → 재부팅 → Magisk APK adb install
-7. 검증: su 권한 요청(사용자 허용) 후 `su -c id` = uid=0
+**구현 상태**: 4 명령 전부 ✅ 구현(src-tauri/src/magisk/ — FakeADBDevice·ZIP 픽스처 단위 테스트, 이 구현의 실기기 테스트 미실시). wizard 루팅 단계 실전 연결(패치→부트로더→기록→복귀→설치→su 승인) 포함.
+
+Magisk 자동 패치 (사용자 조작 없음) — 2026-10-03 XQ-DQ44 / Android 15 / Magisk v30.7로 검증된 절차:
+
+```ts
+invoke('magisk_prepare') → { version, apkPath, sha256 }
+//   GitHub releases(topjohnwu/Magisk latest)에서 Magisk-v<ver>.apk 다운로드 → 앱 데이터 캐시(재사용)
+//   기기 무관·준비 단계 — 게이트 밖(firmware_fetch와 같은 성격)
+invoke('magisk_patch', { serial, apkPath, imagePath, partition }) → { path, origSha256, patchedSha256, bytes, log: string[] }
+//   위 검증 절차 2~5: 페이로드 추출(zip) → push/chmod → boot_patch.sh(종료 코드 판정) →
+//   new-boot.img 검증(ANDROID! 매직 · 원본/2 ≤ 크기 ≤ 원본 · 해시 ≠ 원본) → pull → 작업 폴더 정리(고정 경로만)
+//   기기 측 이미지명은 고정 boot.img — 로컬 파일명은 셸에 넣지 않는다(§12.5). 결과는 앱 데이터 magisk/<partition>-patched.img
+//   이벤트 'magisk:log': { line } — 스크립트 출력·진행
+invoke('magisk_install', { serial, apkPath }) → void          // 검증 절차 6의 adb install
+invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb reboot — fastboot_reboot의 adb 짝
+// 기록(절차 6의 fastboot)은 기존 fastboot_flash 재사용 — 계약 변경 없음
+// 검증(절차 7)은 기존 root_check + su-grant 수동 개입 재사용
+// 게이트: magisk_patch·magisk_install·root_reboot는 Cargo feature `root-write` + REAL_STEPS.root 이중
+```
+
+상세 절차(2026-10-03 실측): APK 페이로드(lib/arm64-v8a/{libmagiskboot,libmagiskinit,libmagisk,libinit-ld,libbusybox}.so + assets/{boot_patch.sh,util_functions.sh,stub.apk}) →
+`KEEPVERITY=true KEEPFORCEENCRYPT=true PATCHVBMETAFLAG=false RECOVERYMODE=false LEGACYSAR=false ./busybox sh -o standalone ./boot_patch.sh <img>` —
+실측 로그 "Stock boot image detected → Patching ramdisk → Repack", 종료 코드 0, new-boot.img 8 MiB(원본과 동일 크기).
 
 ## host (PC 측, 읽기 전용)
 
