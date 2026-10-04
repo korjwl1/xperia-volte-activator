@@ -331,6 +331,7 @@ export class Wizard {
   private unlockRanGen = -1;
   private relockRanGen = -1;
   private rootRanGen = -1;
+  private unrootRanGen = -1;
   private timer: ReturnType<typeof setInterval> | undefined;
   private cursor = 0;
 
@@ -710,6 +711,15 @@ export class Wizard {
       }
       return;
     }
+    // 실전 언루팅 — 순정 재기록(root_reboot + fastboot_flash 조합) — 두 엔진 모두 켜져야 실행
+    if (cur.id === "unroot" && REAL_STEPS.root && REAL_STEPS.fastboot) {
+      if (cur.status === "running" && this.unrootRanGen !== this.runGen) {
+        this.unrootRanGen = this.runGen;
+        this.pause();
+        void this.runRealUnroot(cur);
+      }
+      return;
+    }
     // 실전 루팅 — Magisk 엔진 (REAL_STEPS.root 전환 시). 2단계: 패치·기록·설치 → su 승인 검증
     if (cur.id === "root" && REAL_STEPS.root) {
       if (cur.status === "running") {
@@ -942,7 +952,22 @@ export class Wizard {
     } else if (id === "smsie-import") {
       // 백업 파일 전송 + 기본 문자 앱 역할(가져오기 권한) — 비행기 모드 안내 문구 반환
       void this.smsieRestoreStage();
+    } else if (id === "mode-wait") {
+      // 안내("앱이 재부팅합니다")대로 부트로더 재부팅을 앱이 수행 — 감지는 watchManual 폴링
+      void this.rebootToBootloader();
     }
+  }
+
+  /** adb로 부트로더 재부팅(mode-wait 수동 개입에서 자동) — 시뮬레이션에서는 건너뛴다 */
+  private async rebootToBootloader() {
+    if (!REAL_STEPS.root && !REAL_STEPS.fastboot) return;
+    const cur = this.runSteps[this.cursor];
+    cur?.logs.push("[재부팅] 폰을 부트로더 모드로 재부팅합니다 — USB를 유지해 주세요");
+    const r = await api.rootReboot(this.device?.serial, "bootloader");
+    if (!r.ok) {
+      cur?.logs.push(`[실패] 부트로더 재부팅: ${r.error} — 전원을 끈 뒤 볼륨 아래를 누른 채 USB를 연결해 직접 진입해 주세요`);
+    }
+    void this.persist(true);
   }
 
   /** smsie 수동 복원 준비 */
@@ -1520,10 +1545,110 @@ export class Wizard {
     this.stepDone(cur);
   }
 
-  /** §3-3의 순정 이미지·슬롯 이력 검증 구현 전에는 실전 리락을 허용하지 않는다. */
+  /** 순정 부트 이미지 경로 — 사전 준비(firmware_fetch) 결과 또는 직접 지정 폴더 (root·unroot·relock 공용) */
+  private stockImagePath(): string | null {
+    return this.firmware?.path
+      ?? (this.firmwareDir && this.firmwareDirInfo ? `${this.firmwareDir}/${this.firmwareDirInfo.file}` : null);
+  }
+
+  /** 리락 게이트 사전 점검용 deviceKey — fastboot serial과 같은 알고리즘(SHA-256 hex). 없으면 null */
+  private async deviceKeyHex(): Promise<string | null> {
+    const serial = this.device?.serial;
+    if (!serial) return null;
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(serial));
+    return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  /** 실전 언루팅 — 원본 unRoot 계승: 순정 이미지 양 슬롯 기록 후 안내(앱 삭제는 수동) */
+  private async runRealUnroot(cur: RunStep) {
+    const gen = this.runGen;
+    const partition = this.partition;
+    const stockPath = this.stockImagePath();
+    if (!partition || !stockPath) {
+      this.failStep("순정 부트 이미지가 준비되지 않았습니다 — 사전 준비에서 펌웨어를 먼저 받아 주세요");
+      return;
+    }
+    cur.logs.push(`[언루팅] 순정 ${partition} 이미지로 복원합니다`);
+    // 부트로더 진입 → 감지 대기
+    cur.progress = 0.2;
+    const rb = await api.rootReboot(this.device?.serial, "bootloader");
+    if (gen !== this.runGen) return;
+    if (!rb.ok) return this.failStep(`부트로더 재부팅 실패: ${rb.error}`);
+    const inFb = await this.waitFor(gen, () => this.usbModeIs("fastboot"), 90_000);
+    if (gen !== this.runGen) return;
+    if (!inFb) return this.failStep("부트로더 모드 진입이 감지되지 않습니다 — USB 연결을 확인해 주세요");
+    // 순정 기록(양 슬롯) — 이 기록이 리락 게이트(§3-3)의 순정 증거가 된다
+    cur.progress = 0.4;
+    const un = await api.onFastbootLog((line) => {
+      if (gen !== this.runGen) return;
+      cur.logs.push(`[fastboot] ${line}`);
+      void this.persist();
+    });
+    const flash = await api.fastbootFlash(partition, stockPath, true);
+    un();
+    if (gen !== this.runGen) return;
+    if (!flash.ok) return this.failStep(`순정 이미지 기록 실패: ${flash.error}`);
+    cur.logs.push(`[언루팅] ${partition}_a/_b 순정 기록 완료`);
+    void this.persist(true);
+    // 재부팅 → 복귀 대기
+    await api.fastbootReboot("os");
+    const back = await this.waitFor(gen, () => this.usbDebugReady(), 240_000);
+    if (gen !== this.runGen) return;
+    if (!back) {
+      return this.failStep("재부팅 후 기기 연결이 확인되지 않습니다 — 기록은 완료됐으므로 폰을 확인한 뒤 이 단계를 다시 시도해 주세요");
+    }
+    cur.progress = 1;
+    cur.logs.push("[완료] 언루팅 — Magisk 앱을 열어 루트가 해제됐는지 확인한 뒤 앱을 직접 삭제해 주세요");
+    cur.logs.push("[안내] Play 프로텍트 인증이 안 되면 Play 스토어 > 앱 정보 > 저장공간 > 데이터 삭제를 해주세요");
+    this.stepDone(cur);
+  }
+
+  /** 실전 리락 — 게이트(§3-3) 사전 점검 → oem lock → 확인 (최종 판정은 백엔드가 기기 fastboot serial 기준으로 재수행) */
   private async runRealRelock(cur: RunStep) {
-    cur.logs.push("[게이트] 언루팅 완료 표시만으로는 순정 부트 체인·AVB 안전을 확인할 수 없습니다");
-    this.failStep("리락 차단: 검증된 순정 이미지와 부트 체인·슬롯별 플래시 이력 게이트가 아직 구현되지 않았습니다 (§3-3)");
+    const gen = this.runGen;
+    const partition = this.partition;
+    const stockPath = this.stockImagePath();
+    if (!partition || !stockPath) {
+      this.failStep("리락 게이트에 필요한 부트 파티션·순정 이미지가 준비되지 않았습니다 — 사전 준비에서 펌웨어를 먼저 받아 주세요");
+      return;
+    }
+    const un = await api.onFastbootLog((line) => {
+      if (gen !== this.runGen) return;
+      cur.logs.push(`[fastboot] ${line}`);
+      void this.persist();
+    });
+    // 사전 게이트 — 미춴족 사유를 로그로 보여준다
+    cur.progress = 0.3;
+    const key = await this.deviceKeyHex();
+    const gateRes = await api.relockGateCheck(partition, stockPath, key ?? undefined);
+    if (gen !== this.runGen) return un();
+    if (!gateRes.ok) {
+      un();
+      return this.failStep(`리락 게이트 점검 실패: ${gateRes.error}`);
+    }
+    const gate = gateRes.value;
+    for (const c of gate.checked) cur.logs.push(`[게이트] ${c.partition}${c.slot} — ${c.detail}`);
+    if (!gate.ok) {
+      un();
+      return this.failStep(`리락 게이트 실패(§3-3) — 언루팅(순정 기록)을 먼저 진행해 주세요: ${gate.reasons[0] ?? ""}`);
+    }
+    cur.progress = 0.6;
+    const r = await api.fastbootLock(true, partition, stockPath);
+    if (gen !== this.runGen) return un();
+    if (!r.ok) {
+      un();
+      return this.failStep(`리락 실패: ${r.error}`);
+    }
+    if (r.value.unlocked) {
+      un();
+      return this.failStep("리락 후에도 unlocked=no가 확인되지 않습니다 — 기기 상태를 확인해 주세요");
+    }
+    await api.fastbootReboot("os");
+    un();
+    if (gen !== this.runGen) return;
+    cur.progress = 1;
+    cur.logs.push("[완료] 부트로더 리락 확인(unlocked=no) — 기기가 초기화된 뒤 재부팅됩니다");
+    this.stepDone(cur);
   }
 
   /** 실전 루팅 — 검증된 절차(계약 root 절): 패치 → 부트로더 → 기록 → 복귀 → 앱 설치 → su 승인(수동) */
@@ -1822,6 +1947,7 @@ export class Wizard {
     this.unlockRanGen = -1;
     this.relockRanGen = -1;
     this.rootRanGen = -1;
+    this.unrootRanGen = -1;
     this.journalSims = undefined;
     this.sessionFor = null;
     this.pendingJournal = null;

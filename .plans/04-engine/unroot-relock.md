@@ -1,6 +1,6 @@
 # 언루팅·리락 게이트 (M4 후속) — 구현 설계
 
-status: draft (사용자 승인 2026-10-04 — 실전 코드 작성, 실기기 테스트 금지, 이중 게이트 유지)
+status: implemented (실기기 검증 대기 — 게이트 단위 테스트 9종 포함 133통과, fastboot-lock 게이트는 fastboot-write 뒤)
 
 - 상위 정책: `tasks/plan.md` §3-3(리락 게이트 의존성 규칙)·§5(초기화 루트)
 - 원본 CLI 계승: `unRoot()`(src/cliInterface.py 461) — 순정 IMG 양 슬롯 기록 후 "Magisk 앱 직접 삭제" 안내(앱 삭제 자동화 안 함)
@@ -44,8 +44,10 @@ invoke('fastboot_lock', { confirm }) → { unlocked }   // 내부: 리락 게이
 // 언루팅 절차는 기존 명령 조합(root_reboot + fastboot_flash + fastboot_reboot) — 신규 명령 없음
 ```
 
-- 게이트: relock_gate_check·fastboot_lock 모두 fastboot-write feature 뒤 + 프론트 REAL_STEPS.fastboot
-- wizard 언루팅 러너 게이트: `REAL_STEPS.root && REAL_STEPS.fastboot`(adb 재부팅 + 기록 모두 사용)
+- 게이트: `fastboot_lock`은 Cargo feature `fastboot-write` + 프론트 REAL_STEPS.fastboot 이중.
+  `relock_gate_check`는 읽기 전용(파일 판정만)이라 게이트 밖 — 사전 점검 안내용, 최종 판정은 fastboot_lock이 기기 fastboot serial 기준으로 재수행
+- wizard 언루팅 러너 게이트: `REAL_STEPS.root && REAL_STEPS.fastboot`(adb 재부팅 + 기록 모두 사용).
+  mode-wait 수동 개입에서 앱이 부트로더 재부팅을 자동 수행(안내 문구와 실제 동작 일치 — 기존 갭 해소)
 
 ## 구현
 

@@ -3,7 +3,7 @@
 // 단계별 실행 플래그는 data/runMode.ts에서 관리. fastboot 쓰기/재부팅은 facade에서도 차단.
 // 컴포넌트에서 @tauri-apps/api 직접 import 금지.
 
-import type { AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FastbootVars, FirmwareResult, FirmwareVersions, MagiskPrepared, PatchResult, RestoreOutcome, SettingsOverview, SmsIeOutcome, UnlockResult } from "$lib/types";
+import type { AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FastbootVars, FirmwareResult, FirmwareVersions, MagiskPrepared, PatchResult, RestoreOutcome, RelockGate, SettingsOverview, SmsIeOutcome, UnlockResult } from "$lib/types";
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
 import type { ApiResult } from "$lib/types";
 import { REAL_STEPS } from "$lib/data/runMode";
@@ -86,7 +86,9 @@ export interface Api {
   /** 부트로더 언락 — oem unlock 0x{code} 후 getvar 이중 확인 (로그에 코드 마스킹) */
   fastbootUnlock(code: string, confirm: boolean): Promise<ApiResult<UnlockResult>>;
   /** 부트로더 리락 — oem lock 후 확인 */
-  fastbootLock(confirm: boolean): Promise<ApiResult<UnlockResult>>;
+  fastbootLock(confirm: boolean, partition: string, stockPath: string): Promise<ApiResult<UnlockResult>>;
+  /** 리락 게이트 사전 점검(읽기 전용) — 미충족 사유 표시용. 최종 판정은 fastboot_lock이 수행 */
+  relockGateCheck(partition: string, stockPath: string, deviceKey?: string): Promise<ApiResult<RelockGate>>;
   /** fastboot 재부팅 — os | bootloader (OKAY 확인 시 성공) */
   fastbootReboot(target: "os" | "bootloader"): Promise<boolean>;
   /** fastboot 로그 이벤트 구독 (INFO 프레임·명령·민감값 마스킹) */
@@ -279,9 +281,13 @@ const hybridApi: Api = {
     return await invokeResult<UnlockResult>("fastboot_unlock", { code, confirm });
   },
 
-  async fastbootLock(confirm) {
+  async fastbootLock(confirm, partition, stockPath) {
     if (!REAL_STEPS.fastboot) return { ok: false, error: "fastboot 실전 실행이 비활성화되어 있습니다" };
-    return await invokeResult<UnlockResult>("fastboot_lock", { confirm });
+    return await invokeResult<UnlockResult>("fastboot_lock", { confirm, partition, stockPath });
+  },
+
+  async relockGateCheck(partition, stockPath, deviceKey) {
+    return await invokeResult<RelockGate>("relock_gate_check", { partition, stockPath, deviceKey: deviceKey ?? null });
   },
 
   async fastbootReboot(target) {
@@ -313,7 +319,10 @@ const hybridApi: Api = {
   },
 
   async rootReboot(serial, target) {
-    if (!REAL_STEPS.root) return { ok: false, error: "루팅 실전 실행이 비활성화되어 있습니다" };
+    // 언락·리락(fastboot) 흐름도 부트로더 진입에 adb 재부팅을 쓴다 — 두 엔진 중 하나만 켜져도 허용
+    if (!REAL_STEPS.root && !REAL_STEPS.fastboot) {
+      return { ok: false, error: "루팅/fastboot 실전 실행이 비활성화되어 있습니다" };
+    }
     return await invokeResult<null>("root_reboot", { serial: serial ?? null, target });
   },
 
