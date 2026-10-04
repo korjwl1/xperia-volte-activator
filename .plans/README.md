@@ -26,4 +26,4 @@
 4. mock은 실측 데이터를 시드로 사용한다(`../tasks/recovery.md` 2-3, 현재 기기 스냅샷). 가공 데이터 금지.
 5. 문서 상단에 상태 배지를 유지한다: `status: draft | implemented | stale`
 
-최신 병합 후 검토·수정·실기기 미검증 목록: [integrated-review.md](04-engine/integrated-review.md).
+최신 병합 후 검토·수정: [integrated-review.md](04-engine/integrated-review.md). 실기기 미검증 항목(단일 목록): [device-test-checklist.md](04-engine/device-test-checklist.md).
