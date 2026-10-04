@@ -22,9 +22,10 @@ pub mod fake_device;
 use model::BackupSummary;
 use puller::CancelFlag;
 use serde::Serialize;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 
@@ -40,12 +41,76 @@ pub struct ProgressPayload {
     pub bytes_total: u64,
 }
 
-/// 전역 취소 플래그 — backup_run 시작 시 리셋, backup_cancel로 설정
-static BACKUP_CANCEL: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 use crate::device_io::WriteOperation as Operation;
 
-fn shared_cancel() -> Arc<AtomicBool> {
-    Arc::clone(BACKUP_CANCEL.get_or_init(|| Arc::new(AtomicBool::new(false))))
+/// 백업 실행 단위 취소 — 프론트가 실행마다 만든 run_id로 대상을 지정한다.
+/// 실행이 시작되기 전에 도착한 취소도 기억해 그 실행은 시작 즉시 멈추고,
+/// 끝난(또는 다른) 실행의 취소가 다음 실행에 남지 않는다.
+#[derive(Default)]
+struct CancelRegistry {
+    current: Option<(String, Arc<AtomicBool>)>,
+    /// 아직 시작하지 않은 실행에 대한 취소(최근 것만 보관)
+    early: VecDeque<String>,
+}
+
+const EARLY_CANCEL_KEEP: usize = 16;
+
+impl CancelRegistry {
+    fn begin(&mut self, run_id: &str) -> Arc<AtomicBool> {
+        let cancelled = match self.early.iter().position(|id| id == run_id) {
+            Some(i) => {
+                self.early.remove(i);
+                true
+            }
+            None => false,
+        };
+        let flag = Arc::new(AtomicBool::new(cancelled));
+        self.current = Some((run_id.to_string(), Arc::clone(&flag)));
+        flag
+    }
+
+    fn end(&mut self, run_id: &str) {
+        if self.current.as_ref().is_some_and(|(id, _)| id == run_id) {
+            self.current = None;
+        }
+    }
+
+    /// run_id가 없으면 지금 실행 중인 백업만 취소한다
+    fn cancel(&mut self, run_id: Option<&str>) {
+        match (run_id, &self.current) {
+            (None, Some((_, flag))) => flag.store(true, Ordering::Relaxed),
+            (None, None) => {}
+            (Some(id), Some((current, flag))) if current == id => {
+                flag.store(true, Ordering::Relaxed)
+            }
+            (Some(id), _) => {
+                if !self.early.iter().any(|e| e == id) {
+                    if self.early.len() == EARLY_CANCEL_KEEP {
+                        self.early.pop_front();
+                    }
+                    self.early.push_back(id.to_string());
+                }
+            }
+        }
+    }
+}
+
+static BACKUP_CANCELS: Mutex<CancelRegistry> = Mutex::new(CancelRegistry {
+    current: None,
+    early: VecDeque::new(),
+});
+
+fn cancels() -> std::sync::MutexGuard<'static, CancelRegistry> {
+    // 잠금 중 패닉이 나도 취소 기록 자체는 유효하다
+    BACKUP_CANCELS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 실행이 끝나면(성공·실패·패닉) 현재 실행 등록을 해제한다
+struct RunRegistration(String);
+impl Drop for RunRegistration {
+    fn drop(&mut self) {
+        cancels().end(&self.0);
+    }
 }
 
 /// 진행 이벤트 방출기 — 50ms 쓰로틀(마지막 파일·항목 전환은 즉시)
@@ -53,6 +118,8 @@ struct Emitter50ms {
     app: tauri::AppHandle,
     event: &'static str,
     last: Instant,
+    /// 마지막으로 보낸 (항목, 단계) — 바뀌면 쓰로틀 없이 바로 보낸다(다음 항목 시작이 묻히지 않게)
+    last_key: Option<(String, &'static str)>,
 }
 
 impl Emitter50ms {
@@ -61,16 +128,24 @@ impl Emitter50ms {
             app,
             event,
             last: Instant::now() - Duration::from_secs(1),
+            last_key: None,
         }
     }
     fn emit(&mut self, p: runner::StepProgress) {
         let last_file = p.files_done == p.files_total && p.files_total > 0;
         let now = Instant::now();
         let terminal = matches!(p.phase, "done" | "partial" | "pending");
-        if !last_file && !terminal && now - self.last < Duration::from_millis(50) {
+        let changed = self
+            .last_key
+            .as_ref()
+            .is_none_or(|(id, phase)| *id != p.item_id || *phase != p.phase);
+        if !changed && !last_file && !terminal && now - self.last < Duration::from_millis(50) {
             return;
         }
         self.last = now;
+        if changed {
+            self.last_key = Some((p.item_id.clone(), p.phase));
+        }
         let payload = ProgressPayload {
             item_id: p.item_id,
             phase: p.phase.to_string(),
@@ -96,20 +171,25 @@ pub async fn backup_run(
     items: Vec<String>,
     dest: String,
     resume_dir: Option<String>,
+    run_id: String,
 ) -> Result<BackupSummary, String> {
     let dest_path = PathBuf::from(&dest);
     if dest.trim().is_empty() || !dest_path.is_dir() {
         return Err("백업 저장 위치 폴더가 없습니다 — 먼저 지정해 주세요".into());
     }
-    let cancel_arc = shared_cancel();
+    if run_id.trim().is_empty() {
+        return Err("백업 실행 식별값이 필요합니다".into());
+    }
     let operation = Operation::acquire()?;
-    cancel_arc.store(false, Ordering::Relaxed);
-    let cancel = CancelFlag::from_shared(cancel_arc);
+    // 실행권을 얻은 뒤 등록 — 시작 전에 온 이 실행의 취소는 그대로 반영된다
+    let cancel = CancelFlag::from_shared(cancels().begin(&run_id));
+    let registration = RunRegistration(run_id);
     let emitter = Emitter50ms::new(app.clone(), "backup:progress");
     let resume = resume_dir.filter(|d| !d.is_empty()).map(PathBuf::from);
 
     let work = move || {
         let _operation = operation;
+        let _registration = registration;
         let mut emitter = emitter;
         let mut sink: runner::ProgressSink = Box::new(move |p| emitter.emit(p));
         crate::adb::with_first_device(&serial, |dev| {
@@ -167,9 +247,10 @@ pub async fn contacts_restore_check(
     crate::tasks::blocking("연락처 확인", work).await
 }
 
+/// run_id를 주면 그 실행만(시작 전이면 시작 즉시) 취소, 없으면 지금 실행 중인 백업을 취소
 #[tauri::command]
-pub async fn backup_cancel() -> Result<(), String> {
-    shared_cancel().store(true, Ordering::Relaxed);
+pub async fn backup_cancel(run_id: Option<String>) -> Result<(), String> {
+    cancels().cancel(run_id.as_deref().filter(|id| !id.is_empty()));
     Ok(())
 }
 
@@ -200,7 +281,14 @@ pub async fn smsie_prepare(serial: Option<String>, download: bool) -> Result<Vec
     let operation = Operation::acquire()?;
     let work = move || {
         let _operation = operation;
-        crate::adb::with_first_device(&serial, |dev| smsie::prepare(dev, &cache, download))
+        // 다운로드(수십 초)는 USB 연결을 잡지 않은 채로 한다 — 그동안 기기 조회가 막히지 않게
+        let installed = crate::adb::with_first_device(&serial, |dev| smsie::installed(dev))?;
+        let apk = if !installed && download {
+            Some(smsie::download_apk(&cache)?)
+        } else {
+            None
+        };
+        crate::adb::with_first_device(&serial, |dev| smsie::prepare(dev, apk.as_ref()))
     };
     crate::tasks::blocking("준비", work).await
 }
@@ -219,17 +307,25 @@ pub async fn smsie_collect(
     let work = move || {
         let _operation = operation;
         crate::adb::with_first_device(&serial, |dev| -> Result<SmsIeOutcome, String> {
-            match smsie::collect(dev, &dir)? {
+            // 백업에 고른 문자·통화 기록 항목만 병합한다(정리 판단도 이 기준)
+            let mut manifest = model::load_manifest(&dir)?;
+            let selected: Vec<String> = manifest
+                .items
+                .iter()
+                .filter(|item| {
+                    item.kind == model::ItemKind::SmsIe && item.status != model::ItemStatus::Skipped
+                })
+                .map(|item| item.id.clone())
+                .collect();
+            let selected_ids: Vec<&str> = selected.iter().map(String::as_str).collect();
+            match smsie::collect(dev, &dir, &selected_ids)? {
                 smsie::CollectState::NotReady => Ok(SmsIeOutcome {
                     ready: false,
                     summary: None,
                 }),
                 smsie::CollectState::Records(records) => {
-                    let mut manifest = model::load_manifest(&dir)?;
                     for (_, rec) in records {
-                        if manifest.items.iter().any(|item| {
-                            item.id == rec.id && item.status != model::ItemStatus::Skipped
-                        }) {
+                        if selected.contains(&rec.id) {
                             manifest.record(rec);
                         }
                     }
@@ -283,7 +379,8 @@ pub async fn restore_run(
             Ok(RestoreOutcomeOut {
                 logs: out.logs,
                 failures: out.failures,
-                smsie_pending: smsie_selected,
+                // 무결성 검증에서 멈췄다면 수동 문자 복원을 이어 안내하지 않는다
+                smsie_pending: smsie_selected && out.verified,
             })
         })
     };
@@ -328,4 +425,40 @@ pub async fn smsie_restore_finish(serial: Option<String>) -> Result<Vec<String>,
 /// 로그·manifest에 남기는 문자열 정리 — 백업 항목 경로는 사용자 파일명뿐이라 추가 스크럽 불필요
 pub(crate) fn scrub(s: &str) -> String {
     s.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancel_before_start_applies_only_to_that_run() {
+        let mut reg = CancelRegistry::default();
+        // 준비~시작 사이에 온 취소는 그 실행이 시작되자마자 반영된다
+        reg.cancel(Some("run-1"));
+        let first = reg.begin("run-1");
+        assert!(first.load(Ordering::Relaxed));
+        reg.end("run-1");
+        // 이전 실행의 취소가 다음 실행에 남지 않는다
+        let second = reg.begin("run-2");
+        assert!(!second.load(Ordering::Relaxed));
+        // 다른 실행 대상 취소는 지금 실행을 멈추지 않는다
+        reg.cancel(Some("run-old"));
+        assert!(!second.load(Ordering::Relaxed));
+        // 식별값 없는 취소는 지금 실행 중인 것만
+        reg.cancel(None);
+        assert!(second.load(Ordering::Relaxed));
+        reg.end("run-2");
+        reg.cancel(None);
+        assert!(reg.current.is_none());
+    }
+
+    #[test]
+    fn early_cancels_are_bounded() {
+        let mut reg = CancelRegistry::default();
+        for i in 0..100 {
+            reg.cancel(Some(&format!("never-started-{i}")));
+        }
+        assert_eq!(reg.early.len(), EARLY_CANCEL_KEEP);
+    }
 }

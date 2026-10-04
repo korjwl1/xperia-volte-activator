@@ -63,7 +63,7 @@ pub fn walk(dev: &mut dyn ADBDeviceExt, root: &str, skip: &dyn Fn(&str) -> bool)
             Ok(l) => l,
             Err(e) => {
                 out.errors.push(format!(
-                    "{}: 열거 실패({e})",
+                    "{dir}: 열거 실패({})",
                     crate::backup::scrub(&e.to_string())
                 ));
                 continue;
@@ -214,6 +214,11 @@ mod tests {
         d.fail_list("/sdcard/Music");
         let r = walk(&mut d, "/sdcard/Music", &|_| false);
         assert!(!r.errors.is_empty());
-        assert!(r.errors[0].contains("/sdcard/Music"));
+        // 폴더 경로로 시작해야 한다(오류 문구에 경로가 우연히 들어 있는 것에 기대지 않는다)
+        assert!(
+            r.errors[0].starts_with("/sdcard/Music: 열거 실패("),
+            "{}",
+            r.errors[0]
+        );
     }
 }

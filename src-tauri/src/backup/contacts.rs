@@ -4,16 +4,28 @@
 //! 동작. SMS·통화 기록과 달리 shell이 읽을 수 있다. 복원(쓰기)은 권한이 불확실해
 //! vcf를 기기에 올리고 연락처 앱 가져오기로 안내한다(수동 1탭) — 검증 대기 항목.
 
-use crate::backup::model::{ItemKind, ItemRecord, ItemStatus};
-use crate::backup::quarantine::HashingWriter;
+use crate::backup::model::{ItemKind, ItemRecord};
 use adb_client::ADBDeviceExt;
-use std::io::Write;
 use std::path::Path;
+
+/// `content query` 실행 + 출력 형식 확인. 이 도구는 프로바이더 오류를 출력하고도 종료 코드 0으로
+/// 끝날 수 있어, 형식을 확인하지 않으면 오류가 "연락처 0명"으로 보인다(백업 직후 초기화로 유실).
+/// 결과 없음은 "No result found."로만 인정하고, 그 외에는 첫 줄이 "Row: "여야 한다.
+fn content_query(dev: &mut dyn ADBDeviceExt, cmd: &str) -> Result<String, String> {
+    let text = crate::device_io::shell(dev, cmd)?;
+    let first = text.lines().map(str::trim).find(|l| !l.is_empty());
+    match first {
+        Some("No result found.") => Ok(String::new()),
+        Some(line) if line.starts_with("Row: ") => Ok(text),
+        Some(line) => Err(format!("연락처 조회 응답을 해석할 수 없습니다: {line}")),
+        None => Err("연락처 조회 응답이 비어 있습니다".into()),
+    }
+}
 
 /// 연락처 id 목록 조회 — `content query`의 "Row: 0 _id=57, ..." 형식에서 _id 추출
 fn contact_ids(dev: &mut dyn ADBDeviceExt) -> Result<Vec<String>, String> {
     let cmd = "content query --uri content://com.android.contacts/contacts --projection _id:";
-    let text = crate::device_io::shell(dev, cmd)?;
+    let text = content_query(dev, cmd)?;
     let mut ids = Vec::new();
     for line in text.lines() {
         // 형식: Row: 0 _id=57, display_name=홍길동 — "_id=" 이후 값을 콤마까지
@@ -200,32 +212,18 @@ fn build_vcard(rows: &[&std::collections::HashMap<String, String>]) -> String {
 }
 
 pub fn collect_contacts(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> ItemRecord {
-    let mut rec = ItemRecord {
-        id: "contacts".into(),
-        kind: ItemKind::Contacts,
-        status: ItemStatus::Pending,
-        files: 0,
-        bytes: 0,
-        entries: vec![],
-        artifacts: vec![],
-        errors: vec![],
-    };
-    let fail = |mut rec: ItemRecord, e: String| {
-        rec.errors.push(e);
-        rec.status = ItemStatus::Partial;
-        rec
-    };
+    let mut rec = ItemRecord::new("contacts", ItemKind::Contacts);
     let ids = match contact_ids(dev) {
         Ok(ids) => ids,
-        Err(e) => return fail(rec, e),
+        Err(e) => return rec.fail(e),
     };
     let cmd = format!(
         "content query --uri content://com.android.contacts/raw_contact_entities --projection {}",
         ENTITY_KEYS.join(":")
     );
-    let text = match crate::device_io::shell(dev, &cmd) {
+    let text = match content_query(dev, &cmd) {
         Ok(text) => text,
-        Err(e) => return fail(rec, format!("연락처 데이터 조회 실패: {e}")),
+        Err(e) => return rec.fail(format!("연락처 데이터 조회 실패: {e}")),
     };
     let rows = parse_rows(&text, ENTITY_KEYS);
     // 연락처별로 묶기 — 삭제 표시된 원시 연락처는 제외
@@ -243,12 +241,8 @@ pub fn collect_contacts(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> ItemR
     }
     let path = match super::paths::write_target(backup_root, "contacts/contacts.vcf") {
         Ok(path) => path,
-        Err(e) => return fail(rec, e),
+        Err(e) => return rec.fail(e),
     };
-    let dir = path.parent().expect("contacts 부모");
-    if let Err(e) = std::fs::create_dir_all(dir) {
-        return fail(rec, format!("폴더 생성 실패: {e}"));
-    }
     let mut vcf = String::new();
     for id in &ids {
         match id.parse::<u64>().ok().and_then(|n| by_contact.get(&n)) {
@@ -258,18 +252,15 @@ pub fn collect_contacts(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> ItemR
                 .push(format!("연락처 {id}: 데이터 행을 찾지 못했습니다")),
         }
     }
-    let mut writer = match std::fs::File::create(&path) {
-        Ok(f) => HashingWriter::new(f),
-        Err(e) => return fail(rec, format!("contacts.vcf 생성 실패: {e}")),
+    // 원자 저장 — 중간에 끊겨도 반쪽 vcf가 남지 않는다(설정 덤프와 같은 방식)
+    if let Err(e) = crate::storage::atomic_write(&path, vcf.as_bytes()) {
+        return rec.fail(format!("contacts.vcf 저장 실패: {e}"));
+    }
+    let sha256 = {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(vcf.as_bytes()))
     };
-    if let Err(e) = writer.write_all(vcf.as_bytes()) {
-        return fail(rec, format!("contacts.vcf 기록 실패: {e}"));
-    }
-    let (file, sha256, bytes) = writer.finish();
-    if let Err(e) = file.sync_all() {
-        return fail(rec, format!("contacts.vcf 디스크 저장 실패: {e}"));
-    }
-    drop(file);
+    let bytes = vcf.len() as u64;
     rec.files = 1;
     rec.bytes = bytes;
     rec.artifacts.push("contacts/contacts.vcf".into());
@@ -282,18 +273,14 @@ pub fn collect_contacts(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> ItemR
         quarantined: false,
         error: None,
     });
-    rec.status = if rec.errors.is_empty() {
-        ItemStatus::Done
-    } else {
-        ItemStatus::Partial
-    };
+    rec.finalize();
     rec
 }
 
 /// 복원 확인 — (백업한 연락처 수, 지금 폰의 연락처 수). 폰 쪽은 목록 조회만(읽기 전용)
 pub fn restore_check(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> Result<(u64, u64), String> {
-    let vcf = std::fs::read_to_string(backup_root.join("contacts").join("contacts.vcf"))
-        .map_err(|e| format!("contacts.vcf 읽기 실패: {e}"))?;
+    let path = super::paths::existing_file(backup_root, "contacts/contacts.vcf")?;
+    let vcf = std::fs::read_to_string(path).map_err(|e| format!("contacts.vcf 읽기 실패: {e}"))?;
     let backed_up = vcf.matches("BEGIN:VCARD").count() as u64;
     let on_device = contact_ids(dev)?.len() as u64;
     Ok((backed_up, on_device))
@@ -323,6 +310,7 @@ pub fn stage_restore_contacts(
 mod tests {
     use super::*;
     use crate::backup::fake_device::FakeADBDevice;
+    use crate::backup::model::ItemStatus;
 
     const IDS: &str = "Row: 0 _id=57\nRow: 1 _id=63\n";
     const ENTITIES: &str = "Row: 0 contact_id=57, deleted=0, mimetype=vnd.android.cursor.item/name, data1=홍길동, data2=길동, data3=홍, data4=NULL, data5=NULL, data6=NULL\n\
@@ -376,6 +364,35 @@ Row: 3 contact_id=63, deleted=0, mimetype=vnd.android.cursor.item/phone_v2, data
         let rec = collect_contacts(&mut d, tmp.path());
         assert_eq!(rec.status, ItemStatus::Partial);
         assert!(rec.errors[0].contains("99"));
+    }
+
+    #[test]
+    fn provider_error_with_zero_exit_is_not_an_empty_backup() {
+        // content 도구가 오류 문구를 내고 0으로 끝나는 경우 — 연락처 0명 Done이 되면 안 된다
+        for answer in ["Error while accessing provider:contacts\n", ""] {
+            let mut d = FakeADBDevice::new();
+            d.answer_shell(
+                "content query --uri content://com.android.contacts/contacts",
+                answer,
+            );
+            let tmp = tempfile::tempdir().unwrap();
+            let rec = collect_contacts(&mut d, tmp.path());
+            assert_eq!(rec.status, ItemStatus::Partial, "{answer:?}");
+            assert!(!tmp.path().join("contacts/contacts.vcf").exists());
+        }
+    }
+
+    #[test]
+    fn genuinely_empty_contacts_are_done() {
+        let mut d = FakeADBDevice::new();
+        d.answer_shell(
+            "content query --uri content://com.android.contacts/",
+            "No result found.\n",
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let rec = collect_contacts(&mut d, tmp.path());
+        assert_eq!(rec.status, ItemStatus::Done, "{:?}", rec.errors);
+        assert_eq!(rec.bytes, 0);
     }
 
     #[test]

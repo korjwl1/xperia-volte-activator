@@ -1,12 +1,12 @@
-import type { RunJournal } from "$lib/types";
+import { MANUAL_IDS, STEP_KINDS, type RunJournal } from "$lib/types";
 
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === "string";
 const texts = (value: unknown): value is string[] => Array.isArray(value) && value.every(text);
 const integer = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const option = (value: unknown) => object(value) && ["unroot", "relock", "restore"].every(key => typeof value[key] === "boolean");
-const manualIds = new Set(["usb-debug", "su-grant", "magisk-patch", "oem-toggle", "mode-wait", "ims-check", "unlock-code", "firmware-select", "backup-notice", "flash-mode", "ims-precheck", "smsie-export", "smsie-import", "contacts-import"]);
-const kinds = new Set(["backup", "unlock", "setup", "root", "efs-preflight", "efs", "verify", "volte-props", "fw-download", "fw-flash", "fw-verify", "unroot", "relock", "final-verify", "restore", "dexopt"]);
+const manualIds = new Set<string>(MANUAL_IDS);
+const kinds = new Set<string>(STEP_KINDS);
 const statuses = new Set(["pending", "running", "done", "failed", "skipped", "manual-wait"]);
 const carriers = new Set(["SKT", "KT", "LGU", "LGU_V"]);
 

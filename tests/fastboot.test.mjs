@@ -20,11 +20,11 @@ after(async () => {
 beforeEach(() => {
   calls = { unlock: 0, reboot: 0, probe: 0, unsubscribe: 0 };
   Object.assign(REAL_STEPS, { backup: false, restore: false, fastboot: true });
-  Object.assign(api, {
+  Object.assign(api, originalApi, {
     onFastbootLog: async () => () => calls.unsubscribe++,
     fastbootGetvar: async () => { calls.probe++; return { unlocked: "no", "is-userspace": "no" }; },
     fastbootUnlock: async () => { calls.unlock++; return { ok: true, value: { unlocked: true } }; },
-    fastbootReboot: async () => { calls.reboot++; return true; },
+    fastbootReboot: async () => { calls.reboot++; return { ok: true, value: null }; },
   });
 });
 function wizard() {
@@ -42,6 +42,8 @@ test("fastboot alone still requires a real complete backup when selected", async
   w.runSteps.push({ id: "backup", title: "백업", status: "done", progress: 1, logs: [], manualDone: 0 });
   w.runSteps[0].status = "pending";
   w.tick();
+  // 게이트는 비동기 함수 — 판정이 끝날 때까지 기다린다
+  while (w.busy > 0) await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal(w.runSteps[0].status, "failed");
   assert.match(w.stepError, /백업/);
   assert.equal(calls.unlock, 0);
@@ -49,7 +51,7 @@ test("fastboot alone still requires a real complete backup when selected", async
 
 test("re-entering an already dispatched real step cannot simulate completion", () => {
   const w = wizard();
-  w.unlockRanGen = w.runGen;
+  w.engineRan.set("unlock", w.runGen);
   w.runSteps[0].progress = 0.99;
   w.tick();
   assert.equal(w.runSteps[0].progress, 0.99);
@@ -94,7 +96,7 @@ test("unlock waits for reboot before advancing, and reboot failure stops it", as
     const run = w.runRealUnlock(w.runSteps[0]);
     await entered;
     assert.equal(w.runSteps[0].status, "running");
-    finishReboot(success);
+    finishReboot(success ? { ok: true, value: null } : { ok: false, error: "no OKAY" });
     await run;
     assert.equal(w.runSteps[0].status, success ? "done" : "failed");
   }

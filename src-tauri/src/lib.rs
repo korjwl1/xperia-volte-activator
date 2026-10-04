@@ -1,5 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod adb;
+mod apk_verify;
 mod app_paths;
 mod backup;
 mod boot_image;
@@ -23,8 +24,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // USB 직접 연결용 ADB 인증 키 보관 위치
-            if let Ok(dir) = app.path().app_local_data_dir() {
-                app_paths::init(dir);
+            // 실패하면 진행 기록·키·펌웨어 캐시가 모두 "앱 데이터 폴더 없음"으로 실패하므로 원인을 남긴다
+            match app.path().app_local_data_dir() {
+                Ok(dir) => app_paths::init(dir),
+                Err(e) => eprintln!("[rust] 앱 데이터 폴더 확인 실패: {e}"),
             }
             // 작업 중 Windows 종료 메시지 가로채기 (보호는 run_guard로 켤 때만 동작)
             guard::init(app.handle());

@@ -12,9 +12,10 @@ fn disk_free_work(path: &str) -> Result<u64, String> {
     fs2::available_space(p).map_err(|e| format!("여유 공간 조회 실패: {e}"))
 }
 
+/// 네트워크 드라이브·잠든 외장 디스크는 수 초 걸릴 수 있으므로 메인 스레드 밖에서 조회한다
 #[tauri::command]
-pub fn disk_free(path: String) -> Result<u64, String> {
-    disk_free_work(&path)
+pub async fn disk_free(path: String) -> Result<u64, String> {
+    crate::tasks::blocking("여유 공간 조회", move || disk_free_work(&path)).await
 }
 
 #[cfg(test)]

@@ -73,6 +73,38 @@ pub struct ItemRecord {
     pub errors: Vec<String>,
 }
 
+impl ItemRecord {
+    /// 빈 기록(진행 전)
+    pub fn new(id: &str, kind: ItemKind) -> Self {
+        Self {
+            id: id.to_string(),
+            kind,
+            status: ItemStatus::Pending,
+            files: 0,
+            bytes: 0,
+            entries: vec![],
+            artifacts: vec![],
+            errors: vec![],
+        }
+    }
+
+    /// 오류 0 → Done, 아니면 Partial
+    pub fn finalize(&mut self) {
+        self.status = if self.errors.is_empty() {
+            ItemStatus::Done
+        } else {
+            ItemStatus::Partial
+        };
+    }
+
+    /// 오류 1건을 남기고 Partial로
+    pub fn fail(mut self, error: String) -> Self {
+        self.errors.push(error);
+        self.status = ItemStatus::Partial;
+        self
+    }
+}
+
 /// manifest.json — 백업 폴더의 단일 진실 공급원
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,6 +116,10 @@ pub struct Manifest {
     pub model: String,
     /// 전체 시리얼은 기록하지 않는다(마스킹만 — §12.5)
     pub serial_masked: String,
+    /// SHA-256(ro.serialno) — 이어서 백업할 때 같은 기기인지 확인(원본 시리얼은 남기지 않는다).
+    /// 이전 버전 manifest에는 없으므로 선택 필드.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_key: Option<String>,
     pub firmware: String,
     pub android: String,
     pub items: Vec<ItemRecord>,
@@ -98,6 +134,7 @@ impl Manifest {
             updated: now,
             model: model.to_string(),
             serial_masked: serial_masked.to_string(),
+            device_key: None,
             firmware: firmware.to_string(),
             android: android.to_string(),
             items: Vec::new(),
@@ -120,12 +157,18 @@ impl Manifest {
             })
     }
 
-    /// (선택 항목 중) 오류가 있는 항목id → 대표 사유 첫 줄
+    /// (선택 항목 중) 완결되지 않은 항목id → 대표 사유 첫 줄. 진행 전(Pending) 항목도 사유로 보인다.
     pub fn error_summary(&self) -> Vec<String> {
         self.items
             .iter()
-            .filter(|i| i.status == ItemStatus::Partial && !i.errors.is_empty())
-            .map(|i| format!("{}: {}", i.id, i.errors[0]))
+            .filter_map(|i| match i.status {
+                ItemStatus::Partial => Some(match i.errors.first() {
+                    Some(e) => format!("{}: {e}", i.id),
+                    None => format!("{}: 미완료", i.id),
+                }),
+                ItemStatus::Pending => Some(format!("{}: 미완료", i.id)),
+                _ => None,
+            })
             .collect()
     }
 
@@ -257,6 +300,26 @@ mod tests {
         assert_eq!(m.error_summary().len(), 1);
         m.record(item("sms", ItemKind::SmsIe, ItemStatus::Skipped, vec![]));
         assert!(!m.complete()); // 다른 항목이 partial이면 여전히 불완결
+    }
+
+    #[test]
+    fn incomplete_items_always_have_a_reason() {
+        let mut m = Manifest::new("XQ-DQ44", "AB1234****", "67.2.A.3.178", "15");
+        m.record(ItemRecord::new("sms", ItemKind::SmsIe)); // 수동 단계 대기(Pending)
+        m.record(item("dcim", ItemKind::Files, ItemStatus::Partial, vec![])); // 사유 없는 Partial
+        m.record(item("apk", ItemKind::Files, ItemStatus::Done, vec![]));
+        assert!(!m.complete());
+        assert_eq!(m.error_summary(), vec!["sms: 미완료", "dcim: 미완료"]);
+    }
+
+    #[test]
+    fn manifest_without_device_key_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = Manifest::new("XQ", "AB1234****", "v", "15");
+        save_manifest_atomic(&m, dir.path()).unwrap();
+        let raw = std::fs::read_to_string(dir.path().join("manifest.json")).unwrap();
+        assert!(!raw.contains("deviceKey")); // 예전 형식과 같은 모양
+        assert!(load_manifest(dir.path()).unwrap().device_key.is_none());
     }
 
     #[test]

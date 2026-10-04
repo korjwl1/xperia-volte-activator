@@ -2,7 +2,7 @@
 //! 수집: settings list 3종 + dumpsys deviceidle whitelist + 패키지 목록 덤프.
 //! 복원: 검증된 화이트리스트 키만 개별 적용(빌드 간 키 충돌 방지), adb_enabled 제외(보안 토글 — 안내만).
 
-use crate::backup::model::{FileEntry, ItemKind, ItemRecord, ItemStatus};
+use crate::backup::model::{FileEntry, ItemKind, ItemRecord};
 use adb_client::ADBDeviceExt;
 use std::path::Path;
 
@@ -42,29 +42,14 @@ fn run(dev: &mut dyn ADBDeviceExt, cmd: &str) -> Result<String, String> {
 
 /// 설정 덤프 수집 — settings/<이름>.txt 5종 (recovery.md Phase A)
 pub fn collect_settings(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> ItemRecord {
-    let mut rec = ItemRecord {
-        id: "settings-all".into(),
-        kind: ItemKind::Dump,
-        status: ItemStatus::Pending,
-        files: 0,
-        bytes: 0,
-        entries: vec![],
-        artifacts: vec![],
-        errors: vec![],
-    };
+    let mut rec = ItemRecord::new("settings-all", ItemKind::Dump);
     let dir = match super::paths::write_target(backup_root, "settings/settings_system.txt") {
-        Ok(path) => path.parent().expect("settings 부모").to_path_buf(),
-        Err(e) => {
-            rec.errors.push(e);
-            rec.status = ItemStatus::Partial;
-            return rec;
-        }
+        Ok(path) => match path.parent() {
+            Some(dir) => dir.to_path_buf(),
+            None => return rec.fail("설정 폴더 경로를 확인할 수 없습니다".into()),
+        },
+        Err(e) => return rec.fail(e),
     };
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        rec.errors.push(format!("폴더 생성 실패: {e}"));
-        rec.status = ItemStatus::Partial;
-        return rec;
-    }
     let dumps: &[(&str, &str)] = &[
         ("settings_system.txt", "settings list system"),
         ("settings_global.txt", "settings list global"),
@@ -98,11 +83,7 @@ pub fn collect_settings(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> ItemR
             Err(e) => rec.errors.push(format!("{cmd} 실패: {e}")),
         }
     }
-    rec.status = if rec.errors.is_empty() {
-        ItemStatus::Done
-    } else {
-        ItemStatus::Partial
-    };
+    rec.finalize();
     rec
 }
 
@@ -149,7 +130,26 @@ pub fn restore_settings(
     Ok(log)
 }
 
-/// deviceidle whitelist 재적용 — 덤프에서 서드파티 패키지만 골라 추가 (recovery.md 1-2)
+/// `dumpsys deviceidle whitelist` 덤프 → 사용자가 지정한 예외 패키지.
+/// 실제 출력은 `<종류>,<패키지>,<uid>` 줄이다(system-excidle·system·user). 시스템 항목은 이미
+/// 시스템 예외이므로 사용자 지정(`user,`)만 고른다 — adb.rs 설정 개요의 개수 세기와 같은 기준.
+fn user_whitelist(raw: &str) -> Vec<String> {
+    let mut packages: Vec<String> = Vec::new();
+    for line in raw.lines() {
+        let mut fields = line.trim().split(',');
+        if fields.next() != Some("user") {
+            continue;
+        }
+        let pkg = fields.next().unwrap_or("").trim();
+        // 백업 파일에서 읽은 값이 셸 명령에 들어가므로 패키지 이름 형식만 허용
+        if super::sms_role::valid_package(pkg) && !packages.iter().any(|p| p == pkg) {
+            packages.push(pkg.to_string());
+        }
+    }
+    packages
+}
+
+/// deviceidle whitelist 재적용 — 덤프의 사용자 지정 예외만 추가 (recovery.md 1-2)
 pub fn restore_deviceidle(
     dev: &mut dyn ADBDeviceExt,
     backup_root: &Path,
@@ -157,51 +157,19 @@ pub fn restore_deviceidle(
     let path = super::paths::existing_file(backup_root, "settings/deviceidle_whitelist.txt")?;
     let raw =
         std::fs::read_to_string(path).map_err(|e| format!("whitelist 덤프 읽기 실패: {e}"))?;
-    // 시스템 접두사는 제외(이미 시스템 예외) — 서드파티만 재적용
-    const SYSTEM_PREFIXES: &[&str] = &[
-        "com.android.",
-        "com.google.android.",
-        "com.sony.",
-        "com.sonyericsson.",
-        "com.qualcomm.",
-        "jp.co.sony.",
-        "com.sec.",
-        "android.ext.services",
-        "com.omtp.",
-    ];
-    let mut applied = Vec::new();
-    for line in raw.lines() {
-        let pkg = line
-            .trim()
-            .trim_start_matches(['+', '='])
-            .split(['=', ' '])
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        // 백업 파일에서 읽은 값이 셸 명령에 들어가므로 패키지 이름 형식만 허용
-        if pkg.is_empty()
-            || !pkg.contains('.')
-            || !pkg
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
-        {
-            continue;
-        }
-        if SYSTEM_PREFIXES.iter().any(|p| pkg.starts_with(p)) {
-            continue;
-        }
+    let packages = user_whitelist(&raw);
+    for pkg in &packages {
         let cmd = format!("dumpsys deviceidle whitelist +{pkg}");
         run(dev, &cmd).map_err(|e| format!("{pkg} 예외 복원 실패: {e}"))?;
-        applied.push(pkg);
     }
-    Ok(applied)
+    Ok(packages)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::backup::fake_device::FakeADBDevice;
+    use crate::backup::model::ItemStatus;
 
     #[test]
     fn unreadable_dump_prevents_any_settings_write() {
@@ -258,7 +226,11 @@ mod tests {
             "airplane_mode_on=0\nstay_on_while_plugged_in=7\n",
         );
         d.answer_shell("settings list secure", "sysui_qs_tiles=internet,bt,rotation\ndefault_input_method=com.estsoft.android.keyboard/com.estmob.broccoli.KeyboardService\n");
-        d.answer_shell("dumpsys deviceidle whitelist", "+com.android.systemui=u:persistent\n+com.kakao.talk=u:persistent\n+com.friendscube.somoim\n");
+        // 실기기 출력 형식 — <종류>,<패키지>,<uid>
+        d.answer_shell(
+            "dumpsys deviceidle whitelist",
+            "system-excidle,com.android.systemui,10123\nsystem,com.google.android.gms,10089\nuser,com.kakao.talk,10234\nuser,com.friendscube.somoim,10301\nuser,bad;rm -rf,10302\n",
+        );
         d.answer_shell(
             "pm list packages -3 -f",
             "package:/data/app/~~abc/com.kakao.talk-XYZ/base.apk=com.kakao.talk\n",
@@ -285,8 +257,12 @@ mod tests {
         let qs = calls.iter().find(|c| c.contains("sysui_qs_tiles")).unwrap();
         assert!(qs.contains("settings put secure sysui_qs_tiles \"internet,bt,rotation\""));
 
-        // deviceidle — 서드파티만(kakao, friendscube), systemui 제외
+        // deviceidle — 사용자 지정(kakao, friendscube)만, 시스템 항목·잘못된 이름 제외
         let applied = restore_deviceidle(&mut d, tmp.path()).unwrap();
+        assert!(d
+            .shell_calls
+            .iter()
+            .any(|c| c == "dumpsys deviceidle whitelist +com.kakao.talk"));
         assert_eq!(
             applied,
             vec![

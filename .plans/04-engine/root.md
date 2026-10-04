@@ -21,7 +21,7 @@ status: implemented (실기기 검증 대기 — 최신 통합 리뷰: integrate
 
 ## 검증된 절차 (2026-10-03 실측 — 계약 문서 그대로)
 
-1. GitHub releases API(topjohnwu/Magisk latest) → `Magisk-v<ver>.apk` 다운로드 → 앱 데이터 캐시
+1. GitHub releases API(topjohnwu/Magisk latest) → `Magisk-v<ver>.apk` 다운로드 → 자산 다이제스트(SHA-256)·크기 + 서명 인증서 핀 확인 → 앱 데이터 캐시(다이제스트 옆 파일 함께 저장)
 2. APK에서 추출(arm64): libmagiskboot.so→magiskboot, libmagiskinit.so→magiskinit, libmagisk.so→magisk,
    libinit-ld.so→init-ld, libbusybox.so→busybox, assets/boot_patch.sh, assets/util_functions.sh, assets/stub.apk
 3. 도구 + 순정 `<partition>.img`를 기기 작업 폴더로 push, chmod 755
@@ -38,7 +38,7 @@ status: implemented (실기기 검증 대기 — 최신 통합 리뷰: integrate
 src-tauri/src/magisk/
 ├─ mod.rs      — tauri 명령(4종)·feature 게이트(root-write)·GitHub 다운로드(D12 패턴)
 ├─ patch.rs    — 핵심 로직(전부 &mut dyn ADBDeviceExt 주입형): 스테이징·패치 실행·검증·pull·정리
-└─ (firmware.rs) — RangeRead 트레이트 + LocalZip + zip_extract_named(제네릭화)
+└─ (firmware.rs) — RangeRead 트레이트 + MemZip(검증한 APK 바이트) + zip_extract_named(제네릭화)
 ```
 
 - 기기 작업 폴더: `/data/local/tmp/xvolte-magisk` **고정 경로만** rm -rf (smsie 원칙 동일)
@@ -76,7 +76,7 @@ invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb r
 
 ## 테스트 전략 (실기기 없이)
 
-1. ZIP 픽스처 빌더(stored 방식 + EOCD/central directory 직접 구성) → LocalZip + zip_extract_named 왕복
+1. ZIP 픽스처 빌더(stored 방식 + EOCD/central directory 직접 구성) → MemZip + zip_extract_named 왕복
 2. 페이로드 추출: 항목명 매핑(lib/arm64-v8a/... → 기기 측 이름), 누락 항목 오류
 3. patch.rs (FakeADBDevice): 스테이징 push·chmod·스크립트 실행(실측 출력 재생)·new-boot pull(ANDROID! 매직)·정리(rm -rf 고정 경로만)
 4. 검증 실패 분기: 매직 없음 / 해시 동일(원본과 동일 = 패치 안 됨) / 크기 초과 → 각각 오류, 작업 폴더는 항상 정리
@@ -86,6 +86,7 @@ invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb r
 
 - **셸 보간 제거**: 기기 측 부트 이미지명은 고정 `boot.img`. 결과는 내용 해시 기반 `magisk/patched-<sha256>.img`로 원자 저장한다.
 - **원자 다운로드**: magisk_prepare가 임시 파일→rename으로 저장 — 중단 시 반쪽 APK가 캐시로 오인되지 않게. 256 MiB 상한(디스크 채우기 방어)
+- **다운로드 무결성(2026-10-04)**: `apk_verify.rs` — GitHub 릴리스 API 자산의 `digest`(sha256)·`size`와 받은 바이트를 대조하고, APK Signing Block(v2/v3) 서명자 인증서 SHA-256을 topjohnwu 핀(`b4cb83b4…3ee6`, v30.7 공식 APK에서 파서·openssl v1 인증서로 교차 확인)과 대조한 뒤에만 캐시에 저장. 다이제스트가 없는 자산은 쓰지 않는다. 캐시는 기록된 다이제스트(`<apk>.sha256`)와 파일 해시가 같고, 온라인이면 현재 API 다이제스트와도 같을 때만 재사용. 릴리스 조회 실패(오프라인·요청 한도) 시 검증을 통과한 최신 캐시만 사용. patch/install은 APK를 한 번 읽어 해시·핀·구조를 확인한 바이트를 그대로 패치에 쓴다(경로 재열기 없음). 인증서 핀은 서명의 암호 검증이 아니다 — 기기에서 실행하는 추출 바이너리의 근거는 다이제스트이고, 앱 설치 서명은 Android가 검증한다.
 - **크기 하한**: 패치 결과 ≥ 원본/2 — 매직·해시 검증만으론 9바이트 가짜가 통과할 수 있었음
 - **실패 판정 정합화**: must_ok는 종료 코드 + stderr만(기존 settings.rs 규칙) — 출력에 "not found" 문자열이 있으면 실패 오판하던 휴리스틱 제거
 - **waitUntil**: 단일 질의·독립 제한 시간·취소 감시로 예외와 멈춘 질의에도 종료한다.

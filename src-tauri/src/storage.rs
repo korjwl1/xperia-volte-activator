@@ -26,17 +26,30 @@ pub fn read_bounded(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, String
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
     let parent = path.parent().ok_or("저장 경로에 부모 폴더가 없습니다")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("저장 폴더 생성 실패: {e}"))?;
-    let temporary = parent.join(format!(
-        ".xvolte-{}-{}.tmp",
-        std::process::id(),
-        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
-    ));
+    // 비정상 종료로 남은 임시 파일과 PID가 겹칠 수 있다 — 다음 번호로 다시 시도한다.
+    // 남의 파일을 지우지 않도록 생성에 성공한 이름만 정리 대상으로 삼는다.
+    let (temporary, mut file) = {
+        let mut attempt = 0;
+        loop {
+            let temporary = parent.join(format!(
+                ".xvolte-{}-{}.tmp",
+                std::process::id(),
+                NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+            ));
+            match std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temporary)
+            {
+                Ok(file) => break (temporary, file),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 16 => {
+                    attempt += 1;
+                }
+                Err(e) => return Err(format!("임시 파일 생성 실패: {e}")),
+            }
+        }
+    };
     let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)
-            .map_err(|e| format!("임시 파일 생성 실패: {e}"))?;
         file.write_all(data)
             .and_then(|_| file.sync_all())
             .map_err(|e| format!("파일 쓰기 실패: {e}"))?;

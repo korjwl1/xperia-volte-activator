@@ -7,9 +7,8 @@ use crate::backup::quarantine::{
     quarantine_tmp_path, quarantined_entry, HashingWriter, Quarantine,
 };
 use crate::backup::walker::WalkedEntry;
-use crate::backup::winname;
+use crate::backup::winname::{self, SeenPaths};
 use adb_client::ADBDeviceExt;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// 풀 대상 파일 — tag는 항목별 부가 키(apk의 패키지명 등). local_for가 로컬 경로를 정한다.
@@ -75,21 +74,14 @@ pub fn pull_item_files(
     files: &[PullFile],
     backup_root: &Path,
     local_for: &dyn Fn(&PullFile) -> PathBuf,
-    seen: &mut HashMap<String, PathBuf>,
+    seen: &mut SeenPaths,
     quarantine: &mut Quarantine,
     cancel: &CancelFlag,
     mut on_progress: impl FnMut(PullProgress),
 ) -> ItemRecord {
-    let mut rec = ItemRecord {
-        id: item_id.to_string(),
-        kind,
-        status: ItemStatus::Pending,
-        files: files.len() as u32,
-        bytes: 0,
-        entries: Vec::with_capacity(files.len()),
-        artifacts: vec![],
-        errors: vec![],
-    };
+    let mut rec = ItemRecord::new(item_id, kind);
+    rec.files = files.len() as u32;
+    rec.entries.reserve(files.len());
     let total_bytes: u64 = files.iter().map(|f| f.entry.size).sum();
     let mut bytes_done = 0u64;
     let mut nonce = 0u64;
@@ -101,8 +93,9 @@ pub fn pull_item_files(
         }
         let f = &pf.entry;
         let rel = local_for(pf);
-        let rel_str = rel.to_string_lossy().replace('\\', "/");
-        let issue = winname::check_relative_path(&rel_str, seen);
+        // `\`를 `/`로 바꾸지 않는다 — 기기 파일명 안의 `\`는 금지 문자로 판정돼 격리된다
+        let rel_str = rel.to_string_lossy();
+        let issue = winname::check_relative_path(&rel_str, &f.remote, seen);
         let entry = match issue {
             None => pull_to_disk(dev, &f.remote, &rel, backup_root, f.size, f.mtime),
             Some(_issue) => {
@@ -111,7 +104,7 @@ pub fn pull_item_files(
                 let tmp = quarantine_tmp_path(backup_root, nonce);
                 match pull_to_tmp(dev, &f.remote, &tmp, f.size) {
                     Ok((sha256, actual)) => {
-                        let qres = quarantine.add(&f.remote, actual, f.mtime, &tmp, &sha256);
+                        let qres = quarantine.add(&f.remote, actual, f.mtime, &tmp);
                         let _ = std::fs::remove_file(&tmp);
                         match qres {
                             Ok(()) => quarantined_entry(&f.remote, actual, f.mtime, &sha256),
@@ -126,8 +119,9 @@ pub fn pull_item_files(
             }
         };
         if entry.error.is_none() {
-            bytes_done += f.size;
-            rec.bytes += f.size;
+            // 목록 크기(32비트)가 아니라 검증된 실제 크기로 센다(4GiB 이상 파일)
+            bytes_done += entry.size;
+            rec.bytes += entry.size;
         } else {
             rec.errors.push(format!(
                 "{}: {}",
@@ -144,16 +138,12 @@ pub fn pull_item_files(
         });
         rec.entries.push(entry);
     }
-    rec.status = if rec.errors.is_empty() {
-        ItemStatus::Done
-    } else {
-        ItemStatus::Partial
-    };
+    rec.finalize();
     rec
 }
 
 /// 파일 1개를 디스크로 — 부모 폴더 생성, 해시 래퍼로 pull, 크기 검증, mtime 적용
-fn pull_to_disk(
+pub(crate) fn pull_to_disk(
     dev: &mut dyn ADBDeviceExt,
     remote: &str,
     rel: &Path,
@@ -284,7 +274,7 @@ mod tests {
         FakeADBDevice,
         tempfile::TempDir,
         Quarantine,
-        HashMap<String, PathBuf>,
+        SeenPaths,
         CancelFlag,
     ) {
         let mut d = FakeADBDevice::new();
@@ -295,7 +285,7 @@ mod tests {
         d.fail_pull("/sdcard/DCIM/lost.jpg");
         let tmp = tempfile::tempdir().unwrap();
         let q = Quarantine::new(tmp.path()).unwrap();
-        (d, tmp, q, HashMap::new(), CancelFlag::new())
+        (d, tmp, q, SeenPaths::new(), CancelFlag::new())
     }
 
     fn walk_files(d: &mut FakeADBDevice) -> Vec<PullFile> {
@@ -382,7 +372,7 @@ mod tests {
         // SYNC list의 u32 크기가 실제와 다를 때(4GiB wrap 등) 셸 stat(64비트)으로 재확인해 오탐 방지
         let mut d = FakeADBDevice::new();
         d.add_dir("/sdcard/DCIM");
-        d.add_file("/sdcard/DCIM/wrap.bin", &vec![0u8; 100], 1700000000, 0o644);
+        d.add_file("/sdcard/DCIM/wrap.bin", &[0u8; 100], 1700000000, 0o644);
         d.list_size_override
             .insert("/sdcard/DCIM/wrap.bin".into(), 50); // list는 50B라고 보고
         let tmp = tempfile::tempdir().unwrap();
@@ -399,7 +389,7 @@ mod tests {
             &files,
             tmp.path(),
             &|_| PathBuf::from("sdcard/DCIM/wrap.bin"),
-            &mut HashMap::new(),
+            &mut SeenPaths::new(),
             &mut q,
             &CancelFlag::new(),
             |_| {},

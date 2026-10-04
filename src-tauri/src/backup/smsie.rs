@@ -5,8 +5,8 @@
 //! APK는 GitHub Releases에서 런타임 다운로드(D12 Magisk 패턴) — 번들하지 않는다.
 //! 주의(앱 README): 기본 SMS 앱 전환 중 수신 문자 유실 방지를 위해 비행기 모드 안내가 필요하다.
 
-use crate::backup::model::{FileEntry, ItemKind, ItemRecord, ItemStatus};
-use crate::backup::quarantine::HashingWriter;
+use crate::apk_verify::{self, ReleaseAsset};
+use crate::backup::model::{ItemKind, ItemRecord, ItemStatus};
 use adb_client::ADBDeviceExt;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -74,106 +74,129 @@ pub fn installed(dev: &mut dyn ADBDeviceExt) -> Result<bool, String> {
         .any(|line| line.trim().strip_prefix("package:") == Some(SMSIE_PKG)))
 }
 
-/// GitHub Releases에서 APK 다운로드(캐시) — standard flavor 우선, legacy 제외.
-/// 신뢰 기반: HTTPS + github.com (인증서 핀닝은 안 함 — Magisk 다운로드와 동일 기준, 설계문서 참조)
-pub fn download_apk(cache_dir: &Path) -> Result<PathBuf, String> {
-    let resp = ureq::get(GH_RELEASES_API)
-        .timeout(std::time::Duration::from_secs(30))
-        .call()
-        .map_err(|e| format!("릴리스 조회 실패: {e}"))?;
-    let text = resp
-        .into_string()
-        .map_err(|e| format!("릴리스 정보 수신 실패: {e}"))?;
-    let json: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| format!("릴리스 정보 해석 실패: {e}"))?;
+/// 정상 APK는 수 MiB — 상한은 디스크·메모리 보호용
+const MAX_APK: u64 = 128 * 1024 * 1024;
+
+fn safe_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// 릴리스 JSON → (태그, 자산). standard flavor의 .apk 우선, legacy(구 Android용) 제외.
+/// 내려받기 주소는 tmo1/sms-ie 릴리스 경로만, 다이제스트·크기가 없으면 실패.
+fn pick_asset(json: &serde_json::Value) -> Result<(String, ReleaseAsset), String> {
     let tag = json["tag_name"]
         .as_str()
-        .ok_or("릴리스 버전이 없습니다")?
+        .filter(|t| safe_name(t))
+        .ok_or("릴리스 버전 형식이 올바르지 않습니다")?
         .to_string();
-    if tag.is_empty()
-        || !tag
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-    {
-        return Err("릴리스 버전 형식이 올바르지 않습니다".into());
-    }
-    let mut assets: Vec<(String, String)> = Vec::new();
-    if let Some(list) = json["assets"].as_array() {
-        for a in list {
-            if let (Some(name), Some(url)) =
-                (a["name"].as_str(), a["browser_download_url"].as_str())
-            {
-                assets.push((name.to_string(), url.to_string()));
-            }
-        }
-    }
-    // standard flavor의 .apk — legacy(구 Android용)는 제외
+    let assets = json["assets"]
+        .as_array()
+        .ok_or("릴리스 자산 목록이 없습니다")?;
+    let official = |a: &&serde_json::Value| {
+        let (Some(name), Some(url)) = (a["name"].as_str(), a["browser_download_url"].as_str())
+        else {
+            return false;
+        };
+        safe_name(name)
+            && name.ends_with(".apk")
+            && !name.contains("legacy")
+            && url == format!("https://github.com/tmo1/sms-ie/releases/download/{tag}/{name}")
+    };
     let pick = assets
         .iter()
-        .find(|(name, _)| {
-            name.ends_with(".apk") && name.contains("standard") && !name.contains("legacy")
-        })
-        .or_else(|| {
-            assets
-                .iter()
-                .find(|(name, _)| name.ends_with(".apk") && !name.contains("legacy"))
-        })
+        .filter(official)
+        .find(|a| a["name"].as_str().is_some_and(|n| n.contains("standard")))
+        .or_else(|| assets.iter().find(official))
         .ok_or("APK 자산을 찾을 수 없습니다")?;
-    let dest = cache_dir.join(format!("sms-ie-{tag}.apk"));
-    if dest.exists() {
-        let mut file =
-            std::fs::File::open(&dest).map_err(|e| format!("APK 캐시 읽기 실패: {e}"))?;
-        let size = file.metadata().map_err(|e| e.to_string())?.len();
-        let mut magic = [0u8; 2];
-        if (2..=128 * 1024 * 1024).contains(&size)
-            && file.read_exact(&mut magic).is_ok()
-            && magic == *b"PK"
-        {
-            return Ok(dest);
+    let name = pick["name"].as_str().unwrap_or_default();
+    let url = pick["browser_download_url"].as_str().unwrap_or_default();
+    Ok((tag, apk_verify::asset_from_json(pick, name, url, MAX_APK)?))
+}
+
+/// GitHub Releases에서 APK 확보(캐시) → (경로, SHA-256).
+/// 받은 바이트는 GitHub 다이제스트·서명 인증서 핀(tmo1 릴리스 키)을 통과해야 캐시에 저장된다.
+/// 릴리스 조회가 안 되면(오프라인·요청 한도) 다이제스트가 기록된 검증 캐시만 쓴다.
+/// 앱 서명 자체는 설치 때 Android가 검증한다.
+pub fn download_apk(cache_dir: &Path) -> Result<(PathBuf, String), String> {
+    std::fs::create_dir_all(cache_dir).map_err(|e| format!("캐시 폴더 생성 실패: {e}"))?;
+    let pins = apk_verify::SMSIE_CERT_SHA256;
+    let (tag, asset) = match fetch_release() {
+        Ok(release) => release,
+        Err(online) => {
+            let (path, _, sha) = apk_verify::newest_verified_cache(
+                cache_dir,
+                |n| n.starts_with("sms-ie-") && n.ends_with(".apk"),
+                pins,
+                MAX_APK as usize,
+            )
+            .ok_or_else(|| format!("{online} — 검증된 APK 캐시도 없습니다"))?;
+            eprintln!("[rust] sms-ie 릴리스 조회 실패({online}) — 검증된 캐시 사용");
+            return Ok((path, sha));
         }
+    };
+    let dest = cache_dir.join(format!("sms-ie-{tag}.apk"));
+    if let Some((_, sha)) =
+        apk_verify::load_cached(&dest, Some(&asset.sha256), pins, MAX_APK as usize)
+    {
+        return Ok((dest, sha));
     }
-    let bytes = ureq::get(&pick.1)
+    let mut bytes = Vec::with_capacity(asset.size as usize);
+    ureq::get(&asset.url)
         .timeout(std::time::Duration::from_secs(300))
         .call()
         .map_err(|e| format!("APK 다운로드 실패: {e}"))?
         .into_reader()
-        .take(128 * 1024 * 1024 + 1);
-    let mut download = bytes;
-    let mut bytes = vec![];
-    download
+        .take(MAX_APK + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| format!("APK 수신 실패: {e}"))?;
-    if bytes.len() > 128 * 1024 * 1024 || !bytes.starts_with(b"PK") {
-        return Err("APK 크기/형식이 올바르지 않습니다".into());
+    // 검증을 모두 통과한 뒤에만 캐시에 남긴다
+    apk_verify::verify_download(&bytes, &asset)?;
+    apk_verify::check_pins(&bytes, pins)?;
+    apk_verify::store_verified(&dest, &bytes, &asset.sha256)?;
+    Ok((dest, asset.sha256))
+}
+
+fn fetch_release() -> Result<(String, ReleaseAsset), String> {
+    let mut text = vec![];
+    ureq::get(GH_RELEASES_API)
+        .timeout(std::time::Duration::from_secs(30))
+        .call()
+        .map_err(|e| format!("릴리스 조회 실패: {e}"))?
+        .into_reader()
+        .take(1024 * 1024 + 1)
+        .read_to_end(&mut text)
+        .map_err(|e| format!("릴리스 정보 수신 실패: {e}"))?;
+    if text.len() > 1024 * 1024 {
+        return Err("릴리스 응답이 너무 큽니다".into());
     }
-    std::fs::create_dir_all(cache_dir).map_err(|e| format!("캐시 폴더 생성 실패: {e}"))?;
-    crate::storage::atomic_write(&dest, &bytes).map_err(|e| format!("APK 저장 실패: {e}"))?;
-    Ok(dest)
+    let json: serde_json::Value =
+        serde_json::from_slice(&text).map_err(|e| format!("릴리스 정보 해석 실패: {e}"))?;
+    pick_asset(&json)
 }
 
 /// 설치 + 권한 + 임시 폴더 준비 (백업·복원 공통)
+/// 설치·권한 준비. `apk`는 미리 받아 검증한 (경로, sha256) — 다운로드는 기기 연결을 잡기 전에 한다.
 pub fn prepare(
     dev: &mut dyn ADBDeviceExt,
-    cache_dir: &Path,
-    download: bool,
+    apk: Option<&(PathBuf, String)>,
 ) -> Result<Vec<String>, String> {
     let mut log = Vec::new();
     if !installed(dev)? {
-        if !download {
+        let Some((apk, sha)) = apk else {
             return Err("SMS Import/Export 앱이 설치되어 있지 않습니다".into());
-        }
-        let apk = download_apk(cache_dir)?;
-        let (sha, _) =
-            super::verify::hash_reader(std::fs::File::open(&apk).map_err(|e| e.to_string())?)?;
+        };
         dev.install(&apk, None)
             .map_err(|e| format!("앱 설치 실패: {e}"))?;
-        // 받은 APK의 해시를 기록 — 버전 고정·검증 정책을 정하기 전까지 최소한 무엇을 설치했는지 남긴다
+        // 설치한 APK(GitHub 다이제스트·서명 핀 검증 완료)의 해시를 기록한다
         log.push(format!(
             "설치: {} (sha256 {})",
             apk.file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default(),
-            sha.get(..16).unwrap_or(&sha)
+            sha.get(..16).unwrap_or(sha)
         ));
     } else {
         log.push("이미 설치됨".into());
@@ -209,7 +232,12 @@ fn item_for(name: &str) -> Option<&'static str> {
 }
 
 /// 수집 — 임시 폴더의 파일을 전부 받아(smsie/) 항목 기록 병합. 비었으면 not_ready.
-pub fn collect(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> Result<CollectState, String> {
+/// `selected`(sms/calllog 중 백업에 고른 항목)가 모두 완료되면 기기 임시 폴더를 지운다.
+pub fn collect(
+    dev: &mut dyn ADBDeviceExt,
+    backup_root: &Path,
+    selected: &[&str],
+) -> Result<CollectState, String> {
     let tmp_dir = DEVICE_TMP_DIR.to_string();
     let entries = dev
         .list(&tmp_dir)
@@ -226,48 +254,26 @@ pub fn collect(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> Result<Collect
     if found.is_empty() {
         return Ok(CollectState::NotReady);
     }
-    let target = super::paths::write_target(backup_root, "smsie/export.tmp")?;
-    let dir = target.parent().expect("smsie 부모");
-    std::fs::create_dir_all(dir).map_err(|e| format!("smsie 폴더 생성 실패: {e}"))?;
     let mut records: Vec<(String, ItemRecord)> = vec![
-        ("sms".into(), empty_item("sms")),
-        ("calllog".into(), empty_item("calllog")),
+        ("sms".into(), ItemRecord::new("sms", ItemKind::SmsIe)),
+        (
+            "calllog".into(),
+            ItemRecord::new("calllog", ItemKind::SmsIe),
+        ),
     ];
     for (name, size, mtime) in found {
         let remote = format!("{DEVICE_TMP_DIR}/{name}");
         let local_rel = format!("smsie/{name}");
-        let dest = crate::backup::paths::write_target(backup_root, &local_rel)?;
-        let file = std::fs::File::create(&dest).map_err(|e| format!("{name} 생성 실패: {e}"))?;
-        let mut writer = HashingWriter::new(file);
-        let mut entry = FileEntry {
-            remote: remote.clone(),
-            local: local_rel.clone(),
+        // 파일 백업과 같은 경로 — 해시·mtime 보존, 4GiB 이상 크기(stat 재확인)·실패 시 반쪽 파일 정리.
+        // 받을 수 없는 이름 등 개별 실패는 그 파일의 오류로 남기고 나머지는 계속 받는다.
+        let entry = super::puller::pull_to_disk(
+            dev,
+            &remote,
+            Path::new(&local_rel),
+            backup_root,
             size,
             mtime,
-            sha256: None,
-            quarantined: false,
-            error: None,
-        };
-        match dev.pull(&remote, &mut writer) {
-            Ok(()) => {
-                let (file, sha256, written) = writer.finish();
-                if let Err(e) = file.sync_all() {
-                    entry.error = Some(format!("디스크 저장 실패: {e}"));
-                }
-                drop(file);
-                if written != size {
-                    let _ = std::fs::remove_file(&dest);
-                    entry.error = Some(format!("크기 불일치: 예상 {size}B, 수신 {written}B"));
-                } else if entry.error.is_none() {
-                    entry.sha256 = Some(sha256);
-                }
-            }
-            Err(e) => {
-                drop(writer);
-                let _ = std::fs::remove_file(&dest);
-                entry.error = Some(format!("전송 실패: {e}"));
-            }
-        }
+        );
         match item_for(&name) {
             Some(id) => {
                 let rec = records
@@ -312,11 +318,14 @@ pub fn collect(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> Result<Collect
             rec.errors.push("이 항목의 산출 파일을 찾지 못했습니다 — 앱에서 해당 데이터를 내보냈는지 확인해 주세요".into());
         }
     }
-    // 임시 폴더 정리 — 고정 경로만
-    if records
-        .iter()
-        .all(|(_, item)| item.status == ItemStatus::Done)
-    {
+    // 임시 폴더 정리 — 고정 경로만. 고른 항목이 전부 끝났을 때(문자만 고른 경우도) 지워
+    // 개인 데이터 사본이 기기에 남거나 다음 "그 외 전체" 백업에 섞이지 않게 한다
+    let selected_done = !selected.is_empty()
+        && records
+            .iter()
+            .filter(|(id, _)| selected.contains(&id.as_str()))
+            .all(|(_, item)| item.status == ItemStatus::Done);
+    if selected_done {
         let _ = run(dev, &format!("rm -rf {DEVICE_TMP_DIR}"));
     }
     Ok(CollectState::Records(records))
@@ -327,19 +336,6 @@ pub enum CollectState {
     NotReady,
     /// 항목 기록 — manifest에 병합한다
     Records(Vec<(String, ItemRecord)>),
-}
-
-fn empty_item(id: &str) -> ItemRecord {
-    ItemRecord {
-        id: id.into(),
-        kind: ItemKind::SmsIe,
-        status: ItemStatus::Pending,
-        files: 0,
-        bytes: 0,
-        entries: vec![],
-        artifacts: vec![],
-        errors: vec![],
-    }
 }
 
 /// 복원 준비 — 파일 전송 + 기본 SMS 앱 역할 부여(비행기 모드 안내는 프론트).
@@ -449,6 +445,36 @@ pub fn restore_finish(dev: &mut dyn ADBDeviceExt, state_dir: &Path) -> Result<Ve
 mod tests {
     use super::*;
 
+    #[test]
+    fn release_asset_requires_digest_official_origin_and_prefers_standard() {
+        let base = "https://github.com/tmo1/sms-ie/releases/download/v2.11.1";
+        let asset = |name: &str, url: String, digest: bool| {
+            let mut a = serde_json::json!({"name": name, "browser_download_url": url, "size": 100});
+            if digest {
+                a["digest"] = format!("sha256:{}", "cd".repeat(32)).into();
+            }
+            a
+        };
+        let legacy = "com.github.tmo1.sms_ie-v2.11.1-legacy-release.apk";
+        let standard = "com.github.tmo1.sms_ie-v2.11.1-standard-release.apk";
+        let json = serde_json::json!({"tag_name": "v2.11.1", "assets": [
+            asset(legacy, format!("{base}/{legacy}"), true),
+            asset(standard, format!("{base}/{standard}"), true),
+        ]});
+        let (tag, picked) = pick_asset(&json).unwrap();
+        assert_eq!(tag, "v2.11.1");
+        assert_eq!(picked.name, standard);
+        assert_eq!(picked.sha256, "cd".repeat(32));
+        // 다이제스트 없음·다른 출처·legacy만 있음은 거부
+        let no_digest = serde_json::json!({"tag_name": "v2.11.1", "assets": [asset(standard, format!("{base}/{standard}"), false)]});
+        assert!(pick_asset(&no_digest).is_err());
+        let foreign = serde_json::json!({"tag_name": "v2.11.1", "assets": [asset(standard, "https://example.com/a.apk".into(), true)]});
+        assert!(pick_asset(&foreign).is_err());
+        let only_legacy = serde_json::json!({"tag_name": "v2.11.1", "assets": [asset(legacy, format!("{base}/{legacy}"), true)]});
+        assert!(pick_asset(&only_legacy).is_err());
+    }
+    use crate::backup::model::FileEntry;
+
     fn dev_ready() -> FakeADBDevice {
         let mut d = FakeADBDevice::new();
         d.answer_shell(
@@ -479,7 +505,7 @@ mod tests {
             0o644,
         );
         let tmp = tempfile::tempdir().unwrap();
-        match collect(&mut d, tmp.path()).unwrap() {
+        match collect(&mut d, tmp.path(), &["sms", "calllog"]).unwrap() {
             CollectState::Records(recs) => {
                 let sms = recs.iter().find(|(id, _)| id == "sms").unwrap();
                 let calls = recs.iter().find(|(id, _)| id == "calllog").unwrap();
@@ -509,7 +535,7 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("smsie")).unwrap();
         std::fs::write(tmp.path().join("smsie/messages-1.zip"), b"z").unwrap();
         let mut manifest = super::super::model::Manifest::new("XQ", "masked", "v", "15");
-        let mut item = empty_item("sms");
+        let mut item = ItemRecord::new("sms", ItemKind::SmsIe);
         item.status = ItemStatus::Done;
         use sha2::Digest;
         item.entries.push(FileEntry {
@@ -647,7 +673,7 @@ mod tests {
         d.add_dir(DEVICE_TMP_DIR);
         let tmp = tempfile::tempdir().unwrap();
         assert!(matches!(
-            collect(&mut d, tmp.path()).unwrap(),
+            collect(&mut d, tmp.path(), &["sms", "calllog"]).unwrap(),
             CollectState::NotReady
         ));
     }
@@ -659,12 +685,35 @@ mod tests {
         d.add_file(&format!("{DEVICE_TMP_DIR}/messages-1.zip"), b"z", 0, 0o644);
         d.add_file(&format!("{DEVICE_TMP_DIR}/unknown.json"), b"[]", 0, 0o644);
         let tmp = tempfile::tempdir().unwrap();
-        let CollectState::Records(records) = collect(&mut d, tmp.path()).unwrap() else {
+        let CollectState::Records(records) =
+            collect(&mut d, tmp.path(), &["sms", "calllog"]).unwrap()
+        else {
             panic!()
         };
         let (_, sms) = records.iter().find(|(id, _)| id == "sms").unwrap();
         assert_eq!(sms.status, ItemStatus::Partial);
         assert!(!sms.errors.is_empty());
+    }
+
+    #[test]
+    fn device_copy_is_removed_when_every_selected_item_is_done() {
+        let mut d = dev_ready();
+        d.answer_shell(&format!("rm -rf {DEVICE_TMP_DIR}"), "");
+        d.add_dir(DEVICE_TMP_DIR);
+        d.add_file(
+            &format!("{DEVICE_TMP_DIR}/messages-1.zip"),
+            b"z",
+            1700000000,
+            0o644,
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let removed = |d: &FakeADBDevice| d.shell_calls.iter().any(|c| c.starts_with("rm -rf"));
+        // 통화 기록도 골랐다면 아직 끝나지 않았다 — 지우지 않는다
+        collect(&mut d, tmp.path(), &["sms", "calllog"]).unwrap();
+        assert!(!removed(&d));
+        // 문자만 골랐다면 끝났다 — 개인 데이터 사본을 지운다
+        collect(&mut d, tmp.path(), &["sms"]).unwrap();
+        assert!(removed(&d));
     }
 
     #[test]
@@ -679,7 +728,7 @@ mod tests {
         );
         // call-logs 없음 → calllog 항목 partial + 오류 안내
         let tmp = tempfile::tempdir().unwrap();
-        match collect(&mut d, tmp.path()).unwrap() {
+        match collect(&mut d, tmp.path(), &["sms", "calllog"]).unwrap() {
             CollectState::Records(recs) => {
                 let calls = recs.iter().find(|(id, _)| id == "calllog").unwrap();
                 assert_eq!(calls.1.status, ItemStatus::Partial);

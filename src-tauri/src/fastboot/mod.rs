@@ -7,11 +7,8 @@ pub mod transport;
 
 use protocol::FastbootDevice;
 use serde::Serialize;
-use std::io::{Read, Write};
-use std::sync::Mutex;
+use std::io::Write;
 use tauri::Emitter;
-
-static DEVICE_OPERATION: Mutex<()> = Mutex::new(());
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -94,10 +91,8 @@ fn with_device<T>(
     secret: Option<String>,
     work: impl FnOnce(FastbootDevice<transport::RusbTransport>) -> Result<T, String>,
 ) -> Result<T, String> {
+    // 기기 변경 실행권(전역 단일)을 작업이 끝날 때까지 쥔다 — 별도 fastboot 잠금은 필요 없다
     let _operation = operation;
-    let _guard = DEVICE_OPERATION
-        .try_lock()
-        .map_err(|_| "다른 fastboot 작업이 진행 중입니다")?;
     let t = transport::RusbTransport::open()?;
     let log_secret = secret.clone();
     let dev = FastbootDevice::new(
@@ -202,36 +197,14 @@ pub async fn relock_gate_check(
     .await
 }
 
-/// 양쪽 슬롯을 대상으로 하는 기본 파티션명만 허용한다.
+/// 이 도구가 기록하는 파티션은 부트 이미지 두 가지뿐이다(루팅·언루팅). 슬롯 접미사 없이 받는다.
+/// 그 외 파티션(abl·xbl·vbmeta 등)은 잘못 기록하면 복구할 수 없으므로 직접 호출도 거부한다.
 fn validate_base_partition(partition: &str) -> Result<(), String> {
-    if partition.is_empty()
-        || partition.len() > 48
-        || partition.ends_with("_a")
-        || partition.ends_with("_b")
-        || !partition
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
-    {
-        return Err("슬롯 접미사 없는 기본 파티션명을 입력해 주세요".into());
+    if matches!(partition, "boot" | "init_boot") {
+        Ok(())
+    } else {
+        Err("지원하는 파티션은 boot·init_boot뿐입니다(슬롯 접미사 없이)".into())
     }
-    Ok(())
-}
-
-/// 파일은 blocking 스레드에서 읽고, 파일 크기가 변해도 최대 크기까지만 할당한다.
-fn read_image(path: &str) -> Result<Vec<u8>, String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("이미지 파일 열기 실패: {e}"))?;
-    let size = file.metadata().map_err(|e| e.to_string())?.len();
-    if size == 0 || size > protocol::MAX_DOWNLOAD {
-        return Err("이미지 크기가 허용 범위를 벗어났습니다".into());
-    }
-    let mut image = Vec::new();
-    file.take(protocol::MAX_DOWNLOAD + 1)
-        .read_to_end(&mut image)
-        .map_err(|e| e.to_string())?;
-    if image.is_empty() || image.len() as u64 > protocol::MAX_DOWNLOAD {
-        return Err("이미지 크기가 허용 범위를 벗어났습니다".into());
-    }
-    Ok(image)
 }
 
 #[tauri::command]
@@ -250,24 +223,16 @@ pub async fn fastboot_flash(
     validate_base_partition(&partition)?;
     let operation = crate::device_io::WriteOperation::acquire()?;
     tauri::async_runtime::spawn_blocking(move || {
-        let image = if matches!(partition.as_str(), "boot" | "init_boot") {
-            crate::boot_image::read(std::path::Path::new(&path))?
-        } else {
-            read_image(&path)?
-        };
+        let image = crate::boot_image::read(std::path::Path::new(&path))?;
         // 디스크 파일을 다시 읽지 않고 실제 전송할 버퍼를 해싱한다.
         let sha256 = crate::boot_image::sha256(&image);
-        if expected_sha256 != sha256 {
+        if !expected_sha256.eq_ignore_ascii_case(&sha256) {
             return Err("이미지가 사전 검사 후 변경됐습니다 — 기록하지 않습니다".into());
         }
         with_device(operation, app, None, move |mut d| {
-            ensure_target(&mut d, &expected_serial)?;
+            let serial = ensure_target(&mut d, &expected_serial)?;
             d.ensure_bootloader()?;
-            let serial = d
-                .getvar("serialno")?
-                .filter(|s| !s.trim().is_empty())
-                .ok_or("플래시 이력에 연결할 기기 식별값을 확인할 수 없습니다")?;
-            let device_key = device_key(serial.trim());
+            let device_key = device_key(&serial);
             let slot = d
                 .getvar("current-slot")?
                 .ok_or("현재 슬롯을 확인할 수 없습니다")?;
@@ -284,39 +249,29 @@ pub async fn fastboot_flash(
                 .append(true)
                 .open(dir.join("flash-history.jsonl"))
                 .map_err(|e| format!("플래시 이력 열기 실패: {e}"))?;
-            for slot in ["_a", "_b"] {
-                let part = format!("{partition}{slot}");
-                // 미완료 시도도 남긴다. 하나의 슬롯만 완료된 경우 두 슬롯 성공으로 오인하지 않는다.
+            let mut record = |part: &str, status: &str| {
                 record_flash_history(
                     &mut history,
                     &device_key,
-                    &part,
+                    part,
                     &path,
                     image.len() as u64,
                     &sha256,
-                    "started",
-                )?;
+                    status,
+                )
+            };
+            for slot in ["_a", "_b"] {
+                let part = format!("{partition}{slot}");
+                // 미완료 시도도 남긴다. 하나의 슬롯만 완료된 경우 두 슬롯 성공으로 오인하지 않는다.
+                record(&part, "started")?;
                 match d.flash(&part, &image) {
-                    Ok(()) => record_flash_history(
-                        &mut history,
-                        &device_key,
-                        &part,
-                        &path,
-                        image.len() as u64,
-                        &sha256,
-                        "done",
-                    )?,
+                    Ok(()) => record(&part, "done")?,
                     Err(e) => {
-                        record_flash_history(
-                            &mut history,
-                            &device_key,
-                            &part,
-                            &path,
-                            image.len() as u64,
-                            &sha256,
-                            "failed",
-                        )?;
-                        return Err(e);
+                        // 이력 저장이 실패해도 기기 오류 원인은 잃지 않는다
+                        return Err(match record(&part, "failed") {
+                            Ok(()) => e,
+                            Err(h) => format!("{e} (이력 저장도 실패: {h})"),
+                        });
                     }
                 }
             }
@@ -334,6 +289,10 @@ pub async fn fastboot_reboot(
     expected_serial: String,
 ) -> Result<(), String> {
     ensure_write_enabled()?;
+    // USB를 열기 전에 대상 검사
+    if !matches!(target.as_str(), "os" | "bootloader") {
+        return Err(format!("알 수 없는 재부팅 대상: {target}"));
+    }
     let operation = crate::device_io::WriteOperation::acquire()?;
     tauri::async_runtime::spawn_blocking(move || {
         with_device(operation, app, None, move |mut d| {
@@ -345,10 +304,11 @@ pub async fn fastboot_reboot(
     .map_err(|e| format!("재부팅 스레드 오류: {e}"))?
 }
 
+/// 작업을 시작한 기기인지 확인하고, 확인된 serialno(앞뒤 공백 제거)를 돌려준다.
 fn ensure_target<T: transport::FastbootTransport>(
     d: &mut FastbootDevice<T>,
     expected: &str,
-) -> Result<(), String> {
+) -> Result<String, String> {
     if expected.trim().is_empty() {
         return Err("작업 대상 기기 식별값이 필요합니다".into());
     }
@@ -358,7 +318,7 @@ fn ensure_target<T: transport::FastbootTransport>(
     if actual.trim() != expected.trim() {
         return Err("fastboot 기기가 작업을 시작한 기기와 다릅니다".into());
     }
-    Ok(())
+    Ok(actual.trim().to_string())
 }
 
 fn record_flash_history(
@@ -390,7 +350,7 @@ mod tests {
         for (expected, actual, allowed) in [("A", "B", false), ("", "A", false), ("A", "A", true)] {
             let transport = FakeTransport::new(vec![Frame::Ok(actual), Frame::Ok("")]);
             let mut device = FastbootDevice::new(transport, Box::new(|_| {}));
-            let result = ensure_target(&mut device, expected).and_then(|()| device.reboot("os"));
+            let result = ensure_target(&mut device, expected).and_then(|_| device.reboot("os"));
             assert_eq!(result.is_ok(), allowed);
             let transport = device.into_transport();
             assert_eq!(
@@ -450,17 +410,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_slot_suffixes_and_empty_images() {
+    fn only_boot_partitions_without_slot_suffix_are_accepted() {
         assert!(validate_base_partition("init_boot").is_ok());
+        assert!(validate_base_partition("boot").is_ok());
         assert!(validate_base_partition("boot_a").is_err());
         assert!(validate_base_partition("boot;reboot").is_err());
-        let image = tempfile::NamedTempFile::new().unwrap();
-        assert!(read_image(image.path().to_str().unwrap()).is_err());
-        std::fs::write(image.path(), b"image").unwrap();
-        assert_eq!(
-            read_image(image.path().to_str().unwrap()).unwrap(),
-            b"image"
-        );
+        // 부트 이미지가 아닌 파티션은 기록 대상이 아니다
+        for other in ["abl", "xbl", "vbmeta", "modem", ""] {
+            assert!(validate_base_partition(other).is_err());
+        }
     }
 
     #[test]

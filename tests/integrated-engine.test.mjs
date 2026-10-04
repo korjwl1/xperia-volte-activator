@@ -25,7 +25,7 @@ beforeEach(() => {
     magiskPatch: async (...args) => { calls.patch.push(args); return { ok: true, value: { path: "patched.img", patchedSha256: patchHash, origSha256: sourceHash, bytes: 4096, log: [] } }; },
     fastbootFlash: async (...args) => { calls.flash.push(args); return { ok: true, value: null }; },
     rootReboot: async () => ({ ok: true, value: null }),
-    fastbootReboot: async () => { calls.reboot++; return true; },
+    fastbootReboot: async () => { calls.reboot++; return { ok: true, value: null }; },
     magiskInstall: async () => { calls.install++; return { ok: true, value: null }; },
     rootCheck: async () => true,
     backupCancel: async () => true,
@@ -33,7 +33,7 @@ beforeEach(() => {
 });
 function wizard(id = "root") {
   const w = new Wizard();
-  w.device = { model: "XQ-DQ44", productName: "Xperia", serial: "A", serialMasked: "A****", firmware: "current", bootloader: "unlocked", root: false, state: "device", prep: { developerOptions: true, usbDebugging: true, oemUnlockAllowed: true }, sims: [] };
+  w.device = { model: "XQ-DQ44", productName: "Xperia", serial: "A", serialMasked: "A****", firmware: "current", bootloader: "unlocked", rooted: false, state: "device", prep: { developerOptions: true, usbDebugging: true, oemUnlockAllowed: true }, sims: [] };
   w.firmware = { path: "stock.img", fingerprint: "Sony/current", partition: "init_boot", version: "current", imageBytes: 4096, downloadedBytes: 4096 };
   w.steps = [{ id, enabled: true, manual: [] }];
   w.runSteps = [{ id, title: id, status: "running", progress: 0, logs: [], manualDone: 0 }];
@@ -89,7 +89,7 @@ test("cancellation during log registration prevents the next device write", asyn
   assert.equal(calls.patch.length, 0); assert.equal(calls.flash.length, 0); assert.equal(calls.unsubscribed, 2);
 });
 test("reboot failure blocks install and root/unroot completion", async () => {
-  api.fastbootReboot = async () => false;
+  api.fastbootReboot = async () => ({ ok: false, error: "no OKAY" });
   for (const id of ["root", "unroot"]) {
     const w = wizard(id); await (id === "root" ? w.runRealRoot(w.runSteps[0]) : w.runRealUnroot(w.runSteps[0]));
     assert.equal(w.runSteps[0].status, "failed");
@@ -133,4 +133,37 @@ test("polling cancellation discards late success without overlapping requests", 
   let active = true, queries = 0; const pending = deferred();
   const result = waitUntil(() => { queries++; return pending.promise; }, () => active, 300, 2);
   active = false; assert.equal(await result, false); pending.resolve(true); assert.equal(queries, 1);
+});
+test("engine-added prompts open at their own position so earlier prompts are not shown again", async () => {
+  const w = wizard("backup"); w.steps[0].manual = ["backup-notice"]; w.backupPath = "backup-root"; w.backupDir = "dir";
+  w.groups = [{ id: "messages", items: [{ id: "sms", checked: true }] }];
+  api.onBackupProgress = async () => () => {};
+  api.backupRun = async () => ({ ok: true, value: { dir: "dir", complete: false, files: 0, bytes: 0, errors: [], items: [] } });
+  await w.runRealBackup(w.runSteps[0]);
+  assert.deepEqual(w.steps[0].manual, ["backup-notice", "smsie-export"]);
+  assert.equal(w.runSteps[0].manualDone, 1); assert.equal(w.manualCurrent.id, "smsie-export");
+});
+test("resume is refused while engine work is in flight, and device writes block closing", async () => {
+  const w = wizard(), work = deferred(); let begun = 0; w.begin = () => begun++;
+  w.dispatchEngine(() => work.promise);
+  w.resumeRun(); assert.equal(begun, 0); assert.equal(w.runInDanger, true);
+  work.resolve(); await new Promise(resolve => setTimeout(resolve, 0));
+  w.resumeRun(); assert.equal(begun, 1); assert.equal(w.runInDanger, false);
+});
+test("late engine work cannot complete a step that already failed", async () => {
+  const w = wizard(), check = deferred(); api.bootImageCheck = () => check.promise;
+  const run = w.runRealRoot(w.runSteps[0]); w.failStep("stopped"); check.resolve({ ok: true, value: sourceHash }); await run;
+  assert.equal(w.runSteps[0].status, "failed"); assert.equal(calls.patch.length, 0);
+});
+test("auto-downloaded firmware is used when the manually chosen folder failed its check", async () => {
+  const w = wizard(); w.firmwareDir = "bad-folder"; w.firmwareDirInfo = null;
+  await w.runRealRoot(w.runSteps[0]); assert.equal(calls.patch[0][0].imagePath, "stock.img");
+});
+test("acknowledging without an open prompt does not advance the prompt counter", () => {
+  const w = wizard(); w.ackManual(true); assert.equal(w.runSteps[0].manualDone, 0);
+});
+test("backend reboot errors reach the failure message", async () => {
+  api.fastbootReboot = async () => ({ ok: false, error: "FAIL reboot refused" });
+  const w = wizard(); await w.runRealRoot(w.runSteps[0]);
+  assert.equal(w.runSteps[0].status, "failed"); assert.match(w.stepError, /FAIL reboot refused/);
 });

@@ -38,7 +38,10 @@ pub struct FakeADBDevice {
     pub ignore_role_changes: bool,
     pub fail_shell: BTreeSet<String>,
     pub shell_exit_codes: BTreeMap<String, u8>,
+    /// 전송 계층 상태 None(USB 직접 연결처럼) — 종료 코드 표식은 그대로 출력된다
     pub shell_unknown_status: BTreeSet<String>,
+    /// 종료 코드 표식 없이 출력이 끊긴 것처럼 응답
+    pub shell_truncated: BTreeSet<String>,
     /// 인터랙티브 셸(shell(reader, writer)) 기록 — 명령 → stdin으로 받은 바이트
     pub shell_streams: Vec<(String, Vec<u8>)>,
     /// 대화형 셸이 stdin을 소비하는 최대 바이트(기본 무제한)
@@ -55,6 +58,10 @@ pub struct FakeADBDevice {
     pub spool_dir: Option<std::path::PathBuf>,
     /// spool_dir 사용 시 (명령, 받은 파일)
     pub spooled: Vec<(String, std::path::PathBuf)>,
+    /// exec 출력을 별도 스레드가 이만큼 늦게 쓴다(실제 adb_client의 비동기 수신 모의)
+    pub exec_output_delay: Option<std::time::Duration>,
+    /// exec 출력 스트림이 닫히지 않는다(응답 없는 기기 모의)
+    pub exec_never_closes: bool,
 }
 
 impl FakeADBDevice {
@@ -113,27 +120,22 @@ impl FakeADBDevice {
     }
 }
 
-impl ADBDeviceExt for FakeADBDevice {
-    fn shell_command(
+impl FakeADBDevice {
+    /// 표식 처리 전 응답 규칙. 종료 코드는 항상 Some(code)로 돌려준다.
+    fn shell_answer(
         &mut self,
-        command: &dyn AsRef<str>,
-        mut stdout: Option<&mut dyn Write>,
-        mut stderr: Option<&mut dyn Write>,
-    ) -> Result<Option<u8>, RustADBError> {
-        let cmd = command.as_ref();
-        self.shell_calls.push(cmd.to_string());
+        cmd: &str,
+        out: &mut Vec<u8>,
+        err: &mut Vec<u8>,
+    ) -> Result<u8, RustADBError> {
         if self.fail_shell.iter().any(|prefix| cmd.starts_with(prefix)) {
-            if let Some(err) = stderr.as_deref_mut() {
-                err.write_all(b"injected shell failure")?;
-            }
-            return Ok(Some(1));
+            err.write_all(b"injected shell failure")?;
+            return Ok(1);
         }
         if let Some(holder) = &mut self.sms_role_holder {
             if cmd == "cmd role get-role-holders android.app.role.SMS" {
-                if let Some(out) = stdout.as_deref_mut() {
-                    out.write_all(holder.as_deref().unwrap_or("").as_bytes())?;
-                }
-                return Ok(Some(0));
+                out.write_all(holder.as_deref().unwrap_or("").as_bytes())?;
+                return Ok(0);
             }
             if let Some(package) =
                 cmd.strip_prefix("cmd role add-role-holder android.app.role.SMS ")
@@ -141,13 +143,13 @@ impl ADBDeviceExt for FakeADBDevice {
                 if !self.ignore_role_changes {
                     *holder = Some(package.into());
                 }
-                return Ok(Some(0));
+                return Ok(0);
             }
             if cmd.starts_with("cmd role remove-role-holder android.app.role.SMS ") {
                 if !self.ignore_role_changes {
                     *holder = None;
                 }
-                return Ok(Some(0));
+                return Ok(0);
             }
         }
         if let Some((_, answer)) = self
@@ -155,19 +157,41 @@ impl ADBDeviceExt for FakeADBDevice {
             .iter()
             .find(|(p, _)| cmd.starts_with(p.as_str()))
         {
-            if let Some(out) = stdout.as_deref_mut() {
-                out.write_all(answer.as_bytes())?;
-            }
-            return Ok(if self.shell_unknown_status.contains(cmd) {
-                None
-            } else {
-                Some(self.shell_exit_codes.get(cmd).copied().unwrap_or(0))
-            });
+            out.write_all(answer.as_bytes())?;
+            return Ok(self.shell_exit_codes.get(cmd).copied().unwrap_or(0));
         }
-        if let Some(err) = stderr.as_deref_mut() {
-            write!(err, "unknown command: {cmd}")?;
+        write!(err, "unknown command: {cmd}")?;
+        Ok(1)
+    }
+}
+
+impl ADBDeviceExt for FakeADBDevice {
+    fn shell_command(
+        &mut self,
+        command: &dyn AsRef<str>,
+        stdout: Option<&mut dyn Write>,
+        stderr: Option<&mut dyn Write>,
+    ) -> Result<Option<u8>, RustADBError> {
+        // device_io::shell_run이 붙인 종료 코드 표식을 떼고 원래 명령으로 응답·기록한다
+        let full = command.as_ref();
+        let marker = format!("\necho {}$?", crate::device_io::RC_MARK);
+        let (cmd, wrapped) = match full.strip_suffix(marker.as_str()) {
+            Some(base) => (base.to_string(), true),
+            None => (full.to_string(), false),
+        };
+        self.shell_calls.push(cmd.clone());
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let status = self.shell_answer(&cmd, &mut out, &mut err)?;
+        if wrapped && !self.shell_truncated.contains(&cmd) {
+            writeln!(out, "{}{status}", crate::device_io::RC_MARK)?;
         }
-        Ok(Some(1))
+        if let Some(w) = stdout {
+            w.write_all(&out)?;
+        }
+        if let Some(w) = stderr {
+            w.write_all(&err)?;
+        }
+        Ok((!self.shell_unknown_status.contains(&cmd)).then_some(status))
     }
 
     fn shell(
@@ -218,9 +242,22 @@ impl ADBDeviceExt for FakeADBDevice {
             reader.read_to_end(&mut buf)?;
             self.shell_streams.push((base, buf));
         }
-        writer.write_all(b"Success\n")?;
+        let mut output = b"Success\n".to_vec();
         if command.contains("echo __XV_RC=") {
-            writer.write_all(format!("__XV_RC={}\n", self.exec_rc).as_bytes())?;
+            output.extend_from_slice(format!("__XV_RC={}\n", self.exec_rc).as_bytes());
+        }
+        if self.exec_never_closes {
+            // 출력 스트림이 끝나지 않는 기기 — 수집기를 해제하지 않는다
+            writer.write_all(&output)?;
+            std::mem::forget(writer);
+        } else if let Some(delay) = self.exec_output_delay {
+            // adb_client처럼 stdin 전송 직후 반환하고, 출력은 별도 스레드가 나중에 쓴다
+            std::thread::spawn(move || {
+                std::thread::sleep(delay);
+                let _ = writer.write_all(&output);
+            });
+        } else {
+            writer.write_all(&output)?;
         }
         Ok(())
     }
@@ -322,7 +359,7 @@ impl ADBDeviceExt for FakeADBDevice {
             }
         }
         // 심볼릭 링크
-        for (p, _) in &self.symlinks {
+        for p in self.symlinks.keys() {
             if Self::parent_of(p) == dir {
                 out.push(ADBListItemType::Symlink(ADBListItem {
                     name: Self::name_of(p).to_string(),

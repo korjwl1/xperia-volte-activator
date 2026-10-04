@@ -254,18 +254,28 @@ fn pick_app_sw(xml: &str) -> Result<String, String> {
 
 fn parse_chunks(xml: &str) -> Result<Vec<(u64, String)>, String> {
     let doc = roxmltree::Document::parse(xml).map_err(|e| format!("Sony 응답 해석 실패: {e}"))?;
+    // 조각 하나라도 해석하지 못하면 뒤쪽 오프셋이 모두 밀리므로 건너뛰지 않고 실패한다
     let mut chunks: Vec<(u64, u64, String)> = doc
         .descendants()
         .filter(|n| n.has_tag_name("file-chunk"))
-        .filter_map(|n| {
+        .map(|n| {
             let num = n.attribute("number")?.parse().ok()?;
             let size = child_text(n, "size")?.trim().parse().ok()?;
             Some((num, size, link_href(n, "download")?.to_string()))
         })
-        .collect();
+        .collect::<Option<_>>()
+        .ok_or("펌웨어 조각 정보가 올바르지 않습니다")?;
     chunks.sort_by_key(|c| c.0);
-    if chunks.is_empty() {
+    let Some(first) = chunks.first().map(|c| c.0) else {
         return Err("펌웨어 조각 목록이 비어 있습니다".into());
+    };
+    // 번호는 빠짐·중복 없이 연속이어야 한다
+    if chunks
+        .iter()
+        .enumerate()
+        .any(|(i, c)| first.checked_add(i as u64) != Some(c.0))
+    {
+        return Err("펌웨어 조각 번호가 연속되지 않습니다".into());
     }
     Ok(chunks.into_iter().map(|(_, s, u)| (s, u)).collect())
 }
@@ -429,49 +439,25 @@ fn read_entry(f: &mut dyn RangeRead, e: &ZipEntry) -> Result<Vec<u8>, String> {
     Ok(data)
 }
 
-/// 로컬 ZIP 파일(APK 등) — HTTP 조각과 같은 ZIP 파서를 쓴다(seek+read)
-pub(crate) struct LocalZip {
-    file: std::fs::File,
-    size: u64,
-}
+/// 메모리에 이미 읽어 검증한 ZIP(APK) — 해시를 잰 바로 그 바이트를 파싱해 바꿔치기 틈이 없다
+pub(crate) struct MemZip<'a>(pub(crate) &'a [u8]);
 
-impl LocalZip {
-    pub(crate) fn open(path: &std::path::Path) -> Result<Self, String> {
-        let file = std::fs::File::open(path).map_err(|e| format!("ZIP 파일 열기 실패: {e}"))?;
-        let size = file.metadata().map_err(|e| e.to_string())?.len();
-        if size == 0 || size > MAX_ENTRY {
-            return Err("로컬 ZIP 크기가 허용 범위를 벗어났습니다".into());
-        }
-        Ok(Self { file, size })
-    }
-}
-
-impl RangeRead for LocalZip {
+impl RangeRead for MemZip<'_> {
     fn total(&self) -> Result<u64, String> {
-        Ok(self.size)
+        Ok(self.0.len() as u64)
     }
 
     fn read_at(&mut self, offset: u64, len: u64) -> Result<Vec<u8>, String> {
-        use std::io::{Read, Seek, SeekFrom};
-        if len > MAX_ENTRY || offset.checked_add(len).is_none_or(|end| end > self.size) {
-            return Err("ZIP 읽기 범위/크기가 올바르지 않습니다".into());
-        }
-        self.file
-            .seek(SeekFrom::Start(offset))
-            .map_err(|e| format!("ZIP 탐색 실패: {e}"))?;
-        let mut buf = vec![0u8; len as usize];
-        self.file
-            .read_exact(&mut buf)
-            .map_err(|e| format!("ZIP 읽기 실패: {e}"))?;
-        Ok(buf)
+        let end = offset
+            .checked_add(len)
+            .filter(|end| len <= MAX_ENTRY && *end <= self.0.len() as u64)
+            .ok_or("ZIP 읽기 범위/크기가 올바르지 않습니다")?;
+        Ok(self.0[offset as usize..end as usize].to_vec())
     }
 }
 
-/// ZIP에서 지정한 이름의 항목들을 읽는다(전부 필수) — tail → central directory → 항목
-pub(crate) fn zip_extract_named(
-    f: &mut dyn RangeRead,
-    names: &[&str],
-) -> Result<Vec<(String, Vec<u8>)>, String> {
+/// ZIP 끝부분(최대 128 KiB) → central directory 목록. 원격(Sony 서버)·로컬(APK) 공용.
+fn read_central_directory(f: &mut dyn RangeRead) -> Result<Vec<ZipEntry>, String> {
     let total = f.total()?;
     let tail_len = total.min(128 * 1024);
     let tail_start = total - tail_len;
@@ -481,12 +467,36 @@ pub(crate) fn zip_extract_named(
         .checked_add(cd_size)
         .filter(|end| *end <= total)
         .ok_or(ZIP_BAD)?; // 범위 검증 — 값 자체는 아래 슬라이스에 사용
-    let cd = if cd_off >= tail_start {
-        tail[(cd_off - tail_start) as usize..(cd_off - tail_start + cd_size) as usize].to_vec()
+    if cd_off >= tail_start {
+        let start = (cd_off - tail_start) as usize;
+        parse_central_directory(&tail[start..start + cd_size as usize])
     } else {
-        f.read_at(cd_off, cd_size)?
-    };
-    let entries = parse_central_directory(&cd)?;
+        parse_central_directory(&f.read_at(cd_off, cd_size)?)
+    }
+}
+
+/// 조건에 맞는 항목이 정확히 하나여야 한다 — 여러 개면 어느 것을 쓸지 추측하지 않는다
+fn unique_entry<'a>(
+    entries: &'a [ZipEntry],
+    what: &str,
+    pred: impl Fn(&ZipEntry) -> bool,
+) -> Result<&'a ZipEntry, String> {
+    let mut matching = entries.iter().filter(|e| pred(e));
+    match (matching.next(), matching.next()) {
+        (Some(entry), None) => Ok(entry),
+        (None, _) => Err(format!("펌웨어에 {what}이(가) 없습니다")),
+        (Some(_), Some(_)) => Err(format!(
+            "펌웨어에 {what}이(가) 여러 개 있습니다 — 어느 것을 쓸지 정할 수 없어 중단합니다. 펌웨어 폴더를 직접 지정해 주세요"
+        )),
+    }
+}
+
+/// ZIP에서 지정한 이름의 항목들을 읽는다(전부 필수) — tail → central directory → 항목
+pub(crate) fn zip_extract_named(
+    f: &mut dyn RangeRead,
+    names: &[&str],
+) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let entries = read_central_directory(f)?;
     let mut out = Vec::with_capacity(names.len());
     let mut aggregate = 0u64;
     for name in names {
@@ -572,7 +582,7 @@ fn firmware_dir(dest: &Option<String>, model: &str, version: &str) -> Result<Pat
 
 /// 저장 전 여유 공간 확인 — 이미지 크기 + 여유분(16 MiB)
 fn ensure_space(dir: &Path, need: u64) -> Result<(), String> {
-    let need = need + 16 * 1024 * 1024;
+    let need = need.saturating_add(16 * 1024 * 1024);
     let free = fs2::available_space(dir).map_err(|e| format!("여유 공간 조회 실패: {e}"))?;
     if free < need {
         return Err(format!(
@@ -629,28 +639,28 @@ fn fetch_work(
     };
 
     // ZIP 목록: 끝 128 KiB → central directory
-    let total = f.total()?;
-    let tail_len = total.min(128 * 1024);
-    let tail_start = total - tail_len;
-    let tail = f.read_at(tail_start, tail_len)?;
-    let (cd_off, cd_size) = find_central_directory(&tail, tail_start, &mut f)?;
-    let cd_end = cd_off
-        .checked_add(cd_size)
-        .filter(|end| *end <= total)
-        .ok_or(ZIP_BAD)?;
-    let cd = if cd_off >= tail_start && cd_end <= total {
-        tail[(cd_off - tail_start) as usize..(cd_off - tail_start + cd_size) as usize].to_vec()
-    } else {
-        f.read_at(cd_off, cd_size)?
-    };
-    let entries = parse_central_directory(&cd)?;
+    let entries = read_central_directory(&mut f)?;
+
+    // 부트 이미지 .sin — 정확히 하나여야 한다(폴더 지정 경로와 같은 규칙)
+    let sin = unique_entry(&entries, &format!("{partition} 이미지"), |e| {
+        sin_name_matches(&e.name, &partition)
+    })?
+    .clone();
+    let sin_dir = sin
+        .name
+        .rsplit_once('/')
+        .map_or("", |(dir, _)| dir)
+        .to_string();
+    // 지문 대조용 update.xml — .sin과 같은 폴더의 것을 쓴다(다른 폴더의 것과 섞지 않는다)
+    let ux = unique_entry(&entries, "update.xml", |e| {
+        e.name
+            .rsplit_once('/')
+            .map_or(("", e.name.as_str()), |(d, n)| (d, n))
+            == (sin_dir.as_str(), "update.xml")
+    })?
+    .clone();
 
     // 지문 확인 — 설치된 버전이면 기기와 완전히 일치, 업데이트 대상이면 같은 기기·지역(지문 앞부분) + 대상 버전
-    let ux = entries
-        .iter()
-        .find(|e| e.name.rsplit('/').next() == Some("update.xml"))
-        .ok_or("펌웨어에 update.xml이 없습니다")?
-        .clone();
     let ux_text = String::from_utf8_lossy(&read_entry(&mut f, &ux)?).to_string();
     let fw_fp = update_xml_fingerprint(&ux_text).ok_or("펌웨어 지문을 읽을 수 없습니다")?;
     let same_device = fw_fp.split(':').next() == fingerprint.split(':').next();
@@ -663,19 +673,17 @@ fn fetch_work(
         return Err("펌웨어 지문이 기기와 맞지 않습니다 — 다른 지역/버전 펌웨어이므로 사용할 수 없습니다. 펌웨어 폴더를 직접 지정해 주세요".into());
     }
 
-    // 부트 이미지만 받기
-    let sin = entries
-        .iter()
-        .find(|e| sin_name_matches(&e.name, &partition))
-        .ok_or_else(|| format!("펌웨어에 {partition} 이미지가 없습니다"))?
-        .clone();
-
-    // 받기 전에 저장 위치·공간부터 확인 (이미지 크기 ≈ .sin 크기)
+    // 받기 전에 크기 상한·저장 위치·공간부터 확인 (이미지 크기 ≈ .sin 크기)
+    if sin.uncomp_size > MAX_ENTRY {
+        return Err("부트 이미지 크기가 상한을 넘습니다".into());
+    }
     let dir = firmware_dir(&dest, &model, &version)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("펌웨어 저장 폴더 생성 실패: {e}"))?;
     ensure_space(&dir, sin.uncomp_size)?;
 
     let img = extract_sin_image(&read_entry(&mut f, &sin)?)?;
+    // 폴더 지정 경로와 같은 이미지 검사(최소 크기 포함)
+    crate::boot_image::validate(&img)?;
     let path: PathBuf = dir.join(format!("{partition}.img"));
     crate::storage::atomic_write(&path, &img).map_err(|e| format!("부트 이미지 저장 실패: {e}"))?;
     eprintln!(
@@ -914,10 +922,8 @@ pub(crate) mod tests {
 
     #[test]
     fn duplicate_and_excessive_zip_payloads_fail_before_extraction() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("input.apk");
-        std::fs::write(&file, build_zip(&[("a", b"one"), ("a", b"two")])).unwrap();
-        assert!(zip_extract_named(&mut LocalZip::open(&file).unwrap(), &["a"]).is_err());
+        let duplicate = build_zip(&[("a", b"one"), ("a", b"two")]);
+        assert!(zip_extract_named(&mut MemZip(&duplicate), &["a"]).is_err());
         let mut bytes = build_zip(&[("a", b"one"), ("b", b"two")]);
         for offset in 0..bytes.len() - 4 {
             if bytes[offset..offset + 4] == *b"PK\x01\x02" {
@@ -925,9 +931,7 @@ pub(crate) mod tests {
                     .copy_from_slice(&(150u32 * 1024 * 1024).to_le_bytes());
             }
         }
-        std::fs::write(&file, bytes).unwrap();
-        let error =
-            zip_extract_named(&mut LocalZip::open(&file).unwrap(), &["a", "b"]).unwrap_err();
+        let error = zip_extract_named(&mut MemZip(&bytes), &["a", "b"]).unwrap_err();
         assert!(error.contains("APK"));
     }
 
@@ -964,16 +968,13 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn local_zip_extract_named_roundtrip() {
+    fn memory_zip_extract_named_roundtrip() {
         let apk = build_zip(&[
             ("lib/arm64-v8a/libbusybox.so", b"busybox-bytes"),
             ("assets/boot_patch.sh", b"#!/script"),
             ("unrelated.txt", b"skip me"),
         ]);
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("Magisk-v30.7.apk");
-        std::fs::write(&path, apk).unwrap();
-        let mut z = LocalZip::open(&path).unwrap();
+        let mut z = MemZip(&apk);
         let got = zip_extract_named(
             &mut z,
             &["lib/arm64-v8a/libbusybox.so", "assets/boot_patch.sh"],
@@ -982,7 +983,7 @@ pub(crate) mod tests {
         assert_eq!(got[0].1, b"busybox-bytes");
         assert_eq!(got[1].1, b"#!/script");
         // 누락 항목은 오류
-        let mut z2 = LocalZip::open(&path).unwrap();
+        let mut z2 = MemZip(&apk);
         assert!(zip_extract_named(&mut z2, &["lib/arm64-v8a/libmagisk.so"]).is_err());
     }
 
@@ -1132,6 +1133,26 @@ pub(crate) mod tests {
         assert!(pick_software(xml, "60.0.A.0.1")
             .unwrap_err()
             .contains("67.2.A.3.178"));
+    }
+
+    #[test]
+    fn chunk_list_must_be_complete_and_contiguous() {
+        let chunk = |n: &str, size: &str| {
+            format!(
+                r#"<file-chunk number="{n}"><size>{size}</size><link rel="download" href="https://x/{n}"/></file-chunk>"#
+            )
+        };
+        let doc = |body: String| format!("<file-chunk-info>{body}</file-chunk-info>");
+        let ok = parse_chunks(&doc(chunk("2", "20") + &chunk("1", "10"))).unwrap();
+        assert_eq!(
+            ok,
+            vec![(10, "https://x/1".into()), (20, "https://x/2".into())]
+        );
+        // 빠진 번호·중복·해석 불가 조각은 건너뛰지 않고 실패
+        assert!(parse_chunks(&doc(chunk("1", "10") + &chunk("3", "30"))).is_err());
+        assert!(parse_chunks(&doc(chunk("1", "10") + &chunk("1", "10"))).is_err());
+        assert!(parse_chunks(&doc(chunk("1", "10") + &chunk("2", "x"))).is_err());
+        assert!(parse_chunks(&doc(String::new())).is_err());
     }
 
     /// 실제 Sony 서버에서 XQ-DQ44 init_boot를 부분 다운로드 (네트워크 필요 — 수동 실행: cargo test -- --ignored live_)

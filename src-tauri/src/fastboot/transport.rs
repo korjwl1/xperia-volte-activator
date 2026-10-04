@@ -11,14 +11,17 @@ pub const FB_PROTOCOL: u8 = 0x03;
 const SONY_VID: u16 = 0x0FCE;
 /// 응답 대기(초) — DATA 본문 전송 중에는 적용하지 않는다(§9-3 유한 처리)
 pub const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+/// 기기가 오래 일하는 명령(언락 초기화·플래시 기록·본문 수신 확인)의 응답 대기.
+/// 10초 안에 끝나지 않아도 기기는 계속 진행하므로, 짧게 끊으면 성공을 실패로 기록하게 된다.
+pub const LONG_RESPONSE_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// 트레이트 — 명령 전송·응답 프레임 수신·데이터 본문 전송. 단위 테스트는 가짜로 대체.
 pub trait FastbootTransport {
     /// ASCII 명령 전송(≤64바이트)
     fn write_command(&mut self, cmd: &str) -> Result<(), String>;
     /// 응답 프레임 1개 수신 — 반환: (status 4바이트, 페이로드) 합친 원본 버퍼의 길이.
-    /// 버퍼는 최대 256바이트(fastboot 응답 상한).
-    fn read_frame(&mut self, buf: &mut [u8; 256]) -> Result<usize, String>;
+    /// 버퍼는 최대 256바이트(fastboot 응답 상한). timeout은 프레임 1개당 대기 시간.
+    fn read_frame(&mut self, buf: &mut [u8; 256], timeout: Duration) -> Result<usize, String>;
     /// DATA 본문 전송 — 호스트→기기 bulk OUT
     fn write_data(&mut self, data: &[u8]) -> Result<(), String>;
 }
@@ -146,8 +149,8 @@ impl FastbootTransport for RusbTransport {
         Ok(())
     }
 
-    fn read_frame(&mut self, buf: &mut [u8; 256]) -> Result<usize, String> {
-        match self.handle.read_bulk(self.ep_in, buf, RESPONSE_TIMEOUT) {
+    fn read_frame(&mut self, buf: &mut [u8; 256], timeout: Duration) -> Result<usize, String> {
+        match self.handle.read_bulk(self.ep_in, buf, timeout) {
             Ok(n) => Ok(n),
             Err(rusb::Error::Timeout) => Err("fastboot 응답 시간 초과".into()),
             Err(e) => Err(format!("fastboot 응답 수신 실패: {e}")),
@@ -188,25 +191,6 @@ fn write_all_data(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn partial_data_writes_preserve_every_byte() {
-        let mut sent = vec![];
-        write_all_data(b"abcdefg", |data| {
-            let n = data.len().min(2);
-            sent.extend_from_slice(&data[..n]);
-            Ok(n)
-        })
-        .unwrap();
-        assert_eq!(sent, b"abcdefg");
-        assert!(write_all_data(b"x", |_| Ok(0)).is_err());
-        assert!(write_all_data(b"x", |_| Err("timeout".into())).is_err());
-    }
-}
-
 fn has_fastboot_interface(
     dev: &rusb::Device<rusb::GlobalContext>,
     desc: &rusb::DeviceDescriptor,
@@ -227,4 +211,23 @@ fn has_fastboot_interface(
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partial_data_writes_preserve_every_byte() {
+        let mut sent = vec![];
+        write_all_data(b"abcdefg", |data| {
+            let n = data.len().min(2);
+            sent.extend_from_slice(&data[..n]);
+            Ok(n)
+        })
+        .unwrap();
+        assert_eq!(sent, b"abcdefg");
+        assert!(write_all_data(b"x", |_| Ok(0)).is_err());
+        assert!(write_all_data(b"x", |_| Err("timeout".into())).is_err());
+    }
 }

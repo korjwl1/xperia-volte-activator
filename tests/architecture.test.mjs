@@ -4,7 +4,7 @@ import path from "node:path";
 import { after, before, beforeEach, test } from "node:test";
 import { createServer } from "vite";
 
-let server, Wizard, api, flags, originalApi, originalFlags, createTransport, AsyncQueue, decodeJournal, buildPlan;
+let server, Wizard, api, flags, originalApi, originalFlags, createTransport, AsyncQueue, decodeJournal, buildPlan, stepHazard;
 before(async () => {
   server = await createServer({ server: { middlewareMode: true, watch: null, hmr: false, ws: false }, appType: "custom" });
   ({ Wizard } = await server.ssrLoadModule("/src/lib/stores/wizard.svelte.ts"));
@@ -13,7 +13,7 @@ before(async () => {
   ({ createTransport } = await server.ssrLoadModule("/src/lib/api/transport.ts"));
   ({ AsyncQueue } = await server.ssrLoadModule("/src/lib/domain/asyncQueue.ts"));
   ({ decodeJournal } = await server.ssrLoadModule("/src/lib/domain/journal.ts"));
-  ({ buildPlan } = await server.ssrLoadModule("/src/lib/domain/plan.ts"));
+  ({ buildPlan, stepHazard } = await server.ssrLoadModule("/src/lib/domain/plan.ts"));
   originalApi = { ...api };
   originalFlags = { ...flags };
 });
@@ -34,7 +34,7 @@ const deferred = () => {
 function wizard() {
   const w = new Wizard();
   w.device = { model: "XQ-DQ44", productName: "Xperia", serial: "AB123456789", serialMasked: "AB1234****",
-    firmware: "v1", bootloader: "locked", root: false, state: "device",
+    firmware: "v1", bootloader: "locked", rooted: false, state: "device",
     prep: { developerOptions: true, usbDebugging: true, oemUnlockAllowed: true }, sims: [] };
   w.begin = () => {};
   w.setGuard = () => {};
@@ -134,7 +134,7 @@ test("restore failures cannot be reported as completed and listeners are release
 });
 
 test("copy counters never mark a failed backup item as a completed checkpoint", async () => {
-  const w = wizard(); w.backupDir = "backup";
+  const w = wizard(); w.backupDir = "backup"; w.backupPath = "C:/backups";
   w.groups = [{ id: "files", items: [{ id: "dcim", checked: true }] }];
   const step = w.runSteps[0]; step.id = "backup";
   step.sub = { list: ["사진"], done: 0 };
@@ -148,6 +148,24 @@ test("copy counters never mark a failed backup item as a completed checkpoint", 
   assert.equal(step.status, "failed");
   assert.equal(step.sub.done, 0);
   assert.ok(!step.logs.some(line => line.includes("[체크포인트]")));
+});
+
+test("stopping during a backup cancels exactly that backup run", async () => {
+  const w = wizard(); w.backupDir = "backup"; w.backupPath = "C:/backups";
+  w.groups = [{ id: "files", items: [{ id: "dcim", checked: true }] }];
+  const step = w.runSteps[0]; step.id = "backup";
+  const run = deferred();
+  let runId, cancelledId = "none";
+  api.onBackupProgress = async () => () => {};
+  api.backupRun = (_serial, _items, _dest, id) => { runId = id; return run.promise; };
+  api.backupCancel = async id => { cancelledId = id; };
+  const pending = w.runRealBackup(step);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.ok(typeof runId === "string" && runId.length > 0);
+  w.abort();
+  assert.equal(cancelledId, runId);
+  run.resolve({ ok: false, error: "cancelled" });
+  await pending;
 });
 
 test("SMS preparation blocks confirmation until it succeeds and permits retry", async () => {
@@ -256,4 +274,14 @@ test("every concrete IPC command used by the facade is registered in Rust", () =
   const commands = [...facade.matchAll(/(?:invokeBackend|invokeResult)[^\n]*?\("([a-z_]+)"/g)].map(match => match[1]);
   assert.ok(commands.length >= 20);
   for (const command of commands) assert.match(backend, new RegExp("\\b\\w+::" + command + "\\b"), command);
+});
+
+test("run confirmation covers wipes, firmware, boot image writes and EFS edits", () => {
+  for (const kind of ["fw-flash", "root", "unroot", "efs"]) {
+    assert.ok(stepHazard({ kind, wipe: false }), kind);
+  }
+  assert.equal(stepHazard({ kind: "unlock", wipe: true }).short, "데이터 초기화");
+  for (const kind of ["backup", "setup", "verify", "restore"]) {
+    assert.equal(stepHazard({ kind, wipe: false }), null, kind);
+  }
 });

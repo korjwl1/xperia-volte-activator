@@ -250,8 +250,8 @@ fn status_work() -> AdbStatus {
             )),
         };
     }
-    // USB 직접 연결 수단 점검
-    match find_all_connected_adb_devices() {
+    // USB 직접 연결 수단 점검 — device_list와 같은 기준(Sony 기기만)으로 센다
+    match sony_usb_adb_devices() {
         Ok(list) if !list.is_empty() => AdbStatus {
             available: true,
             mode: "usb-direct".into(),
@@ -307,6 +307,44 @@ fn product_name(reported: &str, model: &str) -> String {
         "XQ-DE44" | "XQ-DE54" => "Xperia 5 V".into(),
         "XQ-EC72" | "XQ-EC54" | "XQ-EC44" => "Xperia 1 VI".into(),
         _ => model.to_string(),
+    }
+}
+
+/// 루팅 여부 — 프론트 TriState(true | false | "unknown")와 같은 JSON으로 보낸다
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rooted {
+    Yes,
+    No,
+    Unknown,
+}
+
+impl Serialize for Rooted {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Rooted::Yes => s.serialize_bool(true),
+            Rooted::No => s.serialize_bool(false),
+            Rooted::Unknown => s.serialize_str("unknown"),
+        }
+    }
+}
+
+/// `which su` 출력에 su 실행 파일 경로가 있는지 (USB 직접 연결은 오류 문구도 섞여 오므로 경로 형태만 인정)
+fn su_visible(su_raw: &str) -> bool {
+    su_raw
+        .lines()
+        .map(str::trim)
+        .any(|l| l.starts_with('/') && l.ends_with("/su"))
+}
+
+/// su가 보이면 루팅. 안 보여도 부트로더가 잠김으로 확정된 경우에만 "아님" —
+/// 언락 상태에서는 su를 셸에 숨긴 Magisk(앱 전용 권한 등)를 구분할 수 없어 판별 불가로 둔다.
+/// su 구간 표식이 없으면(출력 끊김) 판별 불가.
+fn root_state(su_raw: Option<&str>, bootloader: &str) -> Rooted {
+    match su_raw {
+        None => Rooted::Unknown,
+        Some(raw) if su_visible(raw) => Rooted::Yes,
+        Some(_) if bootloader == "locked" => Rooted::No,
+        Some(_) => Rooted::Unknown,
     }
 }
 
@@ -491,7 +529,7 @@ pub struct DeviceOut {
     android: String,
     mode: String,
     bootloader: String,
-    rooted: bool,
+    rooted: Rooted,
     sims: Vec<SimOut>,
     usb: UsbOut,
     /// 언락 사전 조건 (판별 불가 시 None)
@@ -531,7 +569,9 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
            | grep -E 'mPhoneId=|mMmTelCapabilities=|mImsMmTelRegistrationState|handleImsRegistered' || true; echo __DEV__;          settings get global development_settings_enabled; settings get global adb_enabled",
     )?;
     let (props_raw, rest) = raw.split_once("__SU__").unwrap_or((&raw, ""));
-    let (su_raw, rest) = rest.split_once("__ISUB__").unwrap_or((rest, ""));
+    // su 구간은 두 표식이 모두 있어야 유효(없으면 루팅 판별 불가)
+    let su_raw = rest.split_once("__ISUB__").map(|(su, _)| su);
+    let (_, rest) = rest.split_once("__ISUB__").unwrap_or((rest, ""));
     let (isub_raw, rest) = rest.split_once("__IMS__").unwrap_or((rest, ""));
     let (ims_raw, dev_raw) = rest.split_once("__DEV__").unwrap_or((rest, ""));
     let mut dev_lines = dev_raw.lines().map(|l| l.trim()).filter(|l| !l.is_empty());
@@ -557,12 +597,12 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
         serial = "unknown".into();
     }
 
-    let rooted = !su_raw.trim().is_empty();
     let bootloader = bootloader_state(
         &get("ro.boot.flash.locked"),
         &get("ro.boot.vbmeta.device_state"),
-        rooted,
+        su_raw.is_some_and(su_visible),
     );
+    let rooted = root_state(su_raw, bootloader);
 
     let sim_state = get("gsm.sim.state");
     let states: Vec<&str> = sim_state.split(',').collect();
@@ -655,7 +695,7 @@ fn placeholder(state: &str, serial: String, serial_masked: String, name: &str) -
         android: String::new(),
         mode: "android".into(),
         bootloader: "unknown".into(),
-        rooted: false,
+        rooted: Rooted::Unknown,
         sims: vec![],
         usb: UsbOut {
             topology: String::new(),
@@ -1057,7 +1097,9 @@ fn luhn_ok(n: &str) -> bool {
 pub async fn root_check(serial: Option<String>) -> Result<bool, String> {
     guarded(Duration::from_secs(30), move || {
         with_first_device(&serial, |dev| {
-            Ok(shell(dev, "su -c id 2>&1")?.contains("uid=0"))
+            // su 없음(127)·거부(1)는 조회 실패가 아니라 "루트 아님"이다
+            let out = crate::device_io::shell_run(dev, "su -c id 2>&1")?;
+            Ok(out.code == 0 && String::from_utf8_lossy(&out.stdout).contains("uid=0"))
         })
     })
     .await
@@ -1417,6 +1459,30 @@ Filesystem     1K-blocks      Used Available Use% Mounted on\n\
         assert_eq!(bootloader_state("1", "unlocked", false), "unknown");
         assert_eq!(bootloader_state("", "", false), "unknown");
         assert_eq!(bootloader_state("0", "", false), "unknown"); // 한쪽만으로는 확정하지 않음
+    }
+
+    #[test]
+    fn root_state_is_unknown_unless_su_is_seen_or_bootloader_is_locked() {
+        assert_eq!(
+            root_state(Some("/system/bin/su\n"), "unlocked"),
+            Rooted::Yes
+        );
+        assert_eq!(root_state(Some("\n"), "locked"), Rooted::No);
+        // 언락 상태에서 su가 안 보이면 셸에 숨긴 루팅과 구분할 수 없다
+        assert_eq!(root_state(Some(""), "unlocked"), Rooted::Unknown);
+        assert_eq!(root_state(Some(""), "unknown"), Rooted::Unknown);
+        // USB 직접 연결에서 섞여 오는 오류 문구는 su 경로가 아니다
+        assert_eq!(
+            root_state(Some("/system/bin/sh: which: not found\n"), "locked"),
+            Rooted::No
+        );
+        // 출력이 끊겨 su 구간이 없으면 판별 불가
+        assert_eq!(root_state(None, "locked"), Rooted::Unknown);
+        assert_eq!(
+            serde_json::to_value(Rooted::Unknown).unwrap(),
+            json!("unknown")
+        );
+        assert_eq!(serde_json::to_value(Rooted::No).unwrap(), json!(false));
     }
 
     #[test]

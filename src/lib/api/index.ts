@@ -63,9 +63,9 @@ export interface Api {
   /** 백업 시작 — 지정 폴더 아래 시작 시각 기준 폴더 생성, 절대 경로 반환 */
   backupPrepare(serial: string | undefined, dest: string): Promise<ApiResult<string>>;
   /** 백업 실행(자동 항목) — 진행은 onBackupProgress로. 실패 시 error 문구 */
-  backupRun(serial: string | undefined, items: string[], dest: string, resumeDir?: string): Promise<ApiResult<BackupSummary>>;
-  /** 진행 중 백업 취소 요청 */
-  backupCancel(): Promise<void>;
+  backupRun(serial: string | undefined, items: string[], dest: string, runId: string, resumeDir?: string): Promise<ApiResult<BackupSummary>>;
+  /** 백업 취소 요청 — runId가 있으면 그 실행만(시작 전이면 시작 즉시 멈춤), 없으면 지금 실행 중인 백업 */
+  backupCancel(runId?: string): Promise<void>;
   /** 기존 백업 폴더 완결 검사(파괴 단계 게이트용) — 폴더가 없으면 null */
   backupManifestCheck(dir: string): Promise<BackupSummary | null>;
   /** SMS Import/Export 설치·권한·임시 폴더 준비 — 로그 문구 목록 반환 */
@@ -89,8 +89,8 @@ export interface Api {
   fastbootLock(confirm: boolean, partition: string, stockPath: string, expectedSerial: string): Promise<ApiResult<UnlockResult>>;
   /** 리락 이력 진단(읽기 전용) — 진단 정상도 실제 리락을 허용하지 않음 */
   relockGateCheck(partition: string, stockPath: string, deviceKey?: string): Promise<ApiResult<RelockGate>>;
-  /** fastboot 재부팅 — os | bootloader (OKAY 확인 시 성공) */
-  fastbootReboot(target: "os" | "bootloader", expectedSerial: string): Promise<boolean>;
+  /** fastboot 재부팅 — os | bootloader (OKAY 확인 시 성공, 실패 시 백엔드 오류 문구) */
+  fastbootReboot(target: "os" | "bootloader", expectedSerial: string): Promise<ApiResult<null>>;
   /** fastboot 로그 이벤트 구독 (INFO 프레임·명령·민감값 마스킹) */
   onFastbootLog(cb: (line: string) => void): Promise<() => void>;
   /** fastboot 파티션 기록 — download → flash <partition>_a/_b (fastboot-write 게이트) */
@@ -228,13 +228,13 @@ const hybridApi: Api = {
     return await invokeResult<string>("backup_prepare", { serial: serial ?? null, dest });
   },
 
-  async backupRun(serial, items, dest, resumeDir) {
+  async backupRun(serial, items, dest, runId, resumeDir) {
     if (!REAL_STEPS.backup) return { ok: false, error: "실전 백업이 비활성화되어 있습니다" };
-    return await invokeResult<BackupSummary>("backup_run", { serial: serial ?? null, items, dest, resumeDir: resumeDir || null });
+    return await invokeResult<BackupSummary>("backup_run", { serial: serial ?? null, items, dest, resumeDir: resumeDir || null, runId });
   },
 
-  async backupCancel() {
-    await invokeBackend<null>("backup_cancel");
+  async backupCancel(runId) {
+    await invokeBackend<null>("backup_cancel", { runId: runId ?? null });
   },
 
   async backupManifestCheck(dir) {
@@ -293,8 +293,8 @@ const hybridApi: Api = {
   },
 
   async fastbootReboot(target, expectedSerial) {
-    if (!REAL_STEPS.fastboot) return false;
-    return (await invokeResult<null>("fastboot_reboot", { target, expectedSerial })).ok;
+    if (!REAL_STEPS.fastboot) return { ok: false, error: "fastboot 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<null>("fastboot_reboot", { target, expectedSerial });
   },
 
   async onFastbootLog(cb) {

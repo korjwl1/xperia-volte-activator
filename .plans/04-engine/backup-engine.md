@@ -161,6 +161,7 @@ APK 재설치(`install()`) → 파일 tar 스트리밍(fs-rest → 기명 폴더
   자동화 intent 없음(SAF 파일 선택 UI) — 하지만 설치(`install`)·권한(`pm grant READ_SMS READ_CALL_LOG READ_CONTACTS`)·
   기본 SMS 앱 역할(`cmd role add-role-holder android.app.role.SMS <pkg>`)·파일 전송은 PC에서 자동화 가능.
   APK는 GitHub Releases에서 서명 인증서 SHA-256(C1:05:E6:D9:…:BE) 공개 — 런타임 다운로드 후 지문 검증(D12 Magisk 패턴, 번들하지 않음).
+  구현(2026-10-04, `apk_verify.rs`): 릴리스 API 자산 다이제스트(SHA-256)·크기 대조 + APK Signing Block 서명자 인증서 핀(`c105e6d9…fdbe`, v2.11.1 standard-release에서 계산·openssl 교차 확인 — 위 공개 지문과 일치)을 통과해야 캐시에 저장·설치. 다이제스트 기록(`<apk>.sha256`)과 맞는 캐시만 재사용, 오프라인이면 검증된 최신 캐시만. 인증서 핀은 서명 암호 검증이 아니며 설치 시 Android가 서명을 검증한다. F-Droid 빌드(다른 키)는 해당 없음.
   주의(앱 README): 기본 SMS 앱 전환 중 수신 문자 유실 방지를 위해 비행기 모드 안내 필요.
 
 ### sms-ie 세미수동 흐름 (문자·통화 기록)
@@ -199,3 +200,15 @@ APK 재설치(`install()`) → 파일 tar 스트리밍(fs-rest → 기명 폴더
   끊기면 같은 폴더로 이어서: 끝난 항목 건너뜀, 미완료 항목은 이전 파일을 지우고 다시 받아 덮어씀, 격리 세그먼트 번호는 이어서
 - 연락처 복원: 복구 후 "연락처 가져오기" 수동 단계(연락처 앱 → 설정 → 가져오기 → .vcf → contacts-restore.vcf) + 폰 연락처 수 ≥ 백업 수 확인(contacts_restore_check)
 - 실행: XVOLTE_LIVE_BACKUP_DEST / _ITEMS / _RESUME 로 live_backup, XVOLTE_RESTORE_DRYRUN_DIR / XVOLTE_RESTORE_SPOOL 로 live_restore_dryrun (둘 다 #[ignore])
+
+## 코드 리뷰 반영 (2026-10-04, 실기기 테스트 없음 — FakeADBDevice 단위 테스트)
+
+- 복원 `exec`: adb_client는 stdin 전송 직후 반환하고 출력은 별도 스레드가 읽는다. 출력 수집기가 해제될 때(기기 명령 종료)까지 최대 300초 기다린 뒤 종료 코드 표식을 판정한다. 끝나지 않으면 실패.
+- tar 스트리밍: 헤더 크기는 manifest 기록값, 파일이 짧으면 실패(아카이브 어긋남 방지). 이름은 유닉스 경로 바이트 그대로(Windows에서 `\`가 `/`로 바뀌지 않게). 파일마다 진행률 보고. 격리 복원도 `-C /sdcard` + 상대 이름, 복원할 것이 없는 세그먼트는 기기 명령을 보내지 않는다.
+- 격리 세그먼트: 추가 실패 시 그 항목을 잘라내고 세그먼트를 닫는다. 검증은 세그먼트별 오류를 따로 모아 한 세그먼트 손상이 전체 격리 검증을 막지 않는다. 시작 시 남은 `.qtmp-*` 정리.
+- 파일명: 기기 파일명 안의 `\`·`/`는 금지 문자(격리). 다른 기기 파일이 같은 로컬 경로를 차지하면 충돌(격리). 예약 이름에 COM0/LPT0·위첨자·CONIN$/CONOUT$ 추가, 끝 공백·점을 뗀 이름으로 판정.
+- 이어서 백업: manifest `deviceKey`(SHA-256 시리얼)로 같은 기기 확인(예전 manifest는 마스킹 시리얼로 확인 후 키를 채움). 선택 항목만 재검증하고 문제는 그 항목 오류로 남긴다. 앱 목록 조회 실패는 apk 항목만 partial.
+- 연락처: `content query` 출력은 "No result found." 또는 "Row: "로 시작해야 한다(오류 문구+종료 코드 0을 연락처 0명으로 오인 금지). vcf는 원자 저장.
+- deviceidle 복원: 실제 덤프 형식 `user,<패키지>,<uid>`의 사용자 지정 항목만 재적용.
+- 문자·통화 수집: 파일 백업과 같은 pull 경로(해시·mtime·4GiB 이상 크기 재확인). 고른 항목이 모두 끝나면 기기 임시 폴더 삭제.
+- 요약: 진행 전(Pending)·사유 없는 partial 항목도 "<id>: 미완료"로 이유를 보인다. 무결성 검증에서 멈춘 복원은 문자 수동 복원을 이어 안내하지 않는다.

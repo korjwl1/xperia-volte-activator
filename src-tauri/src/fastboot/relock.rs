@@ -120,65 +120,53 @@ pub fn verify(
         };
     }
     // 다른 부트 파티션까지 건드렸다면 이 이미지 하나로 전체 부트 체인을 검증할 수 없다.
-    if history.iter().any(|h| {
-        h.device_key == device_key
-            && h.partition != format!("{partition}_a")
-            && h.partition != format!("{partition}_b")
-    }) {
+    let slots = [format!("{partition}_a"), format!("{partition}_b")];
+    if history
+        .iter()
+        .any(|h| h.device_key == device_key && !slots.contains(&h.partition))
+    {
         reasons
             .push("다른 파티션의 플래시 이력이 있습니다 — 전체 부트 체인 검증이 필요합니다".into());
     }
-    for slot in ["_a", "_b"] {
-        let part = format!("{partition}{slot}");
-        let entries: Vec<&HistoryEntry> = history
+    let slot_check = |part: &str, ok: bool, detail: &str| SlotCheck {
+        partition: partition.to_string(),
+        slot: part[partition.len()..].to_string(),
+        ok,
+        detail: detail.into(),
+    };
+    for part in &slots {
+        let last = history
             .iter()
-            .filter(|h| h.partition == part && h.device_key == device_key)
-            .collect();
-        if entries.is_empty() {
-            checked.push(SlotCheck {
-                partition: partition.to_string(),
-                slot: slot.to_string(),
-                ok: false,
-                detail: "기록 없음 — 슬롯 상태를 확인할 수 없음".into(),
-            });
-            reasons.push(format!(
-                "{part}: 최신 시도가 완료되지 않아 최종 상태가 불명확합니다"
-            ));
-            continue;
-        }
-        // 마지막 done 항목 — 그 이후 started/failed가 더 있으면 최근 시도가 실패한 것
-        let last_done = entries.last().filter(|h| h.status == "done");
-        let Some(done) = last_done else {
-            reasons.push(format!(
-                "{part}: 최신 시도가 완료되지 않아 최종 상태가 불명확합니다"
-            ));
-            checked.push(SlotCheck {
-                partition: partition.to_string(),
-                slot: slot.to_string(),
-                ok: false,
-                detail: "완료(done) 기록 없음".into(),
-            });
-            continue;
-        };
-        if done.sha256 == stock_sha {
-            checked.push(SlotCheck {
-                partition: partition.to_string(),
-                slot: slot.to_string(),
-                ok: true,
-                detail: "마지막 기록이 순정 이미지와 일치".into(),
-            });
-        } else {
-            reasons.push(format!(
-                "{part}: 마지막 기록이 순정 이미지와 다릅니다(언루팅 필요) — sha256 {}… ≠ {}…",
-                done.sha256.chars().take(8).collect::<String>(),
-                stock_sha.chars().take(8).collect::<String>(),
-            ));
-            checked.push(SlotCheck {
-                partition: partition.to_string(),
-                slot: slot.to_string(),
-                ok: false,
-                detail: "마지막 기록이 순정과 불일치".into(),
-            });
+            .rfind(|h| &h.partition == part && h.device_key == device_key);
+        // 마지막 항목이 done이어야 한다 — 그 이후 started/failed가 있으면 최근 시도가 실패한 것
+        match last {
+            None => {
+                reasons.push(format!(
+                    "{part}: 플래시 기록이 없어 슬롯 상태를 확인할 수 없습니다"
+                ));
+                checked.push(slot_check(
+                    part,
+                    false,
+                    "기록 없음 — 슬롯 상태를 확인할 수 없음",
+                ));
+            }
+            Some(entry) if entry.status != "done" => {
+                reasons.push(format!(
+                    "{part}: 최신 시도가 완료되지 않아 최종 상태가 불명확합니다"
+                ));
+                checked.push(slot_check(part, false, "완료(done) 기록 없음"));
+            }
+            Some(done) if done.sha256 == stock_sha => {
+                checked.push(slot_check(part, true, "마지막 기록이 순정 이미지와 일치"));
+            }
+            Some(done) => {
+                reasons.push(format!(
+                    "{part}: 마지막 기록이 순정 이미지와 다릅니다(언루팅 필요) — sha256 {}… ≠ {}…",
+                    done.sha256.chars().take(8).collect::<String>(),
+                    stock_sha.chars().take(8).collect::<String>(),
+                ));
+                checked.push(slot_check(part, false, "마지막 기록이 순정과 불일치"));
+            }
         }
     }
     let ok = reasons.is_empty();

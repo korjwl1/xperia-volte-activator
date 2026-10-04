@@ -1,9 +1,10 @@
 //! fastboot 프로토콜 — OKAY/FAIL/INFO/DATA 유한 상태머신(§9-3)과 명령 API.
-//! 원본 CLI 계승: `oem unlock 0x{code}` · `oem lock` · `flash <part>_a/_b` · `reboot` (src/adb.py)
+//! 원본 CLI 계승: `o        match terminal? {m unlock 0x{code}` · `oem lock` · `flash <part>_a/_b` · `reboot` (src/adb.py)
 //! INFO 프레임은 로그 콜백으로 흘리고 종결 응답(OKAY/FAIL/DATA)만 반환 — 무한 루프 방지 상한.
 
-use crate::fastboot::transport::FastbootTransport;
+use crate::fastboot::transport::{FastbootTransport, LONG_RESPONSE_TIMEOUT, RESPONSE_TIMEOUT};
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// 종결 응답 — INFO는 콜백으로 처리되어 여기 오지 않는다
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,11 +35,16 @@ impl<T: FastbootTransport> FastbootDevice<T> {
         self.transport
     }
 
-    /// 응답 읽기 — INFO는 로그로 흘리고 종결 프레임을 기다린다
-    fn read_terminal(&mut self) -> Result<Terminal, String> {
+    /// 응답 읽기 — INFO는 로그로 흘리고(on_info에도 전달) 종결 프레임을 기다린다.
+    /// timeout은 프레임 1개당 대기 시간 — INFO가 오면 다시 기다린다.
+    fn read_terminal_with(
+        &mut self,
+        timeout: Duration,
+        on_info: &mut dyn FnMut(&str),
+    ) -> Result<Terminal, String> {
         for frame in 0..=MAX_INFO_FRAMES {
             let mut buf = [0u8; 256];
-            let n = self.transport.read_frame(&mut buf)?;
+            let n = self.transport.read_frame(&mut buf, timeout)?;
             if !(4..=buf.len()).contains(&n) {
                 return Err(format!("응답이 너무 짧습니다({n}바이트)"));
             }
@@ -58,7 +64,10 @@ impl<T: FastbootTransport> FastbootDevice<T> {
                         .map_err(|_| format!("DATA 크기 해석 실패: {payload}"))?;
                     return Ok(Terminal::Data(size));
                 }
-                b"INFO" | b"TEXT" if frame < MAX_INFO_FRAMES => (self.on_log)(payload),
+                b"INFO" | b"TEXT" if frame < MAX_INFO_FRAMES => {
+                    on_info(&payload);
+                    (self.on_log)(payload);
+                }
                 b"INFO" | b"TEXT" => break,
                 other => {
                     return Err(format!(
@@ -71,8 +80,16 @@ impl<T: FastbootTransport> FastbootDevice<T> {
         Err("INFO 프레임 한도(256) 초과 — 기기가 응답을 끝내지 않습니다".into())
     }
 
+    fn read_terminal(&mut self, timeout: Duration) -> Result<Terminal, String> {
+        self.read_terminal_with(timeout, &mut |_| {})
+    }
+
     /// 단일 명령 → 종결 응답 (INFO는 로그)
     fn command(&mut self, cmd: &str) -> Result<Terminal, String> {
+        self.command_with(cmd, RESPONSE_TIMEOUT)
+    }
+
+    fn command_with(&mut self, cmd: &str, timeout: Duration) -> Result<Terminal, String> {
         // 프로토콜 콜백 자체에도 언락 코드를 노출하지 않는다.
         let logged = if cmd.starts_with("oem unlock ") {
             "oem unlock [마스킹]"
@@ -81,7 +98,7 @@ impl<T: FastbootTransport> FastbootDevice<T> {
         };
         (self.on_log)(format!("> {logged}"));
         self.transport.write_command(cmd)?;
-        let t = self.read_terminal()?;
+        let t = self.read_terminal(timeout)?;
         if ["imei", "meid", "serialno", "serial-number"]
             .iter()
             .any(|key| cmd.to_ascii_lowercase().contains(key))
@@ -99,7 +116,11 @@ impl<T: FastbootTransport> FastbootDevice<T> {
 
     /// 성공 필수 명령 — FAIL을 오류로 변환
     fn expect_ok(&mut self, cmd: &str) -> Result<String, String> {
-        match self.command(cmd)? {
+        self.expect_ok_with(cmd, RESPONSE_TIMEOUT)
+    }
+
+    fn expect_ok_with(&mut self, cmd: &str, timeout: Duration) -> Result<String, String> {
+        match self.command_with(cmd, timeout)? {
             Terminal::Ok(v) => Ok(v),
             Terminal::Fail(r) => Err(format!("기기 거부(FAIL): {r}")),
             Terminal::Data(_) => Err("예상치 못한 DATA 응답".into()),
@@ -111,37 +132,24 @@ impl<T: FastbootTransport> FastbootDevice<T> {
         (self.on_log)("> getvar:all".into());
         self.transport.write_command("getvar:all")?;
         let mut vars = HashMap::new();
-        for frame in 0..=MAX_INFO_FRAMES {
-            let mut buf = [0u8; 256];
-            let n = self.transport.read_frame(&mut buf)?;
-            if !(4..=buf.len()).contains(&n) {
-                return Err(format!("응답이 너무 짧습니다({n}바이트)"));
+        let terminal = self.read_terminal_with(RESPONSE_TIMEOUT, &mut |payload| {
+            // "(bootloader)  key: value" / "key: value" 모두 허용
+            let line = payload.trim_start_matches("(bootloader)").trim();
+            // 슬롯 변수의 이름에도 ':'가 있다: slot-successful:a: yes.
+            if let Some((k, v)) = line.split_once(": ").or_else(|| line.rsplit_once(':')) {
+                vars.insert(k.trim().to_string(), v.trim().to_string());
             }
-            let status = &buf[..4];
-            let payload = String::from_utf8_lossy(&buf[4..n]).trim().to_string();
-            match status {
-                b"INFO" | b"TEXT" if frame < MAX_INFO_FRAMES => {
-                    (self.on_log)(payload.clone());
-                    // "(bootloader)  key: value" / "key: value" 모두 허용
-                    let line = payload.trim_start_matches("(bootloader)").trim();
-                    // 슬롯 변수의 이름에도 ':'가 있다: slot-successful:a: yes.
-                    if let Some((k, v)) = line.split_once(": ").or_else(|| line.rsplit_once(':')) {
-                        vars.insert(k.trim().to_string(), v.trim().to_string());
-                    }
-                }
-                b"INFO" | b"TEXT" => break,
-                b"OKAY" => return Ok(vars),
-                b"FAIL" => return Err(format!("getvar:all 거부: {payload}")),
-                b"DATA" => return Err("getvar에 DATA 응답(비정상)".into()),
-                other => {
-                    return Err(format!(
-                        "알 수 없는 응답: {}",
-                        String::from_utf8_lossy(other)
-                    ))
-                }
-            }
+        });
+        match terminal.map_err(|e| {
+            e.replace(
+                "기기가 응답을 끝내지 않습니다",
+                "getvar:all이 끝나지 않습니다",
+            )
+        })? {
+            Terminal::Ok(_) => Ok(vars),
+            Terminal::Fail(payload) => Err(format!("getvar:all 거부: {payload}")),
+            Terminal::Data(_) => Err("getvar에 DATA 응답(비정상)".into()),
         }
-        Err("INFO 프레임 한도(256) 초과 — getvar:all이 끝나지 않습니다".into())
     }
 
     /// 개별 getvar — OKAY value / FAIL → None
@@ -175,7 +183,8 @@ impl<T: FastbootTransport> FastbootDevice<T> {
     /// 부트로더 언락 — Sony 전용 형식 `oem unlock 0x{code}` (원본 adb.py oemUnlock 계승)
     pub fn oem_unlock(&mut self, code: &str) -> Result<(), String> {
         validate_unlock_code(code)?;
-        match self.command(&format!("oem unlock 0x{code}"))? {
+        // Sony는 이 응답 전에 사용자 데이터를 초기화한다 — 긴 대기
+        match self.command_with(&format!("oem unlock 0x{code}"), LONG_RESPONSE_TIMEOUT)? {
             Terminal::Ok(_) => Ok(()),
             Terminal::Fail(r) => Err(format!("언락 거부(FAIL): {r} — 코드를 다시 확인해 주세요")),
             Terminal::Data(_) => Err("예상치 못한 DATA 응답".into()),
@@ -206,7 +215,7 @@ impl<T: FastbootTransport> FastbootDevice<T> {
         (self.on_log)(format!("> download:{len:#010x}"));
         self.transport
             .write_command(&format!("download:{len:08x}"))?;
-        match self.read_terminal()? {
+        match self.read_terminal(RESPONSE_TIMEOUT)? {
             Terminal::Data(offer) if offer == len => {}
             Terminal::Data(offer) => {
                 // 크기 불일치 — 본문을 보내면 기기 상태가 꼬일 수 있으니 즉시 중단
@@ -218,7 +227,7 @@ impl<T: FastbootTransport> FastbootDevice<T> {
             Terminal::Ok(_) => return Err("본문 없이 OKAY(비정상)".into()),
         }
         self.transport.write_data(data)?;
-        match self.read_terminal()? {
+        match self.read_terminal(LONG_RESPONSE_TIMEOUT)? {
             Terminal::Ok(_) => Ok(()),
             Terminal::Fail(r) => Err(format!("전송 후 기기 거부(FAIL): {r}")),
             Terminal::Data(_) => Err("본문 후 DATA(비정상)".into()),
@@ -241,7 +250,7 @@ impl<T: FastbootTransport> FastbootDevice<T> {
             }
         }
         self.download(image)?;
-        self.expect_ok(&format!("flash:{partition}"))?;
+        self.expect_ok_with(&format!("flash:{partition}"), LONG_RESPONSE_TIMEOUT)?;
         Ok(())
     }
 
@@ -311,6 +320,8 @@ pub mod fake {
         pub sent_cmds: Vec<String>,
         pub sent_data: Vec<u8>,
         pub frames: VecDeque<Frame>,
+        /// read_frame마다 받은 대기 시간
+        pub timeouts: Vec<std::time::Duration>,
     }
 
     impl FakeTransport {
@@ -319,6 +330,7 @@ pub mod fake {
                 sent_cmds: vec![],
                 sent_data: vec![],
                 frames: frames.into(),
+                timeouts: vec![],
             }
         }
     }
@@ -329,7 +341,12 @@ pub mod fake {
             Ok(())
         }
 
-        fn read_frame(&mut self, buf: &mut [u8; 256]) -> Result<usize, String> {
+        fn read_frame(
+            &mut self,
+            buf: &mut [u8; 256],
+            timeout: std::time::Duration,
+        ) -> Result<usize, String> {
+            self.timeouts.push(timeout);
             let Some(frame) = self.frames.pop_front() else {
                 return Err("fastboot 응답 시간 초과".into());
             };
@@ -522,6 +539,8 @@ mod tests {
         let (mut d, _) = dev_with(vec![Frame::Ok("")]);
         d.oem_unlock("1234567890abcdef").unwrap();
         assert_eq!(d.transport.sent_cmds[0], "oem unlock 0x1234567890abcdef");
+        // 초기화가 끝날 때까지 기다린다(10초 고정 대기로 성공을 실패로 기록하지 않는다)
+        assert_eq!(d.transport.timeouts, vec![LONG_RESPONSE_TIMEOUT]);
 
         let (mut bad, _) = dev_with(vec![]);
         assert!(bad.oem_unlock("0x1234").is_err()); // 0x 포함/짧음 거부
@@ -557,6 +576,15 @@ mod tests {
         assert_eq!(d.transport.sent_cmds[0], "getvar:max-download-size");
         assert_eq!(d.transport.sent_cmds[1], format!("download:{:08x}", 1024));
         assert_eq!(d.transport.sent_cmds[2], "flash:boot_a");
+        assert_eq!(
+            d.transport.timeouts,
+            vec![
+                RESPONSE_TIMEOUT,
+                RESPONSE_TIMEOUT,
+                LONG_RESPONSE_TIMEOUT,
+                LONG_RESPONSE_TIMEOUT
+            ]
+        );
         assert_eq!(d.transport.sent_data, image);
     }
 

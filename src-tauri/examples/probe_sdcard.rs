@@ -42,15 +42,25 @@ fn main() {
         return;
     }
     // USB 직접 연결 폴백 — Sony VID만
+    if server_up {
+        // 서버가 USB 인터페이스를 쥐고 있어 직접 연결은 실패한다
+        println!(
+            "adb 서버에 준비된 기기가 없습니다 — 폰에서 USB 디버깅을 허용했는지 확인해 주세요"
+        );
+        return;
+    }
     match find_all_connected_adb_devices() {
         Ok(list) if !list.is_empty() => {
-            let info = list
-                .into_iter()
-                .find(|d| d.vendor_id == 0x0FCE)
-                .expect("Sony 기기만");
-            let key = std::env::var_os("USERPROFILE")
+            let Some(info) = list.into_iter().find(|d| d.vendor_id == 0x0FCE) else {
+                println!("연결된 Sony 기기가 없습니다");
+                return;
+            };
+            let Some(key) = std::env::var_os("USERPROFILE")
                 .map(|h| std::path::PathBuf::from(h).join(".android").join("adbkey"))
-                .expect("USERPROFILE");
+            else {
+                println!("USERPROFILE을 확인할 수 없습니다");
+                return;
+            };
             match adb_client::usb::ADBUSBDevice::new_with_custom_private_key(
                 info.vendor_id,
                 info.product_id,

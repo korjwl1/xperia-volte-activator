@@ -3,10 +3,11 @@
 //! 기기 작업 폴더는 고정 경로 — rm -rf도 그 경로만.
 
 use crate::boot_image::sha256 as sha256_hex;
+use crate::device_io::shell_write;
 use crate::firmware::zip_extract_named;
 use adb_client::ADBDeviceExt;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub const WORKDIR: &str = "/data/local/tmp/xvolte-magisk";
 /// 기기 측 부트 이미지명 — 로컬 파일명과 무관한 고정명(셸 보간 없음, §12.5)
@@ -25,15 +26,12 @@ pub const APK_ENTRIES: &[(&str, &str)] = &[
 ];
 
 /// 실행 권한 필요 항목(stub.apk 제외 전부)
-const EXECUTABLES: &[&str] = &[
-    "magiskboot",
-    "magiskinit",
-    "magisk",
-    "init-ld",
-    "busybox",
-    "boot_patch.sh",
-    "util_functions.sh",
-];
+fn executables() -> impl Iterator<Item = &'static str> {
+    APK_ENTRIES
+        .iter()
+        .map(|(_, dev_name)| *dev_name)
+        .filter(|dev_name| *dev_name != "stub.apk")
+}
 
 /// 검증된 환경 변수 세트 — v30.7 실측 그대로 (계약 4번 단계)
 const PATCH_ENV: &str = "KEEPVERITY=true KEEPFORCEENCRYPT=true PATCHVBMETAFLAG=false RECOVERYMODE=false LEGACYSAR=false";
@@ -48,29 +46,25 @@ pub struct PatchOutcome {
     pub log: Vec<String>,
 }
 
-fn shell_out(dev: &mut dyn ADBDeviceExt, cmd: &str) -> Result<(String, Option<u8>), String> {
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    let code = dev
-        .shell_command(&cmd, Some(&mut out), Some(&mut err))
-        .map_err(|e| format!("{e}: {}", String::from_utf8_lossy(&err).trim()))?;
-    out.extend_from_slice(&err);
-    let text = String::from_utf8(out).map_err(|e| format!("패치 출력 UTF-8 오류: {e}"))?;
-    Ok((text, code))
+/// 출력(stdout+stderr, 손상 바이트는 대체)과 종료 코드 — 로그 보존이 목적이라 UTF-8 오류로 실패하지 않는다
+fn shell_out(dev: &mut dyn ADBDeviceExt, cmd: &str) -> Result<(String, u8), String> {
+    let out = crate::device_io::shell_run(dev, cmd)?;
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    Ok((text, out.code))
 }
 
-/// 실패 판정은 종료 코드 + stderr — 기존(settings.rs run)과 같은 규칙. 출력 문자열 휴리스틱 없음
-fn must_ok(dev: &mut dyn ADBDeviceExt, cmd: &str) -> Result<String, String> {
-    crate::device_io::shell_write(dev, cmd)
-}
-
+/// 상한을 넘는 쓰기를 거부하고 그 사실을 기억한다. adb 서버 경로의 pull은 마지막 버퍼를
+/// drop 시점에 쓰며 그 오류를 버리므로, 반환값 대신 `overflow`로 초과를 판정해야 한다.
 struct LimitedImage {
     bytes: Vec<u8>,
     max: usize,
+    overflow: bool,
 }
 impl Write for LimitedImage {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         if bytes.len() > self.max.saturating_sub(self.bytes.len()) {
+            self.overflow = true;
             return Err(std::io::Error::other(
                 "패치 결과가 원본 이미지의 최대 크기를 초과했습니다",
             ));
@@ -83,31 +77,57 @@ impl Write for LimitedImage {
     }
 }
 
-/// APK에서 패치 도구를 PC 임시 폴더로 추출 → (기기 측 이름, 로컬 경로) 목록
-pub fn extract_payloads(apk: &Path, out_dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
-    std::fs::create_dir_all(out_dir).map_err(|e| format!("추출 폴더 생성 실패: {e}"))?;
-    let mut zip = crate::firmware::LocalZip::open(apk)?;
+/// APK에서 패치 도구를 메모리로 추출 → (기기 측 이름, 내용) 목록.
+/// PC 임시 폴더를 거치지 않는다(백신의 임시 파일 격리·잔류 파일 방지).
+/// 입력은 해시·서명 검증을 마친 APK 바이트 — 검증한 내용과 실행하는 내용이 같다.
+pub fn extract_payloads(apk: &[u8]) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
+    let mut zip = crate::firmware::MemZip(apk);
     let names: Vec<&str> = APK_ENTRIES.iter().map(|(n, _)| *n).collect();
-    let entries = zip_extract_named(&mut zip, &names)?;
-    let mut out = Vec::with_capacity(entries.len());
-    for (apk_name, data) in entries {
-        let dev_name = APK_ENTRIES
-            .iter()
-            .find(|(n, _)| *n == apk_name)
-            .map(|(_, d)| d.to_string())
-            .unwrap_or_else(|| apk_name.rsplit('/').next().unwrap_or("file").to_string());
-        let path = out_dir.join(&dev_name);
-        std::fs::write(&path, &data).map_err(|e| format!("{dev_name} 기록 실패: {e}"))?;
-        out.push((dev_name, path));
+    zip_extract_named(&mut zip, &names)?
+        .into_iter()
+        .map(|(apk_name, data)| {
+            APK_ENTRIES
+                .iter()
+                .find(|(n, _)| *n == apk_name)
+                .map(|(_, dev_name)| (*dev_name, data))
+                .ok_or_else(|| format!("APK 항목이 예상과 다릅니다: {apk_name}"))
+        })
+        .collect()
+}
+
+/// 기기 측 결과 파일을 크기 확인 후 받는다. 원본보다 크면 받기 전에 거부하고,
+/// 받은 길이가 기기 측 크기와 다르면(잘림·초과) 실패한다.
+fn pull_patched(dev: &mut dyn ADBDeviceExt, remote: &str, max: usize) -> Result<Vec<u8>, String> {
+    let remote_len = dev
+        .stat(&remote)
+        .map_err(|e| format!("new-boot.img 크기 확인 실패: {e}"))?
+        .file_size as usize;
+    if remote_len > max {
+        return Err(format!(
+            "패치 결과({remote_len}B)가 원본 이미지의 최대 크기를 초과했습니다({max}B) — 파티션에 넣을 수 없습니다"
+        ));
     }
-    Ok(out)
+    let mut writer = LimitedImage {
+        bytes: Vec::with_capacity(remote_len),
+        max: remote_len,
+        overflow: false,
+    };
+    dev.pull(&remote, &mut writer)
+        .map_err(|e| format!("new-boot.img 수신 실패: {e}"))?;
+    if writer.overflow || writer.bytes.len() != remote_len {
+        return Err(format!(
+            "new-boot.img 수신 크기({}B)가 기기 측 크기({remote_len}B)와 다릅니다",
+            writer.bytes.len()
+        ));
+    }
+    Ok(writer.bytes)
 }
 
 /// 패치 실행(계약 3~5번 단계): 스테이징 → boot_patch.sh → 검증 → pull → 정리.
 /// 검증: `ANDROID!` 매직 · 크기 ≤ 원본(파티션 적합) · 해시 ≠ 원본(두 번 썼다고 성공 아님 원칙).
 pub fn run_patch(
     dev: &mut dyn ADBDeviceExt,
-    apk: &Path,
+    apk: &[u8],
     image: &Path,
     out_path: &Path,
     expected_sha256: Option<&str>,
@@ -118,26 +138,15 @@ pub fn run_patch(
     if expected_sha256.is_some_and(|hash| hash != orig_sha) {
         return Err("부트 이미지가 사전 검사 후 변경됐습니다".into());
     }
-
-    // 임시 추출 — 패치 도구 (pid+나노초 — 병렬 실행 충돌 방지)
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let extract_dir =
-        std::env::temp_dir().join(format!("xvolte-magisk-{}-{nonce}", std::process::id()));
-    let payloads = extract_payloads(apk, &extract_dir);
-    let mut staged = false;
+    // 기기를 건드리기 전에 도구 추출부터 — 손상된 APK면 기기 명령 없이 실패
+    let payloads = extract_payloads(apk)?;
     let result = (|| -> Result<PatchOutcome, String> {
-        let payloads = payloads?;
-        staged = true;
         // 정리 후 스테이징 — 고정 경로만 rm
-        must_ok(dev, &format!("rm -rf {WORKDIR}"))?;
-        must_ok(dev, &format!("mkdir -p {WORKDIR}"))?;
+        shell_write(dev, &format!("rm -rf {WORKDIR}"))?;
+        shell_write(dev, &format!("mkdir -p {WORKDIR}"))?;
         on_log(format!("작업 폴더 준비: {WORKDIR}"));
         // 도구 push
-        for (name, path) in &payloads {
-            let bytes = std::fs::read(path).map_err(|e| format!("{name} 읽기 실패: {e}"))?;
+        for (name, bytes) in &payloads {
             let remote = format!("{WORKDIR}/{name}");
             let mut reader = &bytes[..];
             dev.push(&mut reader, &remote)
@@ -152,12 +161,11 @@ pub fn run_patch(
         }
         on_log("패치 도구·부트 이미지 전송 완료".into());
         // 실행 권한
-        let execs = EXECUTABLES
-            .iter()
+        let execs = executables()
             .map(|e| format!("{WORKDIR}/{e}"))
             .collect::<Vec<_>>()
             .join(" ");
-        must_ok(dev, &format!("chmod 755 {execs}"))?;
+        shell_write(dev, &format!("chmod 755 {execs}"))?;
         // 패치 스크립트 — 종료 코드 판정(위장 성공 금지)
         let script = format!("cd {WORKDIR} && {PATCH_ENV} ./busybox sh -o standalone ./boot_patch.sh {REMOTE_BOOT_IMG}");
         on_log("> boot_patch.sh".into());
@@ -165,24 +173,14 @@ pub fn run_patch(
         for line in out.lines().filter(|l| !l.trim().is_empty()) {
             on_log(line.to_string());
         }
-        match code {
-            Some(0) => {}
-            Some(c) => {
-                return Err(format!(
-                    "boot_patch.sh 실패(종료 코드 {c}) — 출력을 확인해 주세요"
-                ))
-            }
-            None => return Err("boot_patch.sh 종료 코드를 확인하지 못했습니다".into()),
+        if code != 0 {
+            return Err(format!(
+                "boot_patch.sh 실패(종료 코드 {code}) — 출력을 확인해 주세요"
+            ));
         }
         // 결과 수신
         let remote_new = format!("{WORKDIR}/new-boot.img");
-        let mut writer = LimitedImage {
-            bytes: Vec::new(),
-            max: orig.len(),
-        };
-        dev.pull(&remote_new, &mut writer)
-            .map_err(|e| format!("new-boot.img 수신 실패: {e}"))?;
-        let buf = writer.bytes;
+        let buf = pull_patched(dev, &remote_new, orig.len())?;
         // 검증 — 매직·크기 상하한·해시. 하한 없이는 9바이트 "ANDROID!"도 통과해 버릴 수 있다
         if !buf.starts_with(b"ANDROID!") {
             return Err("패치 결과가 ANDROID! 부트 이미지가 아닙니다".into());
@@ -214,10 +212,7 @@ pub fn run_patch(
                 buf.len()
             ));
         }
-        // 저장
-        if let Some(parent) = out_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("결과 폴더 생성 실패: {e}"))?;
-        }
+        // 저장(atomic_write가 상위 폴더를 만든다)
         let output = out_path.with_file_name(format!("patched-{patched_sha}.img"));
         crate::storage::atomic_write(&output, &buf)
             .map_err(|e| format!("패치 결과 저장 실패: {e}"))?;
@@ -230,12 +225,9 @@ pub fn run_patch(
         })
     })();
     // 성공·실패 무관하게 기기 작업 폴더 정리(고정 경로)
-    if staged {
-        if let Err(error) = must_ok(dev, &format!("rm -rf {WORKDIR}")) {
-            on_log(format!("[경고] 기기 패치 작업 폴더 정리 실패: {error}"));
-        }
+    if let Err(error) = shell_write(dev, &format!("rm -rf {WORKDIR}")) {
+        on_log(format!("[경고] 기기 패치 작업 폴더 정리 실패: {error}"));
     }
-    let _ = std::fs::remove_dir_all(&extract_dir);
     result
 }
 
@@ -244,6 +236,8 @@ mod tests {
     use super::*;
     use crate::backup::fake_device::FakeADBDevice;
     use crate::firmware::tests::build_zip;
+    use std::fs::read;
+    use std::path::PathBuf;
 
     /// Magisk APK 픽스처 + 순정 이미지 셋업 (new-boot은 fake 기기 측에 심는다)
     struct Fixture {
@@ -305,7 +299,15 @@ mod tests {
         let mut d = dev_ready(&patched);
         let out = f.dir.path().join("patched.img");
         let mut logs: Vec<String> = vec![];
-        let r = run_patch(&mut d, &f.apk, &f.image, &out, None, &mut |l| logs.push(l)).unwrap();
+        let r = run_patch(
+            &mut d,
+            &read(&f.apk).unwrap(),
+            &f.image,
+            &out,
+            None,
+            &mut |l| logs.push(l),
+        )
+        .unwrap();
         // 검증
         assert_eq!(r.bytes, 4096);
         assert_ne!(r.orig_sha256, r.patched_sha256);
@@ -346,7 +348,15 @@ mod tests {
         let f = fixture(&orig);
         let mut d = dev_ready(&bad);
         let out = f.dir.path().join("patched.img");
-        let err = run_patch(&mut d, &f.apk, &f.image, &out, None, &mut |_| {}).unwrap_err();
+        let err = run_patch(
+            &mut d,
+            &read(&f.apk).unwrap(),
+            &f.image,
+            &out,
+            None,
+            &mut |_| {},
+        )
+        .unwrap_err();
         assert!(err.contains("ANDROID"));
         assert!(!out.exists());
         assert!(d
@@ -365,7 +375,15 @@ mod tests {
         let f = fixture(&orig);
         let mut d = dev_ready(&orig); // 패치 결과 == 원본
         let out = f.dir.path().join("patched.img");
-        let err = run_patch(&mut d, &f.apk, &f.image, &out, None, &mut |_| {}).unwrap_err();
+        let err = run_patch(
+            &mut d,
+            &read(&f.apk).unwrap(),
+            &f.image,
+            &out,
+            None,
+            &mut |_| {},
+        )
+        .unwrap_err();
         assert!(err.contains("동일"));
     }
 
@@ -377,7 +395,15 @@ mod tests {
         let f = fixture(&orig);
         let mut d = dev_ready(&patched);
         let out = f.dir.path().join("patched.img");
-        let err = run_patch(&mut d, &f.apk, &f.image, &out, None, &mut |_| {}).unwrap_err();
+        let err = run_patch(
+            &mut d,
+            &read(&f.apk).unwrap(),
+            &f.image,
+            &out,
+            None,
+            &mut |_| {},
+        )
+        .unwrap_err();
         assert!(err.contains("최대 크기를 초과"));
     }
 
@@ -389,7 +415,15 @@ mod tests {
         let f = fixture(&orig);
         let mut d = dev_ready(&tiny);
         let out = f.dir.path().join("patched.img");
-        let err = run_patch(&mut d, &f.apk, &f.image, &out, None, &mut |_| {}).unwrap_err();
+        let err = run_patch(
+            &mut d,
+            &read(&f.apk).unwrap(),
+            &f.image,
+            &out,
+            None,
+            &mut |_| {},
+        )
+        .unwrap_err();
         assert!(err.contains("절반보다 작습니다"));
         assert!(!out.exists());
     }
@@ -416,7 +450,15 @@ mod tests {
         std::fs::write(&image, &orig).unwrap();
         let mut d = dev_ready(&patched);
         let out = dir.path().join("patched.img");
-        run_patch(&mut d, &apk, &image, &out, None, &mut |_| {}).unwrap();
+        run_patch(
+            &mut d,
+            &read(&apk).unwrap(),
+            &image,
+            &out,
+            None,
+            &mut |_| {},
+        )
+        .unwrap();
         let script = d
             .shell_calls
             .iter()
@@ -435,7 +477,7 @@ mod tests {
         let output = fixture.dir.path().join("patched.img");
         assert!(run_patch(
             &mut device,
-            &fixture.apk,
+            &read(&fixture.apk).unwrap(),
             &fixture.image,
             &output,
             Some(&"f".repeat(64)),
@@ -447,7 +489,7 @@ mod tests {
         std::fs::write(&fixture.apk, b"corrupt APK").unwrap();
         assert!(run_patch(
             &mut device,
-            &fixture.apk,
+            &read(&fixture.apk).unwrap(),
             &fixture.image,
             &output,
             None,
@@ -468,7 +510,20 @@ mod tests {
             .map(|(n, _)| (*n, n.as_bytes()))
             .collect();
         std::fs::write(&apk, build_zip(&partial)).unwrap();
-        let out = dir.path().join("x");
-        assert!(extract_payloads(&apk, &out).is_err());
+        assert!(extract_payloads(&read(&apk).unwrap()).is_err());
+    }
+
+    #[test]
+    fn limited_image_remembers_rejected_writes() {
+        // adb 서버 경로는 마지막 버퍼의 쓰기 오류를 버린다 — 오류가 사라져도 초과는 남아야 한다
+        let mut w = LimitedImage {
+            bytes: Vec::new(),
+            max: 4,
+            overflow: false,
+        };
+        assert!(w.write(b"ABCD").is_ok());
+        let _ = w.write(b"E");
+        assert!(w.overflow);
+        assert_eq!(w.bytes, b"ABCD");
     }
 }

@@ -62,15 +62,20 @@ export interface AdbStatus {
 
 export type Profile = "clean-return" | "keep-root" | "unroot-only";
 
-export type StepKind =
-  | "backup" | "unlock" | "setup" | "root" | "efs-preflight" | "efs" | "verify" | "volte-props"
-  | "fw-download" | "fw-flash" | "fw-verify"
-  | "unroot" | "relock" | "final-verify" | "restore" | "dexopt";
+/** 진행 기록 검증(domain/journal.ts)도 이 목록을 쓴다 — 타입과 검증 목록이 어긋나지 않게 한 곳에서 정의 */
+export const STEP_KINDS = [
+  "backup", "unlock", "setup", "root", "efs-preflight", "efs", "verify", "volte-props",
+  "fw-download", "fw-flash", "fw-verify",
+  "unroot", "relock", "final-verify", "restore", "dexopt",
+] as const;
+export type StepKind = (typeof STEP_KINDS)[number];
 
-export type ManualId =
-  | "usb-debug" | "su-grant" | "magisk-patch" | "oem-toggle" | "mode-wait" | "ims-check"
-  | "unlock-code" | "firmware-select" | "backup-notice" | "flash-mode" | "ims-precheck"
-  | "smsie-export" | "smsie-import" | "contacts-import";
+export const MANUAL_IDS = [
+  "usb-debug", "su-grant", "magisk-patch", "oem-toggle", "mode-wait", "ims-check",
+  "unlock-code", "firmware-select", "backup-notice", "flash-mode", "ims-precheck",
+  "smsie-export", "smsie-import", "contacts-import",
+] as const;
+export type ManualId = (typeof MANUAL_IDS)[number];
 
 /** 수동 개입 모달 내용 — input이 있으면 입력 완료 전까지 [완료] 비활성 */
 export interface ManualPrompt {

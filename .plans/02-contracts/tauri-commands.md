@@ -18,7 +18,8 @@ invoke('device_list') → DeviceStatus[]            // ✅ 구현: adb_client �
 //   - state: "device"(준비) / "unauthorized"(USB 디버깅 허용 대기) / "offline" … — 준비 안 된 기기도 상태만 담아 반환
 //   - firmware: ro.build.id (display.id는 " release-keys" 접미어) / productName: ro.semc.product.name 우선, 없으면 모델 표
 //   - bootloader: ro.boot.flash.locked + ro.boot.vbmeta.device_state 일치 시 확정, 불일치·잠김인데 su 존재(위장 가능성)면 "unknown"
-//   - rooted: su 바이너리 존재 여부 (UI "루팅 미감지" — 부재 증명 아님)
+//   - rooted: true | false | "unknown" — su 경로가 보이면 true. 안 보여도 부트로더가 잠김으로 확정될 때만 false,
+//     언락·판별 불가 상태나 출력 끊김은 "unknown"(셸에 su를 숨긴 루팅과 구분 불가 → 리락 전 언루팅 포함)
 //   - serialMasked: 앞 6자 + **** (문자 단위)
 //   - prep: { developerOptions(settings global development_settings_enabled), usbDebugging(adb_enabled), oemUnlockAllowed(getprop sys.oem_unlock_allowed) } — 판별 불가 null
 //   - SIM state: gsm.sim.state 원값 — ABSENT=미삽입, PIN_REQUIRED 등은 그대로 전달(프론트 simStateLabel)
@@ -149,7 +150,8 @@ invoke('fastboot_lock', { confirm, partition, stockPath, expectedSerial }) → r
 invoke('relock_gate_check', { partition, stockPath, deviceKey? }) → { ok, reasons: string[], checked: [{partition, slot, ok, detail}] }
 //   기기 키 필수. 이력 없음·손상·슬롯 누락·최신 미완료는 실패. 진단 정상이어도 ok=false(리락 차단).
 invoke('fastboot_flash', { partition, path, confirm, expectedSerial, expectedSha256 }) → void
-//   전송 버퍼 해시 대조, boot/init_boot 기본 형식·크기 검사. 양쪽 슬롯 존재 확인 → download/flash → 기기별·슬롯별 이력.
+//   partition은 boot·init_boot만(그 외 파티션은 직접 호출도 거부). 전송 버퍼 해시 대조, 부트 이미지 형식·크기 검사.
+//   양쪽 슬롯 존재 확인 → download/flash → 기기별·슬롯별 이력. flash·언락 응답은 최대 300초 대기(기기 작업 중 10초로 끊지 않음).
 invoke('fastboot_reboot', { target: 'os'|'bootloader', expectedSerial }) → void
 //   언락·기록·재부팅은 fastboot serialno == expectedSerial 확인 후에만 실행한다.
 // 이벤트 'fastboot:log': string — INFO/TEXT 프레임·진행(코드·IMEI·식별정보 마스킹)
@@ -167,7 +169,9 @@ invoke('plan_generate', { profile, toggles, deviceStatus }) → PlanStep[]   // 
 ```ts
 // backup_scan_items는 설계 후보이며 현재 명령으로 등록되지 않았다.
 invoke('backup_prepare', { serial, dest }) → string  // 고유 백업 폴더 절대 경로
-invoke('backup_run', { serial, items: string[], dest, resumeDir?: string }) → BackupSummary
+invoke('backup_run', { serial, items: string[], dest, resumeDir?: string, runId: string }) → BackupSummary
+//   runId: 프론트가 실행마다 만든 식별값(crypto.randomUUID). 취소는 이 값으로 대상을 지정한다.
+// invoke('backup_cancel', { runId?: string }) → void — runId 실행만 취소(시작 전에 오면 시작 즉시 멈춤), 없으면 실행 중인 백업
 // 실행: 항목별 열거 → pull(sha256 동시 계산) → manifest 원자 저장 → quarantine 격리 → 설정·연락처 덤프 → sms-ie 산출물 수령
 // 이벤트 'backup:progress': { itemId, phase: 'scan'|'copy'|'quarantine'|'settings'|'contacts'|'smsie',
 //   file: string|null, filesDone, filesTotal, bytesDone, bytesTotal }
@@ -260,6 +264,7 @@ invoke('run_guard', { active: boolean, reason?: string }) → void
 // 메인 창 서브클래스가 보호 중 WM_QUERYENDSESSION에 FALSE 응답 → Windows가 "종료를 막고 있습니다: <사유>" 표시
 // 이벤트 'run-guard': "query"(종료 보류 — 기록 저장) | "end"(사용자가 그래도 종료 — 사유 기록)
 // 프론트: begin() 시 켬, complete/중단·오류(markStop)/창 닫기/처음으로 시 끔. 폰 확인 대기 중에는 유지
+// 단, 기기 쓰기 엔진이 아직 진행 중이면 끄지 않고 그 엔진이 끝날 때 끈다
 // 메인 창 스레드의 실제 적용/상태 확인 결과까지 기다리고 실패 시 보호 상태를 해제한다.
 ```
 

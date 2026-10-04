@@ -23,19 +23,45 @@ pub fn segments(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(out)
 }
 
-// 재시도로 같은 원본 이름이 여러 세그먼트에 있을 수 있다. 일치하는 내용만 검증에 사용한다.
+/// tar 항목의 원본 유닉스 경로("/sdcard/...") — 경로 바이트를 그대로 쓴다.
+/// Windows `Path`로 바꾸면 이름 안의 `\`가 폴더 구분자로 해석돼 다른 파일이 된다.
+pub(super) fn tar_remote<R: Read>(entry: &tar::Entry<'_, R>) -> String {
+    format!("/{}", String::from_utf8_lossy(&entry.path_bytes()))
+}
+
+/// 격리 세그먼트별 해시. 손상된 세그먼트 하나가 다른 세그먼트의 검증까지 막지 않도록
+/// 세그먼트 오류는 따로 모은다. 재시도로 같은 원본 이름이 여러 세그먼트에 있을 수 있다.
+pub(super) struct QuarantineHashes {
+    pub versions: HashMap<String, Vec<(String, u64)>>,
+    pub segment_errors: Vec<String>,
+}
+
 pub(super) fn quarantine_hashes(
     root: &Path,
     wanted: &HashSet<String>,
-) -> Result<HashMap<String, Vec<(String, u64)>>, String> {
-    let mut hashes: HashMap<String, Vec<(String, u64)>> = HashMap::new();
+) -> Result<QuarantineHashes, String> {
+    let mut out = QuarantineHashes {
+        versions: HashMap::new(),
+        segment_errors: vec![],
+    };
     for segment in segments(root)? {
-        let file = std::fs::File::open(segment).map_err(|e| e.to_string())?;
-        for (remote, versions) in archive_hashes(file, wanted)? {
-            hashes.entry(remote).or_default().extend(versions);
+        let name = segment
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let result = std::fs::File::open(&segment)
+            .map_err(|e| e.to_string())
+            .and_then(|file| archive_hashes(file, wanted));
+        match result {
+            Ok(hashes) => {
+                for (remote, versions) in hashes {
+                    out.versions.entry(remote).or_default().extend(versions);
+                }
+            }
+            Err(error) => out.segment_errors.push(format!("{name}: {error}")),
         }
     }
-    Ok(hashes)
+    Ok(out)
 }
 
 fn archive_hashes(
@@ -49,14 +75,7 @@ fn archive_hashes(
         .map_err(|e| format!("격리 tar 해석 실패: {e}"))?
     {
         let entry = entry.map_err(|e| format!("격리 tar 항목 오류: {e}"))?;
-        let remote = format!(
-            "/{}",
-            entry
-                .path()
-                .map_err(|e| e.to_string())?
-                .to_string_lossy()
-                .replace('\\', "/")
-        );
+        let remote = tar_remote(&entry);
         paths::sdcard_relative(&remote)?;
         if !entry.header().entry_type().is_file() {
             return Err("격리 tar에 일반 파일이 아닌 항목이 있습니다".into());
@@ -109,11 +128,16 @@ pub fn item_problems(root: &Path, item: &ItemRecord) -> Vec<String> {
     errors
 }
 
-pub fn verify_manifest(root: &Path, manifest: &mut Manifest) -> Vec<String> {
+/// `include`가 고른 항목만 검사 → (항목 위치, 문제 목록). 문제가 있는 항목은 Partial로 낮춘다.
+fn verify_items(
+    root: &Path,
+    manifest: &mut Manifest,
+    include: &dyn Fn(&ItemRecord) -> bool,
+) -> Vec<(usize, Vec<String>)> {
     let wanted: HashSet<String> = manifest
         .items
         .iter()
-        .filter(|item| item.status != ItemStatus::Skipped)
+        .filter(|item| item.status != ItemStatus::Skipped && include(item))
         .flat_map(|item| item.entries.iter())
         .filter(|entry| entry.quarantined && entry.error.is_none())
         .map(|entry| entry.remote.clone())
@@ -121,15 +145,14 @@ pub fn verify_manifest(root: &Path, manifest: &mut Manifest) -> Vec<String> {
     let quarantine = if !wanted.is_empty() {
         quarantine_hashes(root, &wanted)
     } else {
-        Ok(HashMap::new())
+        Ok(QuarantineHashes {
+            versions: HashMap::new(),
+            segment_errors: vec![],
+        })
     };
-    let mut problems = vec![];
-    let mut ids = HashSet::new();
-    for item in &mut manifest.items {
-        if !ids.insert(item.id.clone()) {
-            problems.push(format!("중복 항목: {}", item.id));
-        }
-        if item.status == ItemStatus::Skipped {
+    let mut out = vec![];
+    for (index, item) in manifest.items.iter_mut().enumerate() {
+        if item.status == ItemStatus::Skipped || !include(item) {
             continue;
         }
         let mut errors = item_problems(root, item);
@@ -138,23 +161,64 @@ pub fn verify_manifest(root: &Path, manifest: &mut Manifest) -> Vec<String> {
             .iter()
             .filter(|e| e.quarantined && e.error.is_none())
         {
-            match &quarantine {
-                Ok(contents)
-                    if contents.get(&entry.remote).is_some_and(|versions| {
-                        versions.iter().any(|(hash, size)| {
-                            Some(hash.as_str()) == entry.sha256.as_deref() && *size == entry.size
-                        })
-                    }) => {}
-                Ok(_) => errors.push(format!("격리 파일 누락/해시 불일치: {}", entry.remote)),
-                Err(error) => errors.push(error.clone()),
+            let q = match &quarantine {
+                Ok(q) => q,
+                Err(error) => {
+                    errors.push(error.clone());
+                    continue;
+                }
+            };
+            let found = q.versions.get(&entry.remote).is_some_and(|versions| {
+                versions.iter().any(|(hash, size)| {
+                    Some(hash.as_str()) == entry.sha256.as_deref() && *size == entry.size
+                })
+            });
+            if found {
+                continue;
             }
+            // 손상 세그먼트가 있으면 그 사유를 함께 보인다
+            errors.push(match q.segment_errors.first() {
+                Some(seg) => format!(
+                    "격리 파일 누락/해시 불일치: {} (손상 세그먼트 {seg})",
+                    entry.remote
+                ),
+                None => format!("격리 파일 누락/해시 불일치: {}", entry.remote),
+            });
         }
         if !errors.is_empty() {
             item.status = ItemStatus::Partial;
-            problems.extend(errors.into_iter().map(|e| format!("{}: {e}", item.id)));
+            out.push((index, errors));
         }
     }
+    out
+}
+
+pub fn verify_manifest(root: &Path, manifest: &mut Manifest) -> Vec<String> {
+    let mut problems = vec![];
+    let mut ids = HashSet::new();
+    for item in &manifest.items {
+        if !ids.insert(item.id.as_str()) {
+            problems.push(format!("중복 항목: {}", item.id));
+        }
+    }
+    for (index, errors) in verify_items(root, manifest, &|_| true) {
+        let id = &manifest.items[index].id;
+        problems.extend(errors.into_iter().map(|e| format!("{id}: {e}")));
+    }
     problems
+}
+
+/// 이어서 백업용 — 선택 항목만 다시 검사하고, 문제는 그 항목의 오류로 남긴다
+/// (상태만 낮추고 사유를 버리면 요약에 이유 없이 미완결로 보인다).
+pub fn verify_selected(root: &Path, manifest: &mut Manifest, selected: &[String]) {
+    for (index, errors) in verify_items(root, manifest, &|item| selected.contains(&item.id)) {
+        let item = &mut manifest.items[index];
+        for error in errors {
+            if !item.errors.contains(&error) {
+                item.errors.push(error);
+            }
+        }
+    }
 }
 
 pub fn backup_summary(root: &Path) -> Result<BackupSummary, String> {

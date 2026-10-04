@@ -6,6 +6,7 @@
 pub mod patch;
 
 use crate::adb;
+use crate::apk_verify::{self, ReleaseAsset};
 use crate::app_paths;
 use patch::PatchOutcome;
 use serde::{Deserialize, Serialize};
@@ -60,8 +61,12 @@ fn gh_get_json(url: &str) -> Result<serde_json::Value, String> {
     serde_json::from_slice(&bytes).map_err(|e| format!("릴리스 정보 해석 실패: {e}"))
 }
 
-/// GitHub 릴리스 JSON에서 `Magisk-v*.apk` 자산 선택 (디버그·기타 자산 제외)
-fn pick_asset(json: &serde_json::Value) -> Result<(String, String, String), String> {
+/// 정상 Magisk APK는 ~12MiB — 이보다 크면 비정상으로 본다(디스크·메모리 채우기 방지)
+const MAX_APK: u64 = 256 * 1024 * 1024;
+
+/// GitHub 릴리스 JSON에서 `Magisk-v*.apk` 자산 선택 (디버그·기타 자산 제외).
+/// 자산의 SHA-256 다이제스트·크기가 없으면 검증할 수 없으므로 실패한다.
+fn pick_asset(json: &serde_json::Value) -> Result<(String, ReleaseAsset), String> {
     let tag = json["tag_name"]
         .as_str()
         .ok_or("릴리스 태그를 찾을 수 없습니다")?
@@ -84,22 +89,27 @@ fn pick_asset(json: &serde_json::Value) -> Result<(String, String, String), Stri
         let Some(url) = a["browser_download_url"].as_str() else {
             continue;
         };
-        if name.starts_with("Magisk-v")
-            && name.ends_with(".apk")
-            && name.len() <= 128
-            && name
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        if is_magisk_apk_name(name)
             && url == format!("https://github.com/topjohnwu/Magisk/releases/download/{tag}/{name}")
         {
-            return Ok((tag, name.to_string(), url.to_string()));
+            let asset = apk_verify::asset_from_json(a, name, url, MAX_APK)?;
+            return Ok((tag, asset));
         }
     }
     Err("Magisk APK 자산을 찾을 수 없습니다 (릴리스 형식 변경 가능)".into())
 }
 
+fn is_magisk_apk_name(name: &str) -> bool {
+    name.starts_with("Magisk-v")
+        && name.ends_with(".apk")
+        && name.len() <= 128
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
 /// Magisk 최신 APK 확보 — 캐시 재사용(D12 패턴). 기기 무관·준비 단계(게이트 밖).
-/// 다운로드는 임시 파일에 받은 뒤 원자 교체 — 중단 시 반쪽 APK가 캐시로 오인되지 않게.
+/// 받은 바이트를 GitHub 다이제스트·서명 인증서 핀으로 검증한 뒤에만 캐시에 원자 저장한다.
 #[tauri::command]
 pub async fn magisk_prepare() -> Result<MagiskPrepareOut, String> {
     crate::tasks::blocking("Magisk 다운로드", prepare_work).await
@@ -110,56 +120,99 @@ fn prepare_work() -> Result<MagiskPrepareOut, String> {
     let _preparing = PREPARING
         .try_lock()
         .map_err(|_| "Magisk 다운로드가 이미 진행 중입니다")?;
-    /// 정상 Magisk APK는 ~12MiB — 이보다 크면 비정상으로 본다(디스크 채우기 방지)
-    const MAX_APK: u64 = 256 * 1024 * 1024;
-    let json = gh_get_json(GH_LATEST)?;
-    let (tag, name, url) = pick_asset(&json)?;
     let dir = app_paths::data_dir()
         .map(|d| d.join("magisk"))
         .ok_or("앱 데이터 폴더를 확인할 수 없습니다")?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("캐시 폴더 생성 실패: {e}"))?;
-    let path = dir.join(&name);
-    if validate_apk(&path).is_err() {
-        let mut reader = ureq::get(&url)
-            .timeout(std::time::Duration::from_secs(300))
-            .call()
-            .map_err(|e| format!("APK 다운로드 실패: {e}"))?
-            .into_reader()
-            .take(MAX_APK + 1);
-        let mut bytes = Vec::new();
-        reader
-            .read_to_end(&mut bytes)
-            .map_err(|e| format!("APK 수신 실패: {e}"))?;
-        if bytes.len() as u64 > MAX_APK {
-            return Err("다운로드한 APK가 비정상적으로 큽니다(256 MiB 초과)".into());
+    let release = gh_get_json(GH_LATEST).and_then(|json| pick_asset(&json));
+    let (version, path, bytes, sha256) = match release {
+        Ok((tag, asset)) => {
+            let path = dir.join(&asset.name);
+            let (bytes, sha256) = match apk_verify::load_cached(
+                &path,
+                Some(&asset.sha256),
+                apk_verify::MAGISK_CERT_SHA256,
+                MAX_APK as usize,
+            ) {
+                Some(hit) => hit,
+                None => {
+                    let bytes = download(&asset)?;
+                    // 검증을 모두 통과한 뒤에만 캐시에 남긴다
+                    apk_verify::verify_download(&bytes, &asset)?;
+                    apk_verify::check_pins(&bytes, apk_verify::MAGISK_CERT_SHA256)?;
+                    validate_apk(&bytes)?;
+                    apk_verify::store_verified(&path, &bytes, &asset.sha256)?;
+                    (bytes, asset.sha256)
+                }
+            };
+            (tag, path, bytes, sha256)
         }
-        crate::storage::atomic_write(&path, &bytes)?;
-    }
-    validate_apk(&path)?;
-    let (sha256, _) =
-        crate::storage::hash_reader(std::fs::File::open(&path).map_err(|e| e.to_string())?)?;
+        // 오프라인·요청 한도 초과 — 다이제스트가 기록된 검증 캐시만 쓴다
+        Err(online) => {
+            let (path, bytes, sha256) = apk_verify::newest_verified_cache(
+                &dir,
+                is_magisk_apk_name,
+                apk_verify::MAGISK_CERT_SHA256,
+                MAX_APK as usize,
+            )
+            .ok_or_else(|| format!("{online} — 검증된 Magisk 캐시도 없습니다"))?;
+            let version = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_prefix("Magisk-")?.strip_suffix(".apk"))
+                .unwrap_or_default()
+                .to_string();
+            eprintln!("[rust] Magisk 릴리스 조회 실패({online}) — 검증된 캐시 {version} 사용");
+            (version, path, bytes, sha256)
+        }
+    };
+    validate_apk(&bytes)?;
     Ok(MagiskPrepareOut {
-        version: tag,
+        version,
         apk_path: path.to_string_lossy().to_string(),
         sha256,
     })
 }
 
-fn verify_apk(path: &std::path::Path, expected: &str) -> Result<(), String> {
-    validate_apk(path)?;
-    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let (actual, _) = crate::storage::hash_reader(file.take(256 * 1024 * 1024 + 1))?;
-    if actual != expected {
-        return Err("Magisk APK가 사전 준비 후 변경됐습니다 — 해시가 일치하지 않습니다".into());
+fn download(asset: &ReleaseAsset) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::with_capacity(asset.size as usize);
+    ureq::get(&asset.url)
+        .timeout(std::time::Duration::from_secs(300))
+        .call()
+        .map_err(|e| format!("APK 다운로드 실패: {e}"))?
+        .into_reader()
+        .take(MAX_APK + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("APK 수신 실패: {e}"))?;
+    if bytes.len() as u64 > MAX_APK {
+        return Err("다운로드한 APK가 비정상적으로 큽니다(256 MiB 초과)".into());
     }
-    Ok(())
+    Ok(bytes)
 }
 
-fn validate_apk(path: &std::path::Path) -> Result<(), String> {
-    let mut zip = crate::firmware::LocalZip::open(path)?;
-    let names: Vec<_> = patch::APK_ENTRIES.iter().map(|(name, _)| *name).collect();
-    crate::firmware::zip_extract_named(&mut zip, &names)?;
-    Ok(())
+/// 준비 단계에서 받은 APK를 한 번 읽어 해시·서명 핀·구조를 모두 이 바이트로 확인한다.
+/// 패치는 돌려준 바이트를 그대로 써서 확인 후 바꿔치기 틈을 없앤다.
+fn load_verified_apk(path: &std::path::Path, expected: &str) -> Result<Vec<u8>, String> {
+    load_verified_apk_pinned(path, expected, apk_verify::MAGISK_CERT_SHA256)
+}
+
+fn load_verified_apk_pinned(
+    path: &std::path::Path,
+    expected: &str,
+    pins: &[&str],
+) -> Result<Vec<u8>, String> {
+    let bytes = crate::storage::read_bounded(path, MAX_APK as usize)?
+        .ok_or("Magisk APK 파일이 없습니다")?;
+    if !apk_verify::sha256_hex(&bytes).eq_ignore_ascii_case(expected) {
+        return Err("Magisk APK가 사전 준비 후 변경됐습니다 — 해시가 일치하지 않습니다".into());
+    }
+    apk_verify::check_pins(&bytes, pins)?;
+    validate_apk(&bytes)?;
+    Ok(bytes)
+}
+
+fn validate_apk(bytes: &[u8]) -> Result<(), String> {
+    patch::extract_payloads(bytes).map(|_| ())
 }
 
 #[derive(Deserialize)]
@@ -214,14 +267,22 @@ pub async fn magisk_patch(
     let operation = crate::device_io::WriteOperation::acquire()?;
     let work = move || {
         let _operation = operation;
+        // 기기 연결을 잡기 전에 검증 — 검증한 바이트를 그대로 패치에 쓴다
+        let apk_bytes = load_verified_apk(&apk, &apk_sha256)?;
         adb::with_first_device(&serial, move |dev| {
-            verify_apk(&apk, &apk_sha256)?;
             crate::boot_image::verify_fingerprint(dev, &fingerprint)?;
             let mut outcome_logs: Vec<String> = vec![];
-            let r = patch::run_patch(dev, &apk, &image, &out, Some(&image_sha256), &mut |line| {
-                outcome_logs.push(line.clone());
-                let _ = app.emit("magisk:log", line);
-            });
+            let r = patch::run_patch(
+                dev,
+                &apk_bytes,
+                &image,
+                &out,
+                Some(&image_sha256),
+                &mut |line| {
+                    outcome_logs.push(line.clone());
+                    let _ = app.emit("magisk:log", line);
+                },
+            );
             r.map(|mut o| {
                 o.log = outcome_logs;
                 o
@@ -247,7 +308,9 @@ pub async fn magisk_install(
     let operation = crate::device_io::WriteOperation::acquire()?;
     let work = move || {
         let _operation = operation;
-        verify_apk(&apk, &apk_sha256)?;
+        // adb install은 경로로 다시 읽는다 — 직전에 해시·서명 핀을 다시 확인해 틈을 최소화한다.
+        // 앱 서명 자체는 설치 때 Android가 검증한다.
+        load_verified_apk(&apk, &apk_sha256)?;
         adb::with_first_device(&serial, move |dev| {
             dev.install(&apk, None)
                 .map_err(|e| format!("Magisk 앱 설치 실패: {e}"))
@@ -283,38 +346,72 @@ pub async fn root_reboot(serial: Option<String>, target: String) -> Result<(), S
 mod tests {
     use super::*;
 
+    fn asset(name: &str, url: &str) -> serde_json::Value {
+        serde_json::json!({
+            "name": name,
+            "browser_download_url": url,
+            "digest": format!("sha256:{}", "ab".repeat(32)),
+            "size": 1024
+        })
+    }
+
     #[test]
     fn asset_picking_filters_magisk_apk() {
         let json = serde_json::json!({
             "tag_name": "v30.7",
             "assets": [
-                {"name": "Magisk-v30.7.apk", "browser_download_url": "https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk"},
-                {"name": "magisk-debug-xxxx.zip", "browser_download_url": "https://x/d.zip"},
-                {"name": "Source code (zip)", "browser_download_url": "https://x/src.zip"},
-                {"name": "another-lib.apk", "browser_download_url": "https://x/lib.apk"}
+                asset("Magisk-v30.7.apk", "https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk"),
+                asset("magisk-debug-xxxx.zip", "https://x/d.zip"),
+                asset("Source code (zip)", "https://x/src.zip"),
+                asset("another-lib.apk", "https://x/lib.apk")
             ]
         });
-        let (tag, name, url) = pick_asset(&json).unwrap();
+        let (tag, asset) = pick_asset(&json).unwrap();
         assert_eq!(tag, "v30.7");
-        assert_eq!(name, "Magisk-v30.7.apk");
-        assert!(url.ends_with("Magisk-v30.7.apk"));
+        assert_eq!(asset.name, "Magisk-v30.7.apk");
+        assert!(asset.url.ends_with("Magisk-v30.7.apk"));
+        assert_eq!(asset.sha256, "ab".repeat(32));
+        assert_eq!(asset.size, 1024);
     }
 
     #[test]
-    fn cache_integrity_and_explicit_identity_are_required() {
+    fn asset_without_digest_cannot_be_used() {
+        let json = serde_json::json!({
+            "tag_name": "v30.7",
+            "assets": [{"name": "Magisk-v30.7.apk", "browser_download_url": "https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk"}]
+        });
+        assert!(pick_asset(&json).unwrap_err().contains("다이제스트"));
+    }
+
+    #[test]
+    fn cache_integrity_pin_and_explicit_identity_are_required() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("Magisk.apk");
-        let bytes = crate::firmware::tests::build_zip(
+        let zip = crate::firmware::tests::build_zip(
             &patch::APK_ENTRIES
                 .iter()
                 .map(|(name, _)| (*name, name.as_bytes()))
                 .collect::<Vec<_>>(),
         );
+        let cert = b"topjohnwu-test-cert";
+        let pin = apk_verify::sha256_hex(cert);
+        let bytes = apk_verify::tests::sign_zip(&zip, cert);
         std::fs::write(&path, &bytes).unwrap();
-        assert!(verify_apk(&path, &crate::boot_image::sha256(&bytes)).is_ok());
-        assert!(verify_apk(&path, &"f".repeat(64)).is_err());
-        std::fs::write(&path, b"broken").unwrap();
-        assert!(validate_apk(&path).is_err());
+        let sha = crate::boot_image::sha256(&bytes);
+        assert_eq!(
+            load_verified_apk_pinned(&path, &sha, &[&pin]).unwrap(),
+            bytes
+        );
+        // 해시 불일치·다른 서명자·실제 핀(테스트 인증서는 공식이 아님)
+        assert!(load_verified_apk_pinned(&path, &"f".repeat(64), &[&pin]).is_err());
+        assert!(load_verified_apk_pinned(&path, &sha, &[&"0".repeat(64)]).is_err());
+        assert!(load_verified_apk(&path, &sha).is_err());
+        // 서명 블록 없는 APK는 해시가 맞아도 거부
+        std::fs::write(&path, &zip).unwrap();
+        assert!(
+            load_verified_apk_pinned(&path, &crate::boot_image::sha256(&zip), &[&pin]).is_err()
+        );
+        assert!(validate_apk(b"broken").is_err());
         assert!(require_serial(&None).is_err());
         assert!(require_serial(&Some(" ".into())).is_err());
     }
@@ -334,7 +431,10 @@ mod tests {
             ),
             ("v30.7", "Magisk-v30.7.apk", "https://example.com/other.apk"),
         ] {
-            assert!(pick_asset(&serde_json::json!({"tag_name": tag, "assets": [{"name": name, "browser_download_url": url}]})).is_err());
+            assert!(pick_asset(
+                &serde_json::json!({"tag_name": tag, "assets": [asset(name, url)]})
+            )
+            .is_err());
         }
     }
 
@@ -342,7 +442,7 @@ mod tests {
     fn asset_picking_requires_official_name() {
         let json = serde_json::json!({
             "tag_name": "v99",
-            "assets": [{"name": "source.zip", "browser_download_url": "https://x/s.zip"}]
+            "assets": [asset("source.zip", "https://x/s.zip")]
         });
         assert!(pick_asset(&json).is_err());
     }
