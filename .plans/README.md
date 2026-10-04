@@ -25,3 +25,5 @@
 3. 계약 문서에는 command 이름·인자·반환·이벤트 스트림을 적는다. 프론트는 이 문서 기준으로 api facade를, (M2 이후) Rust는 이 문서 기준으로 구현을 작성한다.
 4. mock은 실측 데이터를 시드로 사용한다(`../tasks/recovery.md` 2-3, 현재 기기 스냅샷). 가공 데이터 금지.
 5. 문서 상단에 상태 배지를 유지한다: `status: draft | implemented | stale`
+
+최신 병합 후 검토·수정·실기기 미검증 목록: [integrated-review.md](04-engine/integrated-review.md).

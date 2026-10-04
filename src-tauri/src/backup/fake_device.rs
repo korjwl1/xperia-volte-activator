@@ -38,6 +38,7 @@ pub struct FakeADBDevice {
     pub ignore_role_changes: bool,
     pub fail_shell: BTreeSet<String>,
     pub shell_exit_codes: BTreeMap<String, u8>,
+    pub shell_unknown_status: BTreeSet<String>,
     /// 인터랙티브 셸(shell(reader, writer)) 기록 — 명령 → stdin으로 받은 바이트
     pub shell_streams: Vec<(String, Vec<u8>)>,
     /// 대화형 셸이 stdin을 소비하는 최대 바이트(기본 무제한)
@@ -157,7 +158,11 @@ impl ADBDeviceExt for FakeADBDevice {
             if let Some(out) = stdout.as_deref_mut() {
                 out.write_all(answer.as_bytes())?;
             }
-            return Ok(Some(self.shell_exit_codes.get(cmd).copied().unwrap_or(0)));
+            return Ok(if self.shell_unknown_status.contains(cmd) {
+                None
+            } else {
+                Some(self.shell_exit_codes.get(cmd).copied().unwrap_or(0))
+            });
         }
         if let Some(err) = stderr.as_deref_mut() {
             write!(err, "unknown command: {cmd}")?;

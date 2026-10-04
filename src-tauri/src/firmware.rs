@@ -439,6 +439,9 @@ impl LocalZip {
     pub(crate) fn open(path: &std::path::Path) -> Result<Self, String> {
         let file = std::fs::File::open(path).map_err(|e| format!("ZIP 파일 열기 실패: {e}"))?;
         let size = file.metadata().map_err(|e| e.to_string())?.len();
+        if size == 0 || size > MAX_ENTRY {
+            return Err("로컬 ZIP 크기가 허용 범위를 벗어났습니다".into());
+        }
         Ok(Self { file, size })
     }
 }
@@ -485,6 +488,17 @@ pub(crate) fn zip_extract_named(
     };
     let entries = parse_central_directory(&cd)?;
     let mut out = Vec::with_capacity(names.len());
+    let mut aggregate = 0u64;
+    for name in names {
+        let matching: Vec<_> = entries.iter().filter(|e| e.name == *name).collect();
+        if matching.len() != 1 {
+            return Err(format!("ZIP의 {name} 항목이 없거나 중복됐습니다"));
+        }
+        aggregate = aggregate
+            .checked_add(matching[0].uncomp_size)
+            .filter(|total| *total <= MAX_ENTRY)
+            .ok_or("APK 페이로드 합계가 크기 상한을 초과했습니다")?;
+    }
     for name in names {
         let e = entries
             .iter()
@@ -737,12 +751,14 @@ fn versions_work(serial: Option<String>) -> Result<FirmwareVersionsOut, String> 
 pub struct FirmwareDirOut {
     /// 찾은 .sin 파일 이름
     file: String,
+    path: String,
+    fingerprint: String,
     /// 추출한 이미지 크기
     image_bytes: u64,
 }
 
-/// 직접 지정한 펌웨어 폴더 검사 — <partition>_*.sin이 있고, 그 안의 이미지가 부트 이미지(ANDROID!)인지 (PC 파일 읽기만)
-fn dir_check_work(dir: &str, partition: &str) -> Result<FirmwareDirOut, String> {
+/// 수동 SIN과 update.xml을 검사하고 패치·기록에 사용할 raw IMG를 PC 캐시에 추출한다.
+fn dir_check_work(dir: &str, partition: &str, cache: &Path) -> Result<FirmwareDirOut, String> {
     if partition != "init_boot" && partition != "boot" {
         return Err("지원하지 않는 파티션입니다".into());
     }
@@ -752,40 +768,73 @@ fn dir_check_work(dir: &str, partition: &str) -> Result<FirmwareDirOut, String> 
     }
     // XperiFirm은 폴더 안에 바로 풀어 두지만, 한 단계 아래 폴더도 확인
     let mut candidates = vec![];
-    for entry in std::fs::read_dir(root)
-        .map_err(|e| format!("폴더 읽기 실패: {e}"))?
-        .flatten()
-    {
+    for entry in std::fs::read_dir(root).map_err(|e| format!("폴더 읽기 실패: {e}"))? {
+        let entry = entry.map_err(|e| format!("폴더 항목 읽기 실패: {e}"))?;
         let p = entry.path();
         if p.is_dir() {
-            if let Ok(sub) = std::fs::read_dir(&p) {
-                candidates.extend(sub.flatten().map(|e| e.path()));
+            let sub = std::fs::read_dir(&p).map_err(|e| e.to_string())?;
+            for entry in sub {
+                candidates.push(entry.map_err(|e| e.to_string())?.path());
             }
         } else {
             candidates.push(p);
         }
     }
-    let sin = candidates
+    let matching: Vec<_> = candidates
         .into_iter()
         .filter(|p| p.is_file())
-        .find(|p| sin_name_matches(&p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), partition))
-        .ok_or_else(|| format!("폴더에 {partition}_*.sin 파일이 없습니다 — XperiFirm으로 받은 펌웨어 폴더인지 확인해 주세요"))?;
-    let data = std::fs::read(&sin).map_err(|e| format!("{} 읽기 실패: {e}", sin.display()))?;
+        .filter(|p| {
+            sin_name_matches(
+                &p.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                partition,
+            )
+        })
+        .collect();
+    if matching.len() != 1 {
+        return Err(format!(
+            "{partition} SIN 파일이 없거나 여러 개입니다 — 펌웨어 폴더 하나를 지정해 주세요"
+        ));
+    }
+    let sin = &matching[0];
+    let xml = crate::storage::read_bounded(
+        &sin.parent().ok_or("SIN 부모 경로 없음")?.join("update.xml"),
+        1024 * 1024,
+    )?
+    .ok_or("펌웨어 폴더에 update.xml이 없습니다 — 기기와 버전을 대조할 수 없습니다")?;
+    let xml = String::from_utf8(xml).map_err(|e| e.to_string())?;
+    let fingerprint = update_xml_fingerprint(&xml)
+        .filter(|fp| !fp.is_empty())
+        .ok_or("펌웨어 지문이 없습니다")?;
+    let data =
+        crate::storage::read_bounded(sin, MAX_ENTRY as usize)?.ok_or("SIN 파일이 없습니다")?;
     let img = extract_sin_image(&data)?;
+    crate::boot_image::validate(&img)?;
+    let path = cache.join(format!(
+        "{partition}-{}.img",
+        crate::boot_image::sha256(&img)
+    ));
+    crate::storage::atomic_write(&path, &img)?;
     Ok(FirmwareDirOut {
         file: sin
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default(),
         image_bytes: img.len() as u64,
+        path: path.to_string_lossy().to_string(),
+        fingerprint,
     })
 }
 
-/// 직접 지정한 펌웨어 폴더가 쓸 수 있는지 확인 (읽기 전용)
+/// 직접 지정한 펌웨어 폴더 검사·PC 캐시 추출(기기 쓰기 없음).
 #[tauri::command]
 pub async fn firmware_dir_check(dir: String, partition: String) -> Result<FirmwareDirOut, String> {
-    guarded(Duration::from_secs(60), move || {
-        dir_check_work(&dir, &partition)
+    let cache = crate::app_paths::data_dir()
+        .ok_or("앱 데이터 폴더가 없습니다")?
+        .join("firmware/manual");
+    crate::tasks::blocking("수동 펌웨어 추출", move || {
+        dir_check_work(&dir, &partition, &cache)
     })
     .await
 }
@@ -861,6 +910,57 @@ pub(crate) mod tests {
         out.extend_from_slice(&le32(cd_offset));
         out.extend_from_slice(&le16(0)); // comment len
         out
+    }
+
+    #[test]
+    fn duplicate_and_excessive_zip_payloads_fail_before_extraction() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("input.apk");
+        std::fs::write(&file, build_zip(&[("a", b"one"), ("a", b"two")])).unwrap();
+        assert!(zip_extract_named(&mut LocalZip::open(&file).unwrap(), &["a"]).is_err());
+        let mut bytes = build_zip(&[("a", b"one"), ("b", b"two")]);
+        for offset in 0..bytes.len() - 4 {
+            if bytes[offset..offset + 4] == *b"PK\x01\x02" {
+                bytes[offset + 24..offset + 28]
+                    .copy_from_slice(&(150u32 * 1024 * 1024).to_le_bytes());
+            }
+        }
+        std::fs::write(&file, bytes).unwrap();
+        let error =
+            zip_extract_named(&mut LocalZip::open(&file).unwrap(), &["a", "b"]).unwrap_err();
+        assert!(error.contains("APK"));
+    }
+
+    #[test]
+    fn manual_sin_returns_a_raw_image_and_requires_unambiguous_firmware_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let firmware = dir.path().join("download");
+        std::fs::create_dir_all(&firmware).unwrap();
+        let cache = dir.path().join("cache");
+        let mut image = vec![0x41; 4096];
+        image[..8].copy_from_slice(b"ANDROID!");
+        let mut header = tar::Header::new_gnu();
+        header.set_size(image.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        let mut tar = tar::Builder::new(Vec::new());
+        tar.append_data(&mut header, "init_boot.000", &image[..])
+            .unwrap();
+        let sin = firmware.join("init_boot_X-FLASH-ALL-test.sin");
+        std::fs::write(&sin, tar.into_inner().unwrap()).unwrap();
+        assert!(dir_check_work(dir.path().to_str().unwrap(), "init_boot", &cache).is_err());
+        std::fs::write(
+            firmware.join("update.xml"),
+            "<UPDATE><FINGERPRINT>Sony/current</FINGERPRINT></UPDATE>",
+        )
+        .unwrap();
+        let result = dir_check_work(dir.path().to_str().unwrap(), "init_boot", &cache).unwrap();
+        assert!(result.path.ends_with(".img"));
+        assert_ne!(std::path::Path::new(&result.path), sin);
+        assert_eq!(result.fingerprint, "Sony/current");
+        assert_eq!(std::fs::read(&result.path).unwrap(), image);
+        std::fs::copy(&sin, firmware.join("init_boot_X-FLASH-ALL-other.sin")).unwrap();
+        assert!(dir_check_work(dir.path().to_str().unwrap(), "init_boot", &cache).is_err());
     }
 
     #[test]
@@ -964,12 +1064,14 @@ pub(crate) mod tests {
         let tmp = std::env::temp_dir().join("xvolte_dircheck_test");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
-        assert!(dir_check_work(tmp.to_str().unwrap(), "init_boot")
-            .unwrap_err()
-            .contains(".sin 파일이 없습니다"));
+        assert!(
+            dir_check_work(tmp.to_str().unwrap(), "init_boot", &tmp.join("cache"))
+                .unwrap_err()
+                .contains("SIN 파일이 없거나 여러 개")
+        );
         std::fs::write(tmp.join("init_boot_X-FLASH-ALL-TEST.sin"), b"not a tar").unwrap();
-        assert!(dir_check_work(tmp.to_str().unwrap(), "init_boot").is_err());
-        assert!(dir_check_work("Z:\\없는 폴더", "init_boot").is_err());
+        assert!(dir_check_work(tmp.to_str().unwrap(), "init_boot", &tmp.join("cache")).is_err());
+        assert!(dir_check_work("Z:\\없는 폴더", "init_boot", &tmp.join("cache")).is_err());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

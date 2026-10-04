@@ -302,7 +302,7 @@ export interface RunJournal {
   backupPath: string;
   /** 실전 백업이 만든 백업 폴더(manifest.json 위치) — 복구·이어받기에 사용 */
   backupDir?: string;
-  /** 실전 루팅이 만든 패치 이미지 경로 — 언루팅(순정 재기록)에 재사용 */
+  /** 실전 루팅 산출물의 경로 — 언루팅 입력으로 사용하지 않는다. */
   patchedImage?: string;
   /** 선택한 백업 항목 id */
   backupItems: string[];
@@ -325,3 +325,22 @@ export const RISK_LABEL: Record<PlanStep["risk"], string> = {
   danger: "위험",
 };
 
+
+/** 수동 SIN 추출 결과 — path는 실제 패치·기록에 사용할 raw IMG 경로다. */
+export interface FirmwareDirInfo {
+  file: string;
+  path: string;
+  fingerprint: string;
+  imageBytes: number;
+}
+
+/** Magisk 패치 입력 — 사전 준비 이미지·APK 해시와 현재 펌웨어 지문을 포함한다. */
+export interface MagiskPatchRequest {
+  serial: string;
+  apkPath: string;
+  imagePath: string;
+  partition: "boot" | "init_boot";
+  imageSha256: string;
+  fingerprint: string;
+  apkSha256: string;
+}

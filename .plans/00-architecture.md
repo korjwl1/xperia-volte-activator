@@ -70,3 +70,10 @@ step2의 "실행 순서" 미리보기(`wizard.plan`)와 실제 실행(`wizard.la
 - Wizard는 실행 상태를 조정하는 계층으로 유지한다. 추가 엔진을 연결할 때 순수 판단과 독립 서비스부터 추출한다.
 
 전체 리뷰의 수정 내역과 실기기 미검증 목록: [code-review.md](04-engine/code-review.md).
+
+병합 후 엔진 통합 점검: [integrated-review.md](04-engine/integrated-review.md).
+
+- `boot_image`는 기본 입력 검사·해시·현재 펌웨어 지문 대조를 공통 제공한다. 순정 인증·AVB 검증을 대신하지 않는다.
+- `storage::hash_reader`는 스트리밍 파일 해시, `device_io::WriteOperation`은 백업/복구·Magisk·fastboot의 변경 작업 실행권을 제공한다. 실행권은 I/O 종료까지 유지한다.
+- `domain/waitUntil`은 제한 시간·취소와 단일 질의를 관리한다. 이미 실행된 기기 명령의 강제 취소를 보장하지 않는다.
+- 루팅·언루팅은 root/fastboot 모두 실전 활성화 필요. 실제 리락은 순정 출처·AVB·전체 체인 증명이 없어 항상 차단한다.

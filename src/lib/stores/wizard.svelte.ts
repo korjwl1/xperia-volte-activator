@@ -1,5 +1,5 @@
 // 위자드 상태 머신 + 실행 시뮬레이션 러너 (mock)
-import type { AppItem, FirmwareResult, FirmwareVersions, SettingsOverview, SimInfo, BackupGroup, DeviceStatus, EnvCheckItem, ManualId, ManualPrompt, PlanStep, RunJournal, RunStep, VolteConfig } from "$lib/types";
+import type { FirmwareDirInfo, AppItem, FirmwareResult, FirmwareVersions, SettingsOverview, SimInfo, BackupGroup, DeviceStatus, EnvCheckItem, ManualId, ManualPrompt, PlanStep, RunJournal, RunStep, VolteConfig } from "$lib/types";
 import { api } from "$lib/api";
 import { LINKS, maskSecret } from "$lib/data/links";
 import { bootPartition } from "$lib/data/devices";
@@ -10,6 +10,7 @@ import { EFS_PRESET_MODE, EFS_PRESET_VERSION, efsPreset } from "$lib/data/efsPre
 import type { BackupSummary } from "$lib/types";
 import { AsyncQueue } from "$lib/domain/asyncQueue";
 import { decodeJournal } from "$lib/domain/journal";
+import { waitUntil } from "$lib/domain/waitUntil";
 
 export type WizardView = "device" | "warning" | "step1" | "step2" | "step3" | "step4";
 
@@ -431,7 +432,8 @@ export class Wizard {
     this.firmwareDir = j.firmwareDir;
     this.imsUnverified = j.imsUnverified ?? false;
     // 직접 지정한 폴더는 그사이 바뀌었을 수 있으므로 다시 검사
-    if (!j.firmware && j.firmwareDir) void this.setFirmwareDir(j.firmwareDir);
+    this.firmwareDirInfo = null;
+    if (j.firmwareDir) void this.setFirmwareDir(j.firmwareDir);
     this.steps = j.steps;
     // 끊긴 단계는 처음부터 다시 — 실제 구현은 단계 시작 시 기기 상태를 먼저 확인해 이미 끝난 작업은 건너뛴다
     const runSteps: RunStep[] = j.runSteps.map((st) =>
@@ -475,6 +477,7 @@ export class Wizard {
       );
     }
     this.runSteps = runSteps;
+    for (const step of runSteps) if (step.status === "pending") this.clearRuntimeManuals(step.id);
     this.cursor = first >= 0 ? first : runSteps.length;
     this.journalStarted = j.startedAt;
     this.stopInfo = null;
@@ -590,6 +593,7 @@ export class Wizard {
   // ── 실행 시뮬레이션 ───────────────────
   prepareRun() {
     this.runGen++;
+    this.patchedImage = "";
     this.runSteps = this.steps
       .filter((s) => s.enabled)
       .map((s) => ({ id: s.id, title: s.title, status: "pending", progress: 0, logs: [], manualDone: 0 }));
@@ -613,6 +617,13 @@ export class Wizard {
     this.running = false;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+  }
+
+  private dispatchEngine(work: () => Promise<void>) {
+    const gen = this.runGen;
+    void work().catch(error => {
+      if (gen === this.runGen) this.failStep(String(error));
+    });
   }
 
   private tick() {
@@ -656,6 +667,10 @@ export class Wizard {
       this.markStop("USB 연결 오류 — DIAG 전송 타임아웃");
       return;
     }
+    // 혼합 모드에서 실전 기록 뒤 시뮬레이션 완료로 넘어갈 수 없도록 먼저 차단한다.
+    if ((cur.id === "root" || cur.id === "unroot") && (REAL_STEPS.root || REAL_STEPS.fastboot) && !this.realBootFlowReady()) return;
+    // 리락은 이력만으로 안전성을 증명할 수 없어 모드 전환 전에도 차단한다.
+    if (cur.id === "relock" && REAL_STEPS.fastboot) return this.failStep("리락은 순정 출처·AVB·전체 부트 체인 검증이 구현될 때까지 차단됩니다");
     const step = this.steps.find((s) => s.id === cur.id);
     const manuals = step?.manual ?? [];
     if (cur.manualDone < manuals.length) {
@@ -671,7 +686,7 @@ export class Wizard {
         if (this.backupRanGen !== this.runGen) {
           this.backupRanGen = this.runGen;
           this.pause();
-          void this.runRealBackup(cur);
+          this.dispatchEngine(() => this.runRealBackup(cur));
         } else {
           // 문자·통화 기록(smsie) 수동 완료 후 재진입 — 완결 판정으로 마무리
           this.pause();
@@ -685,11 +700,11 @@ export class Wizard {
         if (this.restoreRanGen !== this.runGen) {
           this.restoreRanGen = this.runGen;
           this.pause();
-          void this.runRealRestore(cur);
+          this.dispatchEngine(() => this.runRealRestore(cur));
         } else {
           // smsie 수동 복원 완료 후 재진입 — 역할 원복·마무리
           this.pause();
-          void this.finishRealRestore(cur);
+          this.dispatchEngine(() => this.finishRealRestore(cur));
         }
       }
       return;
@@ -699,7 +714,7 @@ export class Wizard {
       if (cur.status === "running" && this.unlockRanGen !== this.runGen) {
         this.unlockRanGen = this.runGen;
         this.pause();
-        void this.runRealUnlock(cur);
+        this.dispatchEngine(() => this.runRealUnlock(cur));
       }
       return;
     }
@@ -707,7 +722,7 @@ export class Wizard {
       if (cur.status === "running" && this.relockRanGen !== this.runGen) {
         this.relockRanGen = this.runGen;
         this.pause();
-        void this.runRealRelock(cur);
+        this.dispatchEngine(() => this.runRealRelock(cur));
       }
       return;
     }
@@ -716,7 +731,7 @@ export class Wizard {
       if (cur.status === "running" && this.unrootRanGen !== this.runGen) {
         this.unrootRanGen = this.runGen;
         this.pause();
-        void this.runRealUnroot(cur);
+        this.dispatchEngine(() => this.runRealUnroot(cur));
       }
       return;
     }
@@ -726,11 +741,11 @@ export class Wizard {
         if (this.rootRanGen !== this.runGen) {
           this.rootRanGen = this.runGen;
           this.pause();
-          void this.runRealRoot(cur);
+          this.dispatchEngine(() => this.runRealRoot(cur));
         } else {
           // su-grant 수동 완료 후 재진입 — 최종 확인
           this.pause();
-          void this.finishRealRoot(cur);
+          this.dispatchEngine(() => this.finishRealRoot(cur));
         }
       }
       return;
@@ -884,6 +899,13 @@ export class Wizard {
       return;
     }
     if (id === "firmware-select") {
+      if (this.firmwareDirInfo) {
+        this.logFirmware(cur);
+        cur.manualDone++;
+        cur.status = "running";
+        this.begin();
+        return;
+      }
       if (!this.firmware) {
         cur.status = "running";
         cur.logs.push(`[자동] Sony 서버에서 순정 펌웨어의 ${this.partition ?? "부트"} 이미지 받는 중`);
@@ -893,6 +915,7 @@ export class Wizard {
       if (this.firmware) {
         this.logFirmware(cur);
         cur.manualDone++;
+        cur.status = "running";
         this.begin();
         return;
       }
@@ -961,11 +984,13 @@ export class Wizard {
   /** adb로 부트로더 재부팅(mode-wait 수동 개입에서 자동) — 시뮬레이션에서는 건너뛴다 */
   private async rebootToBootloader() {
     if (!REAL_STEPS.root && !REAL_STEPS.fastboot) return;
+    const gen = this.runGen;
     const cur = this.runSteps[this.cursor];
     cur?.logs.push("[재부팅] 폰을 부트로더 모드로 재부팅합니다 — USB를 유지해 주세요");
     const r = await api.rootReboot(this.device?.serial, "bootloader");
+    if (gen !== this.runGen) return;
     if (!r.ok) {
-      cur?.logs.push(`[실패] 부트로더 재부팅: ${r.error} — 전원을 끈 뒤 볼륨 아래를 누른 채 USB를 연결해 직접 진입해 주세요`);
+      cur?.logs.push(`[실패] 부트로더 재부팅: ${r.error} — 전원을 끈 뒤 볼륨 위를 누른 채 USB를 연결해 직접 진입해 주세요`);
     }
     void this.persist(true);
   }
@@ -1118,7 +1143,7 @@ export class Wizard {
   callAck = $state(false);
   /** 언락 조건 중 "확인 불가" 항목을 폰에서 직접 켰다고 확인 */
   oemUnknownAck = $state(false);
-  firmwareDirInfo: { file: string; imageBytes: number } | null = $state(null);
+  firmwareDirInfo: FirmwareDirInfo | null = $state(null);
   firmwareDirState = $state<LoadState>("idle");
   firmwareDirError = $state("");
   /** 최종 VoLTE 확인을 건너뛰고 마무리했는지 (SIM 없이 미리 패치 등) */
@@ -1143,7 +1168,7 @@ export class Wizard {
 
   /** 목업 실행에서만 — 폰이 실제로 재부팅되지 않아 확인할 수 없는 단계 건너뛰기 */
   get manualSkippable(): boolean {
-    return SIMULATED_RUN && !REAL_STEPS.fastboot && (this.manualVerifiable || this.manualCurrent?.id === "firmware-select");
+    return SIMULATED_RUN && !REAL_STEPS.fastboot && !REAL_STEPS.root && (this.manualVerifiable || this.manualCurrent?.id === "firmware-select");
   }
 
   /** 직접 지정한 펌웨어 폴더 — 고르는 즉시 검사 */
@@ -1155,6 +1180,7 @@ export class Wizard {
     this.firmwareDir = dir;
     this.firmwareDirInfo = null;
     this.firmwareDirError = "";
+    if (!dir) { this.firmwareDirState = "idle"; return; }
     const partition = this.partition;
     if (!partition) {
       this.firmwareDirState = "failed";
@@ -1358,8 +1384,7 @@ export class Wizard {
       void this.persist();
     });
     if (gen !== this.runGen) return un();
-    const r = await api.backupRun(this.device?.serial, items, dest, this.backupDir || undefined);
-    un();
+    const r = await api.backupRun(this.device?.serial, items, dest, this.backupDir || undefined).finally(un);
     if (gen !== this.runGen) return; // 중단·처음으로
     if (!r.ok) {
       this.failStep(`백업 실패: ${r.error}`);
@@ -1425,8 +1450,7 @@ export class Wizard {
       void this.persist();
     });
     if (gen !== this.runGen) return un();
-    const r = await api.restoreRun(this.device?.serial, this.backupDir, items);
-    un();
+    const r = await api.restoreRun(this.device?.serial, this.backupDir, items).finally(un);
     if (gen !== this.runGen) return; // 중단·처음으로
     if (!r.ok) {
       this.failStep(`복구 실패: ${r.error}`);
@@ -1518,7 +1542,7 @@ export class Wizard {
     }
     if (state === "yes") {
       cur.logs.push("[확인] 이미 언락되어 있습니다 — OS 재부팅을 확인합니다");
-      const rebooted = await api.fastbootReboot("os");
+      const rebooted = await api.fastbootReboot("os", this.device?.serial ?? "");
       un();
       if (gen !== this.runGen) return;
       if (!rebooted) return this.failStep("언락 상태지만 OS 재부팅을 확인하지 못했습니다 — 기기 상태를 확인해 주세요");
@@ -1526,7 +1550,7 @@ export class Wizard {
       return this.stepDone(cur);
     }
     cur.progress = 0.5;
-    const r = await api.fastbootUnlock(this.normalizedUnlockCode, true);
+    const r = await api.fastbootUnlock(this.normalizedUnlockCode, true, this.device?.serial ?? "");
     if (gen !== this.runGen) return un();
     if (!r.ok) {
       un();
@@ -1536,7 +1560,7 @@ export class Wizard {
       un();
       return this.failStep("언락 명령 후에도 unlocked=yes가 확인되지 않습니다 — 기기 상태를 확인해 주세요");
     }
-    const rebooted = await api.fastbootReboot("os");
+    const rebooted = await api.fastbootReboot("os", this.device?.serial ?? "");
     un();
     if (gen !== this.runGen) return;
     if (!rebooted) return this.failStep("언락은 확인됐지만 OS 재부팅을 확인하지 못했습니다 — 기기 상태를 확인해 주세요");
@@ -1547,8 +1571,23 @@ export class Wizard {
 
   /** 순정 부트 이미지 경로 — 사전 준비(firmware_fetch) 결과 또는 직접 지정 폴더 (root·unroot·relock 공용) */
   private stockImagePath(): string | null {
-    return this.firmware?.path
-      ?? (this.firmwareDir && this.firmwareDirInfo ? `${this.firmwareDir}/${this.firmwareDirInfo.file}` : null);
+    return this.firmwareDir ? this.firmwareDirInfo?.path ?? null : this.firmware?.path ?? null;
+  }
+
+  private stockFingerprint(): string {
+    return this.firmwareDir ? this.firmwareDirInfo?.fingerprint ?? "" : this.firmware?.fingerprint ?? "";
+  }
+
+  private realBootFlowReady(): boolean {
+    if (!REAL_STEPS.root || !REAL_STEPS.fastboot) {
+      this.failStep("루팅·언루팅은 root와 fastboot 실전 실행이 모두 활성화되어야 합니다");
+      return false;
+    }
+    if (this.steps.some(step => step.id === "fw-flash" && step.enabled)) {
+      this.failStep("펌웨어 업데이트가 시뮬레이션인 상태에서는 새 버전의 부트 이미지를 실제로 기록할 수 없습니다");
+      return false;
+    }
+    return true;
   }
 
   /** 리락 게이트 사전 점검용 deviceKey — fastboot serial과 같은 알고리즘(SHA-256 hex). 없으면 null */
@@ -1562,12 +1601,16 @@ export class Wizard {
   /** 실전 언루팅 — 원본 unRoot 계승: 순정 이미지 양 슬롯 기록 후 안내(앱 삭제는 수동) */
   private async runRealUnroot(cur: RunStep) {
     const gen = this.runGen;
+    if (!this.realBootFlowReady()) return;
     const partition = this.partition;
     const stockPath = this.stockImagePath();
     if (!partition || !stockPath) {
       this.failStep("순정 부트 이미지가 준비되지 않았습니다 — 사전 준비에서 펌웨어를 먼저 받아 주세요");
       return;
     }
+    const source = await api.bootImageCheck(this.device?.serial ?? "", stockPath, this.stockFingerprint());
+    if (gen !== this.runGen) return;
+    if (!source.ok) return this.failStep(`부트 이미지 확인 실패: ${source.error}`);
     cur.logs.push(`[언루팅] 순정 ${partition} 이미지로 복원합니다`);
     // 부트로더 진입 → 감지 대기
     cur.progress = 0.2;
@@ -1584,21 +1627,27 @@ export class Wizard {
       cur.logs.push(`[fastboot] ${line}`);
       void this.persist();
     });
-    const flash = await api.fastbootFlash(partition, stockPath, true);
-    un();
+    if (gen !== this.runGen) return un();
+    const flash = await api.fastbootFlash(partition, stockPath, true, this.device?.serial ?? "", source.value).finally(un);
     if (gen !== this.runGen) return;
     if (!flash.ok) return this.failStep(`순정 이미지 기록 실패: ${flash.error}`);
     cur.logs.push(`[언루팅] ${partition}_a/_b 순정 기록 완료`);
     void this.persist(true);
     // 재부팅 → 복귀 대기
-    await api.fastbootReboot("os");
+    const rebooted = await api.fastbootReboot("os", this.device?.serial ?? "");
+    if (gen !== this.runGen) return;
+    if (!rebooted) return this.failStep("순정 기록 후 OS 재부팅을 확인하지 못했습니다 — 기기 상태를 확인해 주세요");
     const back = await this.waitFor(gen, () => this.usbDebugReady(), 240_000);
     if (gen !== this.runGen) return;
     if (!back) {
       return this.failStep("재부팅 후 기기 연결이 확인되지 않습니다 — 기록은 완료됐으므로 폰을 확인한 뒤 이 단계를 다시 시도해 주세요");
     }
+    const stillRooted = await api.rootCheck(this.device?.serial);
+    if (gen !== this.runGen) return;
+    if (stillRooted === true) return this.failStep("순정 기록 후에도 루트 권한이 남아 있습니다 — 이미지와 기기 상태를 확인해 주세요");
+    if (stillRooted === null) cur.logs.push("[미확인] 루트 해제 상태를 자동으로 확인하지 못했습니다 — 폰의 Magisk에서 직접 확인해 주세요");
     cur.progress = 1;
-    cur.logs.push("[완료] 언루팅 — Magisk 앱을 열어 루트가 해제됐는지 확인한 뒤 앱을 직접 삭제해 주세요");
+    cur.logs.push("[완료] 순정 이미지 기록·재연결 — Magisk 앱을 열어 루트가 해제됐는지 확인한 뒤 앱을 직접 삭제해 주세요");
     cur.logs.push("[안내] Play 프로텍트 인증이 안 되면 Play 스토어 > 앱 정보 > 저장공간 > 데이터 삭제를 해주세요");
     this.stepDone(cur);
   }
@@ -1617,9 +1666,12 @@ export class Wizard {
       cur.logs.push(`[fastboot] ${line}`);
       void this.persist();
     });
+    if (gen !== this.runGen) return un();
     // 사전 게이트 — 미춴족 사유를 로그로 보여준다
     cur.progress = 0.3;
     const key = await this.deviceKeyHex();
+    if (gen !== this.runGen) return un();
+    if (!key) { un(); return this.failStep("리락 게이트의 기기 식별값이 없습니다"); }
     const gateRes = await api.relockGateCheck(partition, stockPath, key ?? undefined);
     if (gen !== this.runGen) return un();
     if (!gateRes.ok) {
@@ -1630,10 +1682,10 @@ export class Wizard {
     for (const c of gate.checked) cur.logs.push(`[게이트] ${c.partition}${c.slot} — ${c.detail}`);
     if (!gate.ok) {
       un();
-      return this.failStep(`리락 게이트 실패(§3-3) — 언루팅(순정 기록)을 먼저 진행해 주세요: ${gate.reasons[0] ?? ""}`);
+      return this.failStep(`리락 게이트 실패 — ${gate.reasons.join(" / ")}`);
     }
     cur.progress = 0.6;
-    const r = await api.fastbootLock(true, partition, stockPath);
+    const r = await api.fastbootLock(true, partition, stockPath, this.device?.serial ?? "");
     if (gen !== this.runGen) return un();
     if (!r.ok) {
       un();
@@ -1643,9 +1695,10 @@ export class Wizard {
       un();
       return this.failStep("리락 후에도 unlocked=no가 확인되지 않습니다 — 기기 상태를 확인해 주세요");
     }
-    await api.fastbootReboot("os");
+    const rebooted = await api.fastbootReboot("os", this.device?.serial ?? "");
     un();
     if (gen !== this.runGen) return;
+    if (!rebooted) return this.failStep("리락 후 OS 재부팅을 확인하지 못했습니다 — 기기 상태를 확인해 주세요");
     cur.progress = 1;
     cur.logs.push("[완료] 부트로더 리락 확인(unlocked=no) — 기기가 초기화된 뒤 재부팅됩니다");
     this.stepDone(cur);
@@ -1654,18 +1707,22 @@ export class Wizard {
   /** 실전 루팅 — 검증된 절차(계약 root 절): 패치 → 부트로더 → 기록 → 복귀 → 앱 설치 → su 승인(수동) */
   private async runRealRoot(cur: RunStep) {
     const gen = this.runGen;
+    if (!this.realBootFlowReady()) return;
     const partition = this.partition;
     if (!partition) {
       this.failStep("이 기종의 부트 파티션이 확인되지 않아 루팅할 수 없습니다");
       return;
     }
     // 순정 이미지 — 사전 준비(firmware_fetch) 결과 또는 직접 지정 폴더
-    const imagePath = this.firmware?.path
-      ?? (this.firmwareDir && this.firmwareDirInfo ? `${this.firmwareDir}/${this.firmwareDirInfo.file}` : null);
+    const imagePath = this.stockImagePath();
     if (!imagePath) {
       this.failStep("순정 부트 이미지가 준비되지 않았습니다 — 사전 준비 단계에서 펌웨어를 먼저 받아 주세요");
       return;
     }
+    const fingerprint = this.stockFingerprint();
+    const source = await api.bootImageCheck(this.device?.serial ?? "", imagePath, fingerprint);
+    if (gen !== this.runGen) return;
+    if (!source.ok) return this.failStep(`부트 이미지 확인 실패: ${source.error}`);
     // 1) Magisk APK 확보(캐시 재사용)
     cur.progress = 0.05;
     const prep = await api.magiskPrepare();
@@ -1681,8 +1738,11 @@ export class Wizard {
       cur.logs.push(`[magisk] ${line}`);
       void this.persist();
     });
-    const patch = await api.magiskPatch(this.device?.serial, prep.value.apkPath, imagePath, partition);
-    un();
+    if (gen !== this.runGen) return un();
+    const patch = await api.magiskPatch({
+      serial: this.device?.serial ?? "", apkPath: prep.value.apkPath, imagePath, partition,
+      imageSha256: source.value, fingerprint, apkSha256: prep.value.sha256,
+    }).finally(un);
     if (gen !== this.runGen) return;
     if (!patch.ok) return this.failStep(`부트 패치 실패: ${patch.error}`);
     this.patchedImage = patch.value.path;
@@ -1700,20 +1760,26 @@ export class Wizard {
     if (!inFastboot) return this.failStep("부트로더 모드 진입이 감지되지 않습니다 — USB 연결을 확인해 주세요");
     // 4) 패치 이미지 기록(양 슬롯) — fastboot 엔진 재사용
     cur.progress = 0.7;
-    const flash = await api.fastbootFlash(partition, this.patchedImage, true);
+    const unFlash = await api.onFastbootLog(line => {
+      if (gen === this.runGen) cur.logs.push(`[fastboot] ${line}`);
+    });
+    if (gen !== this.runGen) return unFlash();
+    const flash = await api.fastbootFlash(partition, patch.value.path, true, this.device?.serial ?? "", patch.value.patchedSha256).finally(unFlash);
     if (gen !== this.runGen) return;
     if (!flash.ok) return this.failStep(`부트 이미지 기록 실패: ${flash.error}`);
     cur.logs.push(`[루팅] ${partition}_a/_b 기록 완료`);
     this.markRootSub(cur, 5); // 기록
     void this.persist(true);
     // 5) 재부팅 → adb 복귀 대기
-    await api.fastbootReboot("os");
+    const rebooted = await api.fastbootReboot("os", this.device?.serial ?? "");
+    if (gen !== this.runGen) return;
+    if (!rebooted) return this.failStep("패치 기록 후 OS 재부팅을 확인하지 못했습니다 — 기기 상태를 확인해 주세요");
     const back = await this.waitFor(gen, () => this.usbDebugReady(), 240_000);
     if (gen !== this.runGen) return;
     if (!back) return this.failStep("기기가 다시 연결되지 않습니다 — 재부팅 후 USB 디버깅 승인을 확인해 주세요");
     // 6) Magisk 앱 설치
     cur.progress = 0.9;
-    const inst = await api.magiskInstall(this.device?.serial, prep.value.apkPath);
+    const inst = await api.magiskInstall(this.device?.serial, prep.value.apkPath, prep.value.sha256);
     if (gen !== this.runGen) return;
     if (!inst.ok) return this.failStep(`Magisk 앱 설치 실패: ${inst.error}`);
     this.markRootSub(cur, 6); // 앱 설치
@@ -1729,7 +1795,9 @@ export class Wizard {
 
   /** su 승인 후 최종 확인 — root_check로 uid=0 검증 */
   private async finishRealRoot(cur: RunStep) {
+    const gen = this.runGen;
     const ok = await api.rootCheck(this.device?.serial);
+    if (gen !== this.runGen) return;
     if (ok) {
       cur.logs.push("[완료] 루트 권한 확인(su -c id = uid=0)");
       cur.progress = 1;
@@ -1751,27 +1819,7 @@ export class Wizard {
 
   /** 조건 폴링 대기 — 세대 가드·타임아웃·check 예외 방어(모드 전환 대기 공용) */
   private waitFor(gen: number, check: () => Promise<boolean>, timeoutMs: number, everyMs = 2000): Promise<boolean> {
-    return new Promise((resolve) => {
-      const start = Date.now();
-      const t = setInterval(async () => {
-        try {
-          if (gen !== this.runGen) {
-            clearInterval(t);
-            return resolve(false);
-          }
-          if (await check()) {
-            clearInterval(t);
-            return resolve(true);
-          }
-          if (Date.now() - start > timeoutMs) {
-            clearInterval(t);
-            return resolve(false);
-          }
-        } catch {
-          // 조회 실패는 "아직 아님"으로 본다 — 타임아웃이 최종 판정
-        }
-      }, everyMs);
-    });
+    return waitUntil(check, () => gen === this.runGen, timeoutMs, everyMs);
   }
 
   /** smsie 수동 복원 마무리 — 기본 문자 앱 역할 원복 + 안내 로그 */
@@ -1816,6 +1864,7 @@ export class Wizard {
     cur.progress = 0;
     cur.manualDone = 0;
     cur.sub = undefined;
+    this.clearRuntimeManuals(cur.id);
     cur.logs.push("[재시도] 이 단계를 처음부터 다시 진행합니다");
     this.stepError = "";
     this.runGen++;
@@ -1832,6 +1881,7 @@ export class Wizard {
       st.progress = 0;
       st.manualDone = 0;
       st.sub = undefined;
+      this.clearRuntimeManuals(st.id);
     }
     this.runSteps[idx].logs.push("[재패치] 통신이 확인되지 않아 VoLTE 적용부터 다시 진행합니다");
     this.stopWatch();
@@ -1869,10 +1919,21 @@ export class Wizard {
         s.manualDone = 0;
         s.sub = undefined;
       }
+      if (s.status === "pending") this.clearRuntimeManuals(s.id);
     });
     this.manualCurrent = null;
     this.usbError = false;
     this.backupNoticeAck = false;
+  }
+
+  /** 엔진이 추가한 안내는 재시도 시 엔진 준비가 끝난 뒤 다시 표시한다. */
+  private clearRuntimeManuals(id: string) {
+    const runtime: Partial<Record<string, ManualId[]>> = {
+      root: ["su-grant"], backup: ["smsie-export"], restore: ["contacts-import", "smsie-import"],
+    };
+    const step = this.steps.find(step => step.id === id);
+    if (step?.manual && runtime[id]) step.manual = step.manual.filter(item => !runtime[id]!.includes(item));
+    if (id === "root") this.patchedImage = "";
   }
 
   abort() {
@@ -1942,6 +2003,7 @@ export class Wizard {
     this.efsFailedOnce = false;
     this.backupSummary = null;
     this.backupDir = "";
+    this.patchedImage = "";
     this.backupRanGen = -1;
     this.restoreRanGen = -1;
     this.unlockRanGen = -1;

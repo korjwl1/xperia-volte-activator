@@ -90,6 +90,7 @@ test("disk journal rejects malformed configuration, cursor and execution structu
     j => { j.runSteps[0].progress = 1.01; },
     j => { j.runSteps[0].manualDone = 1; },
     j => { j.opts.restore = "true"; },
+    j => { j.patchedImage = {}; },
   ]) {
     const copy = structuredClone(valid); mutate(copy);
     assert.equal(decodeJournal(JSON.stringify(copy)), null);

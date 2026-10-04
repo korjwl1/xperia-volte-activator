@@ -42,23 +42,7 @@ pub struct ProgressPayload {
 
 /// 전역 취소 플래그 — backup_run 시작 시 리셋, backup_cancel로 설정
 static BACKUP_CANCEL: OnceLock<Arc<AtomicBool>> = OnceLock::new();
-static MUTATING: AtomicBool = AtomicBool::new(false);
-
-/// 서버 모드도 백업·복원·SMS 파일/역할 변경은 동시에 실행할 수 없다.
-struct Operation;
-impl Operation {
-    fn acquire() -> Result<Self, String> {
-        MUTATING
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .map_err(|_| "백업 또는 복원 작업이 이미 진행 중입니다")?;
-        Ok(Self)
-    }
-}
-impl Drop for Operation {
-    fn drop(&mut self) {
-        MUTATING.store(false, Ordering::SeqCst);
-    }
-}
+use crate::device_io::WriteOperation as Operation;
 
 fn shared_cancel() -> Arc<AtomicBool> {
     Arc::clone(BACKUP_CANCEL.get_or_init(|| Arc::new(AtomicBool::new(false))))

@@ -19,6 +19,7 @@ export function decodeJournal(raw: string): RunJournal | null {
         || !option(value.opts) || !texts(value.backupItems) || !integer(value.cursor)
         || !Array.isArray(value.steps) || !Array.isArray(value.runSteps) || value.runSteps.length === 0 || value.steps.length > 100
         || value.cursor > value.runSteps.length || (value.backupDir !== undefined && !text(value.backupDir))
+        || (value.patchedImage !== undefined && !text(value.patchedImage))
         || (value.imsUnverified !== undefined && typeof value.imsUnverified !== "boolean")) return null;
     const config = value.config;
     if (!object(config) || !Array.isArray(config.sims) || config.sims.length !== 2

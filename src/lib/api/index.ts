@@ -3,7 +3,7 @@
 // 단계별 실행 플래그는 data/runMode.ts에서 관리. fastboot 쓰기/재부팅은 facade에서도 차단.
 // 컴포넌트에서 @tauri-apps/api 직접 import 금지.
 
-import type { AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FastbootVars, FirmwareResult, FirmwareVersions, MagiskPrepared, PatchResult, RestoreOutcome, RelockGate, SettingsOverview, SmsIeOutcome, UnlockResult } from "$lib/types";
+import type { MagiskPatchRequest, FirmwareDirInfo, AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FastbootVars, FirmwareResult, FirmwareVersions, MagiskPrepared, PatchResult, RestoreOutcome, RelockGate, SettingsOverview, SmsIeOutcome, UnlockResult } from "$lib/types";
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
 import type { ApiResult } from "$lib/types";
 import { REAL_STEPS } from "$lib/data/runMode";
@@ -55,7 +55,7 @@ export interface Api {
   /** 루트 권한 승인 여부 (su -c id = uid=0), 조회 실패 시 null */
   rootCheck(serial?: string): Promise<boolean | null>;
   /** 직접 지정한 펌웨어 폴더 검사 — <partition>_*.sin 존재 + 부트 이미지 추출 가능 */
-  firmwareDirCheck(dir: string, partition: string): Promise<ApiResult<{ file: string; imageBytes: number }>>;
+  firmwareDirCheck(dir: string, partition: string): Promise<ApiResult<FirmwareDirInfo>>;
   /** 작업 중 PC 보호 — 절전 방지 + Windows 종료 방지 (작업 중에만 켬) */
   runGuard(active: boolean, reason?: string): Promise<boolean>;
   /** 연락처 복원 확인 — 백업한 연락처 수와 지금 폰의 연락처 수, 조회 실패 시 null */
@@ -84,24 +84,26 @@ export interface Api {
   /** fastboot getvar:all — 읽기 전용 프로브 (unlocked·슬롯·헬스), 실패·미설치 시 null */
   fastbootGetvar(): Promise<FastbootVars | null>;
   /** 부트로더 언락 — oem unlock 0x{code} 후 getvar 이중 확인 (로그에 코드 마스킹) */
-  fastbootUnlock(code: string, confirm: boolean): Promise<ApiResult<UnlockResult>>;
-  /** 부트로더 리락 — oem lock 후 확인 */
-  fastbootLock(confirm: boolean, partition: string, stockPath: string): Promise<ApiResult<UnlockResult>>;
-  /** 리락 게이트 사전 점검(읽기 전용) — 미충족 사유 표시용. 최종 판정은 fastboot_lock이 수행 */
+  fastbootUnlock(code: string, confirm: boolean, expectedSerial: string): Promise<ApiResult<UnlockResult>>;
+  /** 리락 요청 — 순정 출처·AVB·전체 체인 검증 전까지 백엔드가 항상 거부 */
+  fastbootLock(confirm: boolean, partition: string, stockPath: string, expectedSerial: string): Promise<ApiResult<UnlockResult>>;
+  /** 리락 이력 진단(읽기 전용) — 진단 정상도 실제 리락을 허용하지 않음 */
   relockGateCheck(partition: string, stockPath: string, deviceKey?: string): Promise<ApiResult<RelockGate>>;
   /** fastboot 재부팅 — os | bootloader (OKAY 확인 시 성공) */
-  fastbootReboot(target: "os" | "bootloader"): Promise<boolean>;
+  fastbootReboot(target: "os" | "bootloader", expectedSerial: string): Promise<boolean>;
   /** fastboot 로그 이벤트 구독 (INFO 프레임·명령·민감값 마스킹) */
   onFastbootLog(cb: (line: string) => void): Promise<() => void>;
   /** fastboot 파티션 기록 — download → flash <partition>_a/_b (fastboot-write 게이트) */
-  fastbootFlash(partition: string, path: string, confirm: boolean): Promise<ApiResult<null>>;
+  fastbootFlash(partition: string, path: string, confirm: boolean, expectedSerial: string, expectedSha256: string): Promise<ApiResult<null>>;
+  /** 현재 기기의 펌웨어 지문·부트 이미지 검사 후 SHA-256 반환 */
+  bootImageCheck(serial: string, path: string, fingerprint: string): Promise<ApiResult<string>>;
   /** Magisk 최신 APK 확보(GitHub·캐시) — 기기 무관 준비 단계 */
   magiskPrepare(): Promise<ApiResult<MagiskPrepared>>;
   /** 부트 패치 — 스테이징·boot_patch.sh·검증(ANDROID!·크기·해시)·pull·정리 (root-write 게이트). partition은 결과명에 사용 */
-  magiskPatch(serial: string | undefined, apkPath: string, imagePath: string, partition: string): Promise<ApiResult<PatchResult>>;
+  magiskPatch(request: MagiskPatchRequest): Promise<ApiResult<PatchResult>>;
   /** Magisk 앱 설치 (root-write 게이트) */
-  magiskInstall(serial: string | undefined, apkPath: string): Promise<ApiResult<null>>;
-  /** adb 재부팅 — os | bootloader (root-write 게이트) */
+  magiskInstall(serial: string | undefined, apkPath: string, apkSha256: string): Promise<ApiResult<null>>;
+  /** adb 재부팅 — os | bootloader (root-write 또는 fastboot-write 게이트) */
   rootReboot(serial: string | undefined, target: "os" | "bootloader"): Promise<ApiResult<null>>;
   /** Magisk 패치 로그 이벤트 구독 */
   onMagiskLog(cb: (line: string) => void): Promise<() => void>;
@@ -210,7 +212,7 @@ const hybridApi: Api = {
   },
 
   async firmwareDirCheck(dir, partition) {
-    return await invokeResult<{ file: string; imageBytes: number }>("firmware_dir_check", { dir, partition });
+    return await invokeResult<FirmwareDirInfo>("firmware_dir_check", { dir, partition });
   },
 
   async runGuard(active, reason) {
@@ -276,46 +278,50 @@ const hybridApi: Api = {
     return await invokeBackend<FastbootVars>("fastboot_getvar");
   },
 
-  async fastbootUnlock(code, confirm) {
+  async fastbootUnlock(code, confirm, expectedSerial) {
     if (!REAL_STEPS.fastboot) return { ok: false, error: "fastboot 실전 실행이 비활성화되어 있습니다" };
-    return await invokeResult<UnlockResult>("fastboot_unlock", { code, confirm });
+    return await invokeResult<UnlockResult>("fastboot_unlock", { code, confirm, expectedSerial });
   },
 
-  async fastbootLock(confirm, partition, stockPath) {
+  async fastbootLock(confirm, partition, stockPath, expectedSerial) {
     if (!REAL_STEPS.fastboot) return { ok: false, error: "fastboot 실전 실행이 비활성화되어 있습니다" };
-    return await invokeResult<UnlockResult>("fastboot_lock", { confirm, partition, stockPath });
+    return await invokeResult<UnlockResult>("fastboot_lock", { confirm, partition, stockPath, expectedSerial });
   },
 
   async relockGateCheck(partition, stockPath, deviceKey) {
     return await invokeResult<RelockGate>("relock_gate_check", { partition, stockPath, deviceKey: deviceKey ?? null });
   },
 
-  async fastbootReboot(target) {
+  async fastbootReboot(target, expectedSerial) {
     if (!REAL_STEPS.fastboot) return false;
-    return (await invokeResult<null>("fastboot_reboot", { target })).ok;
+    return (await invokeResult<null>("fastboot_reboot", { target, expectedSerial })).ok;
   },
 
   async onFastbootLog(cb) {
     return transport.subscribe<string>("fastboot:log", cb);
   },
 
-  async fastbootFlash(partition, path, confirm) {
+  async fastbootFlash(partition, path, confirm, expectedSerial, expectedSha256) {
     if (!REAL_STEPS.fastboot) return { ok: false, error: "fastboot 실전 실행이 비활성화되어 있습니다" };
-    return await invokeResult<null>("fastboot_flash", { partition, path, confirm });
+    return await invokeResult<null>("fastboot_flash", { partition, path, confirm, expectedSerial, expectedSha256 });
+  },
+
+  async bootImageCheck(serial, path, fingerprint) {
+    return await invokeResult<string>("boot_image_check", { serial, path, fingerprint });
   },
 
   async magiskPrepare() {
     return await invokeResult<MagiskPrepared>("magisk_prepare");
   },
 
-  async magiskPatch(serial, apkPath, imagePath, partition) {
+  async magiskPatch(request) {
     if (!REAL_STEPS.root) return { ok: false, error: "루팅 실전 실행이 비활성화되어 있습니다" };
-    return await invokeResult<PatchResult>("magisk_patch", { serial: serial ?? null, apkPath, imagePath, partition });
+    return await invokeResult<PatchResult>("magisk_patch", { request });
   },
 
-  async magiskInstall(serial, apkPath) {
+  async magiskInstall(serial, apkPath, apkSha256) {
     if (!REAL_STEPS.root) return { ok: false, error: "루팅 실전 실행이 비활성화되어 있습니다" };
-    return await invokeResult<null>("magisk_install", { serial: serial ?? null, apkPath });
+    return await invokeResult<null>("magisk_install", { serial: serial ?? null, apkPath, apkSha256 });
   },
 
   async rootReboot(serial, target) {

@@ -29,6 +29,11 @@ impl<T: FastbootTransport> FastbootDevice<T> {
         Self { transport, on_log }
     }
 
+    #[cfg(test)]
+    pub fn into_transport(self) -> T {
+        self.transport
+    }
+
     /// 응답 읽기 — INFO는 로그로 흘리고 종결 프레임을 기다린다
     fn read_terminal(&mut self) -> Result<Terminal, String> {
         for frame in 0..=MAX_INFO_FRAMES {
@@ -178,6 +183,7 @@ impl<T: FastbootTransport> FastbootDevice<T> {
     }
 
     /// 부트로더 리락 — `oem lock`
+    #[cfg(test)]
     pub fn oem_lock(&mut self) -> Result<(), String> {
         match self.command("oem lock")? {
             Terminal::Ok(_) => Ok(()),

@@ -47,8 +47,11 @@ RunProgress 실행 중 폰 측 조작이 필요한 지점(§12)에서 모달로 
   | su-grant | root_check (su -c id = uid=0) |
   | ims-check | 패치한 슬롯이 모두 IMS 음성 등록. 실패 시 [확인 없이 마무리] 허용 — SIM 없이 미리 패치하는 경우 등, 작업은 이미 끝난 상태 (완료 화면에 "VoLTE 등록은 확인하지 못했습니다" 안내) |
   | unlock-code | 형식(16자리 16진수)만 — 실제 백엔드는 fastboot가 거부하면 그 단계에서 멈추고 다시 입력받음 |
-  | firmware(직접 지정) | firmware_dir_check: 폴더(한 단계 하위 포함)에 <partition>_*.sin, 부트 이미지(ANDROID!) 추출 가능. 버전 일치 확인은 실제 백엔드에서 추가 필요 |
+  | firmware(직접 지정) | firmware_dir_check: SIN 후보 하나와 같은 폴더 update.xml 지문 필수, raw IMG를 캐시에 추출. 실제 기록 전에 boot_image_check로 현재 기기 펌웨어 지문 대조 |
   | backup-notice | 동의 체크(확인 대상 아님) |
 - 자동 감지(watcher)는 그대로 — 감지되면 자동 진행
 - 목업 실행(src/lib/data/runMode.ts SIMULATED_RUN = true)에서만 "(목업) 건너뛰기" 표시 — 폰이 실제로 재부팅되지 않아 모드·루트 확인이 통과할 수 없기 때문. 실전 백엔드 연결 시 false
 - 실제 백엔드의 각 단계는 명령을 보내기 전에 전제 조건을 다시 확인 (예: 리락 전 fastboot 연결·순정 부트 이미지)
+
+- REAL_STEPS.root 또는 fastboot 활성 시 목업 건너뛰기 비활성. 실전 리락은 부트로더 진입 안내 전에 차단한다.
+- root/backup/restore 엔진이 추가한 수동 안내는 재시도·재개 시 초기화하고 준비 후 다시 추가한다. 펌웨어 입력이 이미 준비됐으면 running으로 돌아가며 빈 폴더 선택은 idle로 초기화한다.

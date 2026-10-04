@@ -2,6 +2,7 @@
 mod adb;
 mod app_paths;
 mod backup;
+mod boot_image;
 mod device_io;
 mod fastboot;
 mod firmware;
@@ -42,6 +43,7 @@ pub fn run() {
             firmware::firmware_fetch,
             firmware::firmware_versions,
             firmware::firmware_dir_check,
+            boot_image::boot_image_check,
             adb::root_check,
             journal::journal_save,
             journal::journal_load,

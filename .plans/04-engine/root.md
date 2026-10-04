@@ -1,6 +1,6 @@
 # 루팅 엔진 (M4) — Magisk 자동 패치·기록·설치 구현 설계
 
-status: implemented (실기기 검증 대기 — 단위 테스트 121통과, REAL_STEPS.root + root-write 이중 게이트)
+status: implemented (실기기 검증 대기 — 최신 통합 리뷰: integrated-review.md, root/fastboot 양쪽 실행 게이트 필요)
 
 - 상위 정책: `tasks/plan.md` §12(Magisk 산출물 근거 강화)·M4 마일스톤, §3-3(의존성)
 - 절차 근거: `.plans/02-contracts/tauri-commands.md` root 절 — **2026-10-03 XQ-DQ44·Android 15·Magisk v30.7 실기기 검증 절차**(사용자 조작 없음)
@@ -48,14 +48,15 @@ src-tauri/src/magisk/
 
 ```ts
 invoke('magisk_prepare') → { version, apkPath, sha256 }        // GitHub latest 다운로드(캐시 재사용) — 기기 무관
-invoke('magisk_patch', { serial, apkPath, imagePath }) → PatchResult
+invoke('boot_image_check', { serial, path, fingerprint }) → string // 현재 펌웨어 대조 + 이미지 해시
+invoke('magisk_patch', { request: { serial, apkPath, imagePath, partition, imageSha256, fingerprint, apkSha256 } }) → PatchResult
 //   스테이징 → boot_patch.sh → 검증(ANDROID!·크기≤원본·해시≠원본) → pull → 작업 폴더 정리
 //   PatchResult = { path, origSha256, patchedSha256, bytes, log: string[] }
-//   이벤트 'magisk:log': { line } — 패치 스크립트 출력
-invoke('magisk_install', { serial, apkPath }) → void           // adb install
+//   이벤트 'magisk:log': string — 패치 스크립트 출력
+invoke('magisk_install', { serial, apkPath, apkSha256 }) → void // 입력 APK 재검사 후 adb install
 invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb reboot (fastboot_reboot의 adb 짝)
-// 기록: 기존 fastboot_flash(partition, path, confirm) 재사용 — 코드·계약 변경 없음
-// 게이트: 파괴 동작(patch의 기기 쓰기·install·reboot)은 Cargo feature root-write + REAL_STEPS.root 이중
+// 기록: fastboot_flash(partition, path, confirm, expectedSerial, expectedSha256) 재사용
+// 패치·설치는 root-write + REAL_STEPS.root. ADB 재부팅은 root-write 또는 fastboot-write 필요.
 ```
 
 - magisk_prepare는 펌웨어 다운로드(firmware_fetch)와 같은 성격 — 준비 단계라 게이트 밖(기기 무관, 캐시 쓰기만)
@@ -63,7 +64,7 @@ invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb r
 ## wizard 연결 (root 단계, REAL_STEPS.root)
 
 ```
-[자동] magisk_prepare(다운로드·버전 로그)
+[자동] boot_image_check(현재 버전 지문·이미지 확인) → magisk_prepare(다운로드·버전 로그)
 [자동] magisk_patch(이미지 = firmware_fetch 결과 경로)
 [자동] root_reboot(bootloader) → fastboot 모드 폴링(기존 usbModeIs)
 [자동] fastboot_flash(partition, patched) — fastboot-write 게이트 통과분
@@ -71,7 +72,7 @@ invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb r
 [자동] magisk_install(APK)
 [수동] su-grant — 기존 프레임워크(확인 버튼 = root_check 실측, 자동 감지 폴링)
 ```
-- 루팅 단계 정의(domain/plan.ts)에 `manual: ["su-grant"]` 추가 — 실전 흐름 마무리 검증(시뮬레이션에선 기존 건너뛰기 허용)
+- 실전 su-grant는 패치·기록·설치 후 런타임에 추가한다. 재시도/재개 시 안내를 초기화해 준비 전에 승인을 요청하지 않는다. 실전 root/fastboot 중 하나라도 켜져 있으면 목업 건너뛰기를 제공하지 않는다.
 
 ## 테스트 전략 (실기기 없이)
 
@@ -83,11 +84,11 @@ invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb r
 
 ## 자체 리뷰 반영 (2026-10-04)
 
-- **셸 보간 제거**: 기기 측 부트 이미지명은 고정 `boot.img` — 로컬 파일명("my boot;rm.img" 등)이 셸 명령에 들어가던 문제 해소(§12.5). 결과 경로도 파티션명 기반 `magisk/<partition>-patched.img`
+- **셸 보간 제거**: 기기 측 부트 이미지명은 고정 `boot.img`. 결과는 내용 해시 기반 `magisk/patched-<sha256>.img`로 원자 저장한다.
 - **원자 다운로드**: magisk_prepare가 임시 파일→rename으로 저장 — 중단 시 반쪽 APK가 캐시로 오인되지 않게. 256 MiB 상한(디스크 채우기 방어)
 - **크기 하한**: 패치 결과 ≥ 원본/2 — 매직·해시 검증만으론 9바이트 가짜가 통과할 수 있었음
 - **실패 판정 정합화**: must_ok는 종료 코드 + stderr만(기존 settings.rs 규칙) — 출력에 "not found" 문자열이 있으면 실패 오판하던 휴리스틱 제거
-- **waitFor 예외 방어**: check throw 시에도 타임아웃이 최종 판정(미처리 rejection 제거)
+- **waitUntil**: 단일 질의·독립 제한 시간·취소 감시로 예외와 멈춘 질의에도 종료한다.
 - **sub 체크포인트**: 실전 루팅도 시뮬레이션과 같은 6단위로 갱신 + 기록·설치 후 즉시 journal 저장
 
 ## 리스크·검증 대기

@@ -1,77 +1,45 @@
-# 언루팅·리락 게이트 (M4 후속) — 구현 설계
+# 언루팅·리락 게이트 (M4 후속)
 
-status: implemented (실기기 검증 대기 — 게이트 단위 테스트 9종 포함 133통과, fastboot-lock 게이트는 fastboot-write 뒤)
+status: implemented (언루팅 엔진·이력 진단 구현, 실제 리락 차단, 실기기 검증 없음)
 
-- 상위 정책: `tasks/plan.md` §3-3(리락 게이트 의존성 규칙)·§5(초기화 루트)
-- 원본 CLI 계승: `unRoot()`(src/cliInterface.py 461) — 순정 IMG 양 슬롯 기록 후 "Magisk 앱 직접 삭제" 안내(앱 삭제 자동화 안 함)
-- 차단 해제 대상: `fastboot::ensure_relock_verified()` 하드 차단(Codex 0908266) → 실제 게이트 판정으로 교체
+2026-10-04 병합 후 리뷰에서 리락 허용 조건을 수정했다. [integrated-review.md](integrated-review.md)가 최신 검토 결과다.
 
-## 리락 게이트 규칙 (§3-3 "엔진 강제")
+## 언루팅 절차
 
-> 리락 게이트 = ①검증된 순정 이미지 해시(우리가 SIN에서 직접 추출) ②부트 체인 파티션×슬롯 플래시 이력. 미충족 시 리락 차단.
+원본 unRoot의 순정 IMG 양 슬롯 기록과 Magisk 앱 수동 삭제 안내를 계승한다. `REAL_STEPS.root && REAL_STEPS.fastboot` 및 백엔드 쓰기 feature가 필요하다.
 
-구현 판정:
-1. **순정 증거**: 호출자가 지정한 순정 이미지 경로(firmware_fetch 결과)를 해시 — ANDROID! 매직 확인(부트 이미지 형식)
-2. **이력 판정**: `flash-history.jsonl`(deviceKey 필터)에서 boot·init_boot 양 슬롯(_a/_b) 각각의
-   **마지막 done 항목**이 존재하고 그 sha256 == 순정 이미지 sha256이어야 통과
-   - 마지막 done이 패치 이미지 해시 → 차단(언루팅 안 됨)
-   - done 없음(전부 started/failed) → 차단(미완료 기록 — 한 슬롯만 성공한 경우 오인 방지, Codex 기록 방침 계승)
-   - **우리 이력에 없는 파티션 = 미조작으로 간주(순정 유지)** — 공장 상태에서 온 파티션은 이력이 없음
-3. **이중 적용**: 사전 점검 명령(안내 표시용) + `fastboot_lock` 내부 강제(서버 측 최종 방어)
+1. 자동 다운로드 IMG 또는 수동 SIN에서 추출한 raw IMG 확보. 수동 입력은 update.xml 지문 필수이며 SIN 후보가 여러 개면 거부한다.
+2. ADB 상태에서 boot_image_check로 현재 펌웨어 지문·이미지 기본 형식/크기를 확인하고 SHA-256을 확보한다.
+3. root_reboot(bootloader)와 모드 대기. 실패·취소·제한 시간 초과 시 중단한다.
+4. fastboot_flash에 expectedSerial과 expectedSha256을 전달해 같은 기기·같은 버퍼인지 확인한 뒤 양 슬롯 기록. 슬롯별 started/done/failed 이력을 동기 저장한다.
+5. fastboot_reboot(os)의 실제 성공 응답과 같은 기기의 ADB 복귀를 확인한다.
+6. root_check가 여전히 uid=0을 반환하면 실패 처리한다. 조회 실패는 미확인 로그를 남긴다. 사용자가 Magisk에서 루트 해제 여부를 확인하고 앱을 직접 삭제한다. 앱 삭제는 자동 수행하지 않는다.
 
-한계(문서화): 다른 도구로 플래시한 이력은 알 수 없다 — 수동 오버라이드("AVB 위험 감수")는 §3-3이 허용하나
-v1에서는 제공하지 않고 차단 메시지로 안내만(언루팅→리락 표준 경로로 해결).
+펌웨어 업데이트가 시뮬레이션인 계획과 실전 부트 기록을 섞지 않는다. 한 슬롯만 성공하면 실패로 중단하며 자동 롤백은 구현되지 않았다.
 
-## 언루팅 절차 (원본 unRoot 계승 + 자동화)
+## 이력 진단과 실제 리락
 
-```
-[자동] 순정 이미지 확인(firmware_fetch 결과·ANDROID! 매직) — patchedImage(패치 이미지)와 해시 다름 확인
-[자동] adb reboot bootloader(root_reboot) → fastboot 감지 대기(waitFor)
-[자동] fastboot_flash(partition, 순정이미지) — 양 슬롯 기록 + 이력 자동 기록(게이트 재료)
-[자동] fastboot reboot os → adb 복귀 대기
-[안내] Magisk 앱 실행해 언루팅 확인 → 사용자가 직접 앱 삭제(원본과 동일 — 자동화 안 함)
-[안내] Play 프로텍트 미인증 시 Play 스토어 앱 정보에서 앱 데이터 삭제(원본 문구 계승)
-```
+flash-history.jsonl은 전송 이력이다. 이력 해시가 입력 이미지와 같아도 순정 출처·서명·AVB·전체 부트 체인이나 실제 리드백을 증명하지 못한다. ANDROID! 매직도 순정 인증이 아니다.
 
-## 계약 (02-contracts 정정)
+- 파일 없음·읽기 실패·16 MiB 초과·잘못된 UTF-8·손상 JSON·필수 값 누락·잘못된 해시/상태는 실패 처리한다. 손상된 줄을 건너뛰지 않는다.
+- 현재 기기의 64자리 식별 키가 있어야 진단한다. 다른 기기의 완료 이력을 섞지 않는다.
+- 해당 파티션 양 슬롯의 최신 항목이 done이고 입력 해시와 같아야 슬롯 진단을 통과한다. 이력 없는 슬롯은 unknown으로 실패한다. 이후 started/failed가 있으면 이전 done으로 통과시키지 않는다.
+- 같은 기기의 다른 파티션 이력이 있으면 단일 이미지로 전체 체인을 증명할 수 없다고 판정한다.
+- 진단 통과도 실제 리락의 허용 조건이 아니다. relock_gate_check는 항상 ok=false와 차단 사유를 반환하거나 입력/이력 오류를 반환한다.
+- fastboot_lock은 모든 빌드에서 USB 접근 없이 거부한다. 프로토콜의 oem_lock 메서드는 가짜 전송 테스트에서만 컴파일된다.
+- 프런트의 실전 리락은 mode-wait 재부팅 전에 차단한다. 수동 우회 옵션은 제공하지 않는다.
+
+## 계약
 
 ```ts
-invoke('relock_gate_check', { partition, stockPath, deviceKey? }) → RelockGate
-//   RelockGate = { ok: boolean, reasons: string[], checked: { partition, slot, ok, detail }[] }
-//   읽기 전용 사전 점검 — fastboot 모드 아님(adb 연결 중)에도 호출 가능. deviceKey 생략 시 전체 이력 대상(안내용)
-//   권한 판정은 fastboot_lock이 내부에서 다시 수행한다(기기 fastboot serial 기준 — 최종 방어)
-invoke('fastboot_lock', { confirm }) → { unlocked }   // 내부: 리락 게이트 통과 필수로 교체(하드 차단 제거)
-// 언루팅 절차는 기존 명령 조합(root_reboot + fastboot_flash + fastboot_reboot) — 신규 명령 없음
+invoke('relock_gate_check', { partition, stockPath, deviceKey }) → RelockGate
+invoke('fastboot_lock', { confirm, partition, stockPath, expectedSerial }) → reject
 ```
 
-- 게이트: `fastboot_lock`은 Cargo feature `fastboot-write` + 프론트 REAL_STEPS.fastboot 이중.
-  `relock_gate_check`는 읽기 전용(파일 판정만)이라 게이트 밖 — 사전 점검 안내용, 최종 판정은 fastboot_lock이 기기 fastboot serial 기준으로 재수행
-- wizard 언루팅 러너 게이트: `REAL_STEPS.root && REAL_STEPS.fastboot`(adb 재부팅 + 기록 모두 사용).
-  mode-wait 수동 개입에서 앱이 부트로더 재부팅을 자동 수행(안내 문구와 실제 동작 일치 — 기존 갭 해소)
+deviceKey는 fastboot serialno의 SHA-256이다. 프런트는 선택한 기기 serial로 계산한다. ADB 전송 식별자가 fastboot serial과 다르면 실제 쓰기를 안전하게 거부하며 임의 매핑하지 않는다.
 
-## 구현
+## 검증 범위
 
-```
-src-tauri/src/fastboot/relock.rs — 게이트 순수 로직(이력 파싱·판정·사유 조립) + 단위 테스트
-src-tauri/src/fastboot/mod.rs  — ensure_relock_verified → verify_relock(...) 실제 판정, relock_gate_check 명령
-wizard — runRealUnroot(위 절차) + runRealRelock에 사전 게이트 점검(사유 로그·미충족 시 failStep)
-```
+가짜 이력·가짜 전송·프런트 API를 사용해 누락/손상 이력, 슬롯 누락, 최신 실패 시도, 다른 기기, 루팅→언루팅 이력 진단과 실제 리락 차단, 재부팅 실패, 취소 중 구독 등록, 수동 IMG 전달을 검증했다. 실기기 부팅·기록·언루팅 효과·권한 동작·리락은 실행하지 않았다.
 
-- 순정 이미지 해시는 게이트 시점에 파일에서 다시 계산(전송 버퍼 해시와 동일 알고리즘 — fastboot_flash와 정합)
-- deviceKey: fastboot serialno의 SHA-256 hex(fastboot_flash 기록 방식과 동일). 사전 점검 시 프론트는
-  adb serial로 같은 알고리즘 계산(일반적으로 동일값 — 불일치 시 최종 fastboot_lock이 걸러냄)
-
-## 테스트 전략 (실기기 없이)
-
-1. 이력 파싱: jsonl(빈 줄·끊긴 줄 포함) → 항목 무시·정상 항목만 판정
-2. 판정 매트릭스: 양 슬롯 순정 done → 통과 / 마지막이 패치 → 차단 / 한 슬롯만 done → 차단 /
-   done 없음 → 차단 / 이력 없는 파티션 → 통과(미조작 간주) / 다른 기기 이력 → 제외
-3. 순정 이미지 검증: ANDROID! 아닌 파일 → 차단 사유 / patchedImage와 해시 동일 → 순정이 아니라고 차단
-4. 시나리오: 루팅(patch 해시 기록) → 언루팅(순정 해시 기록) → 게이트 통과 (이력 순서 보존 판정)
-
-## 구현 순서 (커밋 단위)
-
-1. `docs(plans)`: 이 문서 + 02-contracts 정정 + AGENTS 예외 갱신
-2. `feat(fastboot)`: relock.rs 게이트 로직 + 단위 테스트 + relock_gate_check 명령 + fastboot_lock 교체
-3. `feat(front)`: wizard 언루팅 러너 + 리락 사전 게이트 점검 연결
-4. `docs(plans)`: 상태 배지 갱신
+순정 출처·AVB 키·rollback index·vbmeta 및 전체 체인 증명과 실기기 검증이 완료되기 전에는 리락 차단을 해제하지 않는다.

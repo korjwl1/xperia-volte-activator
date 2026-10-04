@@ -1,4 +1,5 @@
 //! 공통 파일 저장 — 호출마다 고유 임시 파일을 쓰고 sync 뒤 교체한다.
+use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,6 +47,23 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
         let _ = std::fs::remove_file(&temporary);
     }
     result
+}
+
+pub fn hash_reader(mut reader: impl Read) -> Result<(String, u64), String> {
+    let mut hash = Sha256::new();
+    let mut count = 0;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let n = reader
+            .read(&mut buffer)
+            .map_err(|e| format!("해시 읽기 실패: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buffer[..n]);
+        count += n as u64;
+    }
+    Ok((hex::encode(hash.finalize()), count))
 }
 
 #[cfg(test)]

@@ -103,16 +103,18 @@ Magisk 자동 패치 (사용자 조작 없음) — 2026-10-03 XQ-DQ44 / Android 
 invoke('magisk_prepare') → { version, apkPath, sha256 }
 //   GitHub releases(topjohnwu/Magisk latest)에서 Magisk-v<ver>.apk 다운로드 → 앱 데이터 캐시(재사용)
 //   기기 무관·준비 단계 — 게이트 밖(firmware_fetch와 같은 성격)
-invoke('magisk_patch', { serial, apkPath, imagePath, partition }) → { path, origSha256, patchedSha256, bytes, log: string[] }
+invoke('boot_image_check', { serial, path, fingerprint }) → string // 현재 ADB 기기의 펌웨어 지문 대조 + 이미지 SHA-256
+invoke('magisk_patch', { request: { serial, apkPath, imagePath, partition, imageSha256, fingerprint, apkSha256 } }) → { path, origSha256, patchedSha256, bytes, log: string[] }
 //   위 검증 절차 2~5: 페이로드 추출(zip) → push/chmod → boot_patch.sh(종료 코드 판정) →
 //   new-boot.img 검증(ANDROID! 매직 · 원본/2 ≤ 크기 ≤ 원본 · 해시 ≠ 원본) → pull → 작업 폴더 정리(고정 경로만)
-//   기기 측 이미지명은 고정 boot.img — 로컬 파일명은 셸에 넣지 않는다(§12.5). 결과는 앱 데이터 magisk/<partition>-patched.img
-//   이벤트 'magisk:log': { line } — 스크립트 출력·진행
-invoke('magisk_install', { serial, apkPath }) → void          // 검증 절차 6의 adb install
+//   기기 측 이미지명은 고정 boot.img — 로컬 파일명은 셸에 넣지 않는다(§12.5). 결과는 앱 데이터 magisk/patched-<sha256>.img
+//   이벤트 'magisk:log': string — 스크립트 출력·진행
+invoke('magisk_install', { serial, apkPath, apkSha256 }) → void // 필수 ZIP 항목·CRC·예상 해시 확인 후 adb install
 invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb reboot — fastboot_reboot의 adb 짝
-// 기록(절차 6의 fastboot)은 기존 fastboot_flash 재사용 — 계약 변경 없음
+// 기록은 fastboot_flash 재사용. expectedSerial과 패치 결과 expectedSha256을 함께 전달한다.
 // 검증(절차 7)은 기존 root_check + su-grant 수동 개입 재사용
-// 게이트: magisk_patch·magisk_install·root_reboot는 Cargo feature `root-write` + REAL_STEPS.root 이중
+// 패치·설치는 root-write + REAL_STEPS.root. root_reboot는 root-write 또는 fastboot-write 필요.
+// 시리얼은 필수이며 선택 기기가 없을 때 임의의 첫 기기로 대체하지 않는다.
 ```
 
 상세 절차(2026-10-03 실측): APK 페이로드(lib/arm64-v8a/{libmagiskboot,libmagiskinit,libmagisk,libinit-ld,libbusybox}.so + assets/{boot_patch.sh,util_functions.sh,stub.apk}) →
@@ -135,20 +137,21 @@ invoke('env_fix', { id }) → FixResult           // WebView2 부트스트래퍼
 
 ## plan / fastboot (M2 — 설계 `.plans/04-engine/fastboot.md`, 사용자 승인 2026-10-03)
 
-**구현 상태**: 프로토콜 5 명령 구현(FakeTransport 검증, 실기기 미검증). 쓰기·재부팅은 Cargo `fastboot-write` 기본 비활성 + `REAL_STEPS.fastboot`로 보호. **리락 게이트(§3-3) 구현 완료** — `relock_gate_check`(사전 점검) + `fastboot_lock` 내부 강제(feat/unroot-relockgate, 2026-10-04).
+**구현 상태**: FakeTransport 검증, 실기기 미검증. 쓰기·재부팅은 Cargo `fastboot-write` 기본 비활성 + `REAL_STEPS.fastboot`로 보호. 리락 이력 진단은 구현됐으나 순정 출처·AVB·전체 부트 체인 증명이 없어 **실제 리락은 항상 차단**한다(all-features 포함).
 
 ```ts
 invoke('fastboot_getvar') → Record<string,string>   // ✅ 읽기 전용 — rusb FF/42/03 open, getvar:all 파싱(unlocked·current-slot·slot-successful:_a/_b·max-download-size …)
 //   fastboot 모드 Sony 장치가 정확히 1대일 때만 open(다중 기기 거부 — §9-3)
-invoke('fastboot_unlock', { code, confirm }) → { unlocked: boolean }
+invoke('fastboot_unlock', { code, confirm, expectedSerial }) → { unlocked: boolean }
 //   "oem unlock 0x{code}" — 16자리 hex 검증, 로그·이벤트에 코드 마스킹(§12.5). 실행 후 getvar로 이중 확인
-invoke('fastboot_lock', { confirm, partition, stockPath }) → { unlocked: boolean }
-//   "oem lock" — 내부에서 리락 게이트 강제(§3-3): {partition}×_a/_b의 마지막 done 기록 sha256이
-//   순정 이미지(stockPath — firmware_fetch 결과) 해시와 일치해야 실행. 미충족 시 사유와 함께 차단
+invoke('fastboot_lock', { confirm, partition, stockPath, expectedSerial }) → reject
+//   순정 출처·AVB·전체 부트 체인 검증 전까지 USB 접근 없이 항상 거부. 이력 일치도 해제 조건이 아니다.
 invoke('relock_gate_check', { partition, stockPath, deviceKey? }) → { ok, reasons: string[], checked: [{partition, slot, ok, detail}] }
-//   읽기 전용 사전 점검(adb 연결 중 호출 가능) — fastboot_lock이 최종 판정(fastboot serial 기준 deviceKey)
-invoke('fastboot_flash', { partition, path, confirm }) → void      // 슬롯 접미사 없는 기본명, 양쪽 슬롯 존재 확인 → download/flash → 기기별·슬롯별 이력
-invoke('fastboot_reboot', { target: 'os'|'bootloader' }) → void
+//   기기 키 필수. 이력 없음·손상·슬롯 누락·최신 미완료는 실패. 진단 정상이어도 ok=false(리락 차단).
+invoke('fastboot_flash', { partition, path, confirm, expectedSerial, expectedSha256 }) → void
+//   전송 버퍼 해시 대조, boot/init_boot 기본 형식·크기 검사. 양쪽 슬롯 존재 확인 → download/flash → 기기별·슬롯별 이력.
+invoke('fastboot_reboot', { target: 'os'|'bootloader', expectedSerial }) → void
+//   언락·기록·재부팅은 fastboot serialno == expectedSerial 확인 후에만 실행한다.
 // 이벤트 'fastboot:log': string — INFO/TEXT 프레임·진행(코드·IMEI·식별정보 마스킹)
 //   파괴 명령은 confirm=true 필수. 쓰기/재부팅은 fastboot-write 없으면 USB open 전 오류.
 //   unlocked는 명시적 yes/no만 반환; 조회 실패는 오류. reboot는 OKAY만 성공(타임아웃도 오류).
@@ -260,11 +263,13 @@ invoke('run_guard', { active: boolean, reason?: string }) → void
 // 메인 창 스레드의 실제 적용/상태 확인 결과까지 기다리고 실패 시 보호 상태를 해제한다.
 ```
 
-## 수동 확인용 (읽기 전용)
+## 수동 확인·PC 준비
 
 ```ts
 invoke('root_check', { serial? }) → boolean            // su -c id 결과에 uid=0 — Magisk 허용 창이 뜰 수 있음, 기기 변경 없음
-invoke('firmware_dir_check', { dir, partition }) → { file, imageBytes }  // PC 폴더에서 <partition>_*.sin 찾아 부트 이미지 추출 확인
+invoke('firmware_dir_check', { dir, partition }) → { file, path, fingerprint, imageBytes }
+// PC 폴더(한 단계 하위 포함)의 SIN 후보는 정확히 하나여야 한다. 같은 폴더 update.xml의 지문 필수.
+// SIN을 raw IMG로 PC 캐시에 원자 추출한다. path가 패치·기록 입력이며 file은 표시용 SIN 이름이다.
 ```
 
 ## 점검 반영 (Codex gpt-6.1-sol 리뷰, 2026-10-03)

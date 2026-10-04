@@ -1,27 +1,10 @@
 //! 백업 무결성 검사 — 모든 기록 파일을 고정 크기 버퍼로 스트리밍 해싱한다.
 use super::model::{BackupSummary, ItemRecord, ItemStatus, Manifest};
 use super::paths;
-use sha2::{Digest, Sha256};
+pub use crate::storage::hash_reader;
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
-
-pub fn hash_reader(mut reader: impl Read) -> Result<(String, u64), String> {
-    let mut hash = Sha256::new();
-    let mut count = 0;
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let n = reader
-            .read(&mut buffer)
-            .map_err(|e| format!("해시 읽기 실패: {e}"))?;
-        if n == 0 {
-            break;
-        }
-        hash.update(&buffer[..n]);
-        count += n as u64;
-    }
-    Ok((hex::encode(hash.finalize()), count))
-}
 
 pub fn segments(root: &Path) -> Result<Vec<PathBuf>, String> {
     let dir = root.join("quarantine");
@@ -185,6 +168,9 @@ pub fn backup_summary(root: &Path) -> Result<BackupSummary, String> {
     summary.dir = root.to_string_lossy().to_string();
     Ok(summary)
 }
+
+#[cfg(test)]
+use sha2::{Digest, Sha256};
 
 #[cfg(test)]
 mod tests {
