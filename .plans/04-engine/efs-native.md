@@ -29,6 +29,8 @@ Every native device command, including reads and setup, requires Cargo `efs-writ
 
 Reproduction inputs are pinned by SHA-256: cached `master.zip` = `f947b9e7e011f1d514d3a82d8fe66b135b71a9b220c62ab9ce800cb74ffe3de8`; cached locally compiled net8.0 C# `EfsTools.dll` used by the fixture harness = `99201687f99d462c0a3d3f718709250f9a9c345e9b1081c2c015b83a602d04fd`. The handoff's original official v0.14/util DLL digest is `040b94d6e68c2156326ba029668dd71ba32f0ae345ad689078f60759ebfb4704`; it is a distinct binary, not the net8.0 fixture build. No external archive or executable is bundled with this implementation.
 
+The coordinator independently ran the built golden harness against that actual original bundle DLL and its util root: all 13 packet fixtures, 45 measured NV sizes and four error constants matched the checked-in entries, with zero differences and exit 0. Wire-fixture equality with the shipped DLL is verified for this coverage; device acceptance remains untested.
+
 - `Create=00100` in C# is decimal 100; default permission `0777` is decimal 777. Native does not reinterpret these as octal.
 - Password sends eight ASCII `F` bytes; SPC sends six ASCII `0` bytes.
 - EFS PUT is opcode **38**, while 37 is Deltree. PUT retains the upstream allocation: u16 data length plus two zeros, flags at 8, low mode bytes at 12, data at 14, path and NUL, then ten allocation zeros. Response mode/status/count are u16 at 4/6/8. Errors and short counts are checked.
