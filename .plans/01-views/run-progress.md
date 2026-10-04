@@ -26,8 +26,8 @@ status: implemented (mock 시뮬레이션)
   - 루팅: 수동 Magisk 패치 없음 — 자동 패치(02-contracts "root" 절차), 로그로 진행 표시
   - 펌웨어 업데이트: [flash-mode] (전원 끄고 볼륨 아래 + USB, 초록 LED) → newflasher 기록(mock) → 업데이트 확인(지문)
   - oem-toggle 모달: 세 항목 상태(켜짐/꺼짐/확인 불가) + [다시 확인](기기 재조회) — 꺼진 항목이 없어야 완료 가능(확인 불가는 막지 않음)
-  - VoLTE 적용: [su-grant] (원본 CLI의 DIAG 포트 개방 시 루트 권한 승인)
-- 원본 CLI 계승 단계: VoLTE 적용 후 "VoLTE 활성화 설정"(persist.dbg ims/volte/vt/wfc 4종 + 재부팅) — mock
+  - EFS 연결 확인: [su-grant]를 DIAG 포트 개방보다 먼저 처리한다.
+- 원본 CLI 계승 단계: VoLTE 적용 후 "VoLTE 활성화 설정"(persist.dbg ims/volte/vt/wfc 4종 + 재부팅). `REAL_STEPS.efs` 활성 시 종료 코드 확인 후 실제 설정·재부팅을 수행한다.
 - [중단]: 진행 중·수동 대기 단계를 대기로 되돌리고 해당 단계의 수동 개입은 처음부터 / USB 오류 배너가 떠 있는 동안 [이어서] 비활성
 - 기기 작업(실전 엔진·완결 게이트·펌웨어 받기)이 진행 중이면(`wizard.busy > 0`) [이어서] 버튼 자체를 표시하지 않는다 — [중단]만 남는다
 - 레이아웃 안정: 상단 카드의 단계 진행률 줄과 로그 끝 진행 표시는 단계 사이에도 자리를 유지하고(invisible) 보이기만 바꾼다 — 단계 전환 때 카드 높이가 바뀌어 화면이 흔들리지 않게
@@ -82,7 +82,7 @@ status: implemented (mock 시뮬레이션)
 - EFS 단계 시작 시 사용할 프리셋 기록: 슬롯·통신사·버전·파일 수·SHA-256 앞자리
 - 세부 작업: VoLTE 적용 = 슬롯별 1차·2차 업로드, 적용 확인 = 슬롯별 전수 리드백·해시 비교
 - 통신 확인(ims-precheck): 슬롯별 IMS 상태 표시 + "실제로 걸고 받아 통화되는 것을 확인했습니다" 체크 후 [확인하고 진행].
-  IMS 미확인 시 [다시 패치] → VoLTE 적용(연결 안정성 검사)부터 다시
+  IMS 미확인 시 [다시 패치] → EFS 연결 확인부터 다시
 - 완료 화면: 통신 확인을 생략했으면 "작업 종료 · 통신 미검증"(성공 표시와 구분). 패치했으면 직접 확인 목록
   (실제 발신·수신, 문자·MMS·5G 데이터, 해외 로밍은 별개, SIM 교체·망 변경·모뎀 포함 업데이트 후 재확인)
 
@@ -92,5 +92,17 @@ status: implemented (mock 시뮬레이션)
   대상 버전 펌웨어를 받아 둔 경우 그 지문과 정확히 같아야 하고, 아니면 지문에 대상 버전이 있고 업데이트 전과 기기·지역(지문 앞부분)이 같아야 통과. 지문을 못 읽으면 실패(추측 안 함)
 - 최종 확인(final-verify): 엔진이 계획의 수동 안내보다 먼저 실행 — `root_reboot("os")` → 연결 끊김(60초 내) → 재연결(5분 내) → VoLTE 등록 확인 안내(ims-check, 자동 감지) → 확인 뒤 재진입하면 완료.
   "확인 없이 마무리"로 끝내면 체크포인트를 완료로 표시하지 않고 [미확인] 로그를 남긴다(imsUnverified). 이어서 진행할 때 재부팅 체크포인트가 끝나 있으면 다시 재부팅하지 않는다([이 단계 다시 시도]는 처음부터).
-  재부팅은 쓰기 기능 빌드(root-write/fastboot-write)에서만 가능 — 기본 빌드에서는 단계 실패로 사유 표시
+  OS 재부팅은 쓰기 기능 빌드(root-write/fastboot-write/efs-write)에서만 가능 — efs-write 단독은 bootloader 재부팅을 허용하지 않는다. 기본 빌드에서는 단계 실패로 사유 표시
 - 실전 확인이 켜져 있으면 수동 안내의 "(목업) 건너뛰기"를 제공하지 않는다
+## Native EFS integration (2026-10-04)
+
+- REAL_STEPS.efs는 기본 false. 기존 화면·위험 확인 게이트·시뮬레이션을 유지한다.
+- 실전 러너는 api facade의 설정된 COM·bundle root·snapshot root를 해당 실행 동안 고정해 사용한다.
+- efs-input: 설정·프리셋 폴더 이름과 고정 해시·전체 선택의 공유 EFS/NV 충돌을 기기 작업 전에 검사한다. 언락·루팅·언루팅이 모의 엔진이거나 필요한 Rust 쓰기 feature가 빠져 있거나 펌웨어 전체 기록이 미구현이면 여기서 failed로 중단한다.
+- efs-preflight: 루트 권한 승인 → efsValidatePresets 재검사 → efsDiagOpen(선택한 ADB serial) → efsPreflight(고정 COM). 세부 작업은 DIAG 전환·프로토콜 초기화·응답 확인이다.
+- efs: 슬롯별 scoped before-image efsSnapshot → efsUpload 1차·2차. verify: 슬롯별 efsVerify, 누락·불일치·읽기 오류는 failed 유지.
+- native 구조화 오류와 setup/emptyNvSkipped/nvPrefixVerification 경고를 로그에 표시한다. skipped 항목은 written/verified 수에 포함하지 않는다. 리드백은 IMS·실제 통화 성공의 증거와 별개다.
+- [중단]/[처음으로]는 api.efsCancel 호출·세대 가드로 후속 작업을 멈춘다. 이벤트 구독은 finally 해제. 슬롯별 before-image 폴더를 로그에 남기며 자동 rollback은 하지 않는다.
+- EFS도 백업·복구·fastboot·루팅과 같은 전역 기기 작업 잠금을 사용한다. [이 단계 다시 시도]·[다시 패치]·USB 재개는 이전 I/O가 끝날 때까지 상태를 초기화하지 않는다.
+- 진행 이벤트는 현재 슬롯·스냅샷·업로드 차수의 진행률에 반영하며 파일마다 중복 로그를 쌓지 않는다.
+- VoLTE 설정 이후 재부팅은 연결 끊김(60초)과 재연결(5분)을 모두 확인해야 완료한다. `final-verify`는 `REAL_STEPS.verify || REAL_STEPS.efs`일 때 실전 확인을 사용해 EFS 작업 뒤 모의 최종 확인으로 넘어가지 않는다.

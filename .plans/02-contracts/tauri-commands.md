@@ -116,6 +116,7 @@ invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb r
 // 기록은 fastboot_flash 재사용. expectedSerial과 패치 결과 expectedSha256을 함께 전달한다.
 // 검증(절차 7)은 기존 root_check + su-grant 수동 개입 재사용
 // 패치·설치는 root-write + REAL_STEPS.root. root_reboot는 root-write 또는 fastboot-write 필요.
+// 예외: target='os'는 efs-write만 켜진 빌드에서도 허용한다(bootloader는 불가).
 // 프론트 facade는 REAL_STEPS.root/fastboot이면 os·bootloader 모두, REAL_STEPS.verify만 켜져 있으면 os만 허용(최종 확인의 재부팅).
 // 시리얼은 필수이며 선택 기기가 없을 때 임의의 첫 기기로 대체하지 않는다.
 ```
@@ -211,12 +212,45 @@ invoke('contacts_restore_check', { serial, dir }) → { backedUp: number, onDevi
 ## EFS (M5)
 
 ```ts
-invoke('efs_preflight', { serial }) → PreflightReport       // §10-5: 토폴로지/스피드/전원/DIAG 건전성
-invoke('efs_snapshot', { serial, paths }) → SnapshotRef     // before-image (전수)
-invoke('efs_upload', { serial, presetDir }) → void          // 이벤트: 'efs:progress' {file, n, total}
-invoke('efs_verify', { serial, snapshot }) → VerifyReport   // 전수 리드백 해시
-invoke('efs_rollback', { serial, snapshot }) → void
+invoke('efs_tool_check') → EfsToolCheck                    // 내장 버전·EFS/root/fastboot 빌드 기능, 기기 접근 없음
+invoke('efs_config_get') → EfsConfiguration | null         // {port,presetRoot,snapshotRoot}, 앱 로컬 설정
+invoke('efs_config_set', { configuration }) → void         // PC 설정만 저장, COM을 열지 않음
+invoke('efs_resolve_preset', { folder, configuration?: EfsConfiguration }) → string
+// manifest의 ./util/SonyEFS/... → 설정 루트의 절대 경로. 폴더 이름과 그 이름의 고정 해시를 함께 확인.
+// configuration 생략 시 앱 설정 사용, 지정 시 검증된 실행별 설정 사용. PC 작업만 수행.
+invoke('efs_validate_presets', { presetDirs }) → void       // 최대 2개 전체 선택의 공유 EFS/NV 내용·mode/type 충돌 검사, 기기 접근 없음
+invoke('efs_diag_open', { serial }) → void                 // 선택 Sony ADB serial의 DIAG setprop (기본 게이트 차단)
+invoke('efs_preflight', { port }) → EfsPreflight            // hello/query/설정 응답 확인; USB 토폴로지·속도·전원 실측을 주장하지 않음
+invoke('efs_snapshot', { port, presetDir, dest }) → EfsSnapshotResult // 변경 대상 전수 before-image, mode/type/times·전체 128 B NV
+invoke('efs_upload', { port, presetDir }) → EfsUploadResult  // 슬롯당 1회; written/skipped/warnings, 오류는 즉시 Err
+invoke('efs_verify', { port, presetDir }) → EfsVerifyReport // 모든 비어 있지 않은 EFS/NV 대상 리드백
+invoke('efs_rollback', { port, snapshot }) → EfsUploadResult // snapshot = 스냅샷 폴더, 전수 사전 검사 후 복원·리드백
+invoke('efs_cancel') → void                               // 소유 작업의 토큰만 취소, 기본 차단 빌드에서도 사용 가능
+invoke('volte_props_set', { serial }) → string[]            // 명시한 ADB 기기에 persist.dbg 4종 설정 후 재부팅; EFS 게이트·작업 소유권·취소 공유
+// EfsToolCheck = { version, path:"built-in", native:true, deviceExecution, rootExecution, fastbootExecution }
+// 각각 efs-write / root-write / fastboot-write의 컴파일 여부. 실전 EFS 계획 첫 단계에서 필요한 기능을 확인한다.
+// EfsUploadResult = { errors:[], filesSeen, planned, skipped, warnings }
+// EfsVerifyReport = { ok, files, matched, planned, skipped, missing, mismatches, warnings }
+// EfsSnapshotResult = { path, filesSeen, warnings }
+// EfsWarning = { code, target, message }
+// 네이티브 오류 = { code, operation, message, status?, cleanup? }
+// facade EfsResult<T> = {ok:true,value:T} | {ok:false,error:string,details?:EfsError}
+// 이벤트 efs:progress = {operation,file,n,total}, efs:log = {cmd,line}
 ```
+
+사용자 승인 2026-10-04: 네이티브 구현 허용, **실기기 작업 금지**. `efs-write`와 `REAL_STEPS.efs`는 기본 false.
+`src/lib/api/efs.ts`가 명시적 COM 설정과 상대 프리셋 경로를 해석하며 모든 컴포넌트 호출은 기존 `api` facade 경유.
+wizard는 모든 선택 프리셋을 DIAG 전환 전에 검사하고, 슬롯별 스냅샷 → 두 번 업로드 → 전체 선택 업로드 후 슬롯별 검증 순서를 유지한다.
+공유 EFS/NV 값이 다르면 `presetConflict`로 기기 접근 전에 중단한다. 숫자 NV ID는 글로벌이며 SIM별 ID로 임의 변환하지 않는다.
+직접 facade 호출하는 통합 코드도 `efsValidatePresets(선택 전체)`를 **DIAG/업로드 전에** 반드시 호출한다.
+서로 같은 글로벌 값은 허용한다. 혼합 통신사 충돌을 자동 해결하거나 NV 검증에서 제외하지 않는다.
+이전 wrapper의 `efsSnapshot(dest)`는 `efsSnapshot(dest,preset.folder)`로 변경, `efsUpload(folder)`/`efsVerify(folder)`는 그대로 사용하며 COM은 설정에서 공급한다.
+원본 `uploadDirectory/downloadDirectory -v`는 **processNvItems**이며 verbose가 아니다. `-n`은 파일 metadata 접미사 생략이다.
+네이티브 검증은 다운로드 폴더나 metadata 파일명을 비교하지 않고 확정된 실제 EFS 경로·ROOT NV ID를 직접 읽는다. 65,534개 NV 스캔 없음.
+0바이트 NV는 `emptyNvSkipped` 경고로 명시적 미변경 처리하고 written/verified 분모·분자에서 제외한다 (KT 슬롯당 6789·6849 두 항목).
+짧은 NV 요청은 원본처럼 지정된 바이트만 전송하며, 알려진 논리 길이는 C# ItemsFactory 측정값과 대조한다.
+알 수 없는 짧은 항목은 `nvPrefixVerification` 경고와 함께 명시된 prefix만 비교한다. 나머지 128 B tail을 0으로 채우거나 변경됐다고 주장하지 않는다.
+스냅샷·복원은 정규화하지 않은 128 B 전체 값을 사용한다. 상세 근거·한계: `04-engine/efs-native.md`.
 
 EFS 실행 규칙 (카페 조사 반영, 2026-10-03 — tasks/research-cafe-omd-volte.md):
 - 프리셋: src/lib/data/efsPresets.ts manifest(통신사·슬롯·폴더·파일 수·SHA-256, 버전 20250901 balance)와 일치하는 폴더만 사용.
@@ -224,7 +258,7 @@ EFS 실행 규칙 (카페 조사 반영, 2026-10-03 — tasks/research-cafe-omd-
 - 원본 beta11 계승: 슬롯별로 efs_upload 2회(1차·2차) → efs_verify 전수 리드백·해시 비교.
   두 번 썼다는 것만으로 성공 판정하지 않음 — 누락·해시 불일치는 도구가 정상 종료해도 실패
 - 실패하면 해당 단계를 failed로 유지(wizard.failStep)하고 다음 단계·리락으로 넘어가지 않음. 허용: 이 단계 다시 시도 / 중단.
-  사유에 실패 파일·슬롯·시도 횟수·도구 종료 코드·출력 요약을 남김 (원본 CLI는 EFS 예외 후 Enter로 다음 단계 진행 가능 — 계승하지 않음)
+  사유에 실패 항목·슬롯·시도 횟수·구조화된 native 오류·cleanup 결과를 남김. 서브프로세스·종료 코드 판정은 사용하지 않음
 - 입력 오류(잘못된 통신사·슬롯)는 명시적 오류 타입으로 반환 (원본 efs.py의 문자열 raise 계승하지 않음)
 - 진단: EFS(DIAG)와 펌웨어 기록(newflasher)은 USB 경로가 다름 — "무조건 USB 2.0" 대신 실제 인터페이스·드라이버·케이블·실패 명령을 보여줌.
   ADB/fastboot 대상은 Sony 기기만(에뮬레이터·Google Play Games ADB 기기 혼입 방지)
@@ -299,8 +333,7 @@ invoke('firmware_dir_check', { dir, partition }) → { file, path, fingerprint, 
 - EFS 프리셋 버전 조사(tasks/research-efs-preset-versions.md, 2026-10-03): 20250901 balance = 확인된 최신 공통 세트(도구 beta9~beta11 동일, 카페 재첨부 ZIP과 SHA-256 동일).
   manifest에 원본 출처·ZIP 해시, 이전 성공 후보(KT/LGU beta7, 자동 롤백 금지) 기록. performance 세트는 배포 구성 문제로 사용하지 않음.
   갱신 판정은 데이터 해시 기준, 새 세트는 격리 → 차이·XML·슬롯 경로 검토 → 실물 확인 → 승격
-- env_check 항목 추가 필요: 번들 EfsTools(util/EfsTools)는 runtimeconfig 기준 Microsoft.NETCore.App 5.0(net5.0)을 요구 — 설치 여부 확인·안내.
-  카페의 .NET 9 대응 빌드(612904)는 제목과 달리 실제 runtimeconfig가 net8.0. 런타임 안내는 게시글 제목이 아니라 실제 runtimeconfig.json 기준
+- 네이티브 EFS(2026-10-04): EfsTools/.NET 설치 검사는 폐기. 원본 net5.0·카페 net8.0 런타임 조사 기록은 레퍼런스이며 앱 실행 의존성이 아니다. .NET 8은 오프라인 C# 골든 픽스처 재생성에만 사용한다.
 - 게시자 기준 추적(tasks/research-efs-preset-versions.md "게시자 기준 추적"): 20250901 이후 EFS 후속 배포 없음. 1 VII 등의 속성 모듈·IMS 앱·APN·eSIM 모뎀 패키지는 EFS와 별개 자료로 분리 관리
 
 ## backup 추가 명령 (2026-10-03)

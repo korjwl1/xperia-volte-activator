@@ -8,6 +8,7 @@ import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
 import type { ApiResult } from "$lib/types";
 import { REAL_STEPS } from "$lib/data/runMode";
 import { classifyApp, SAMPLE_FLAGS, type AppFlag } from "$lib/data/appRules";
+import { efsApi, type EfsApi } from "./efs";
 import { inDesktop as inTauri, transport } from "./transport";
 export { inDesktop, observeDesktopWindow } from "./transport";
 
@@ -15,7 +16,7 @@ export { inDesktop, observeDesktopWindow } from "./transport";
 const invokeBackend = transport.optional;
 const invokeResult = transport.result;
 
-export interface Api {
+export interface Api extends EfsApi {
   /** null = 조회 실패(일시적 오류 포함), [] = 연결된 기기 없음 */
   deviceList(): Promise<DeviceStatus[] | null>;
   deviceStatus(serial: string): Promise<DeviceStatus | null>;
@@ -112,6 +113,7 @@ export interface Api {
 }
 
 const hybridApi: Api = {
+  ...efsApi,
   async deviceList() {
     if (inTauri()) {
       // 데스크톱: 백엔드 실측이 유일한 소스 — mock으로 위장하지 않음

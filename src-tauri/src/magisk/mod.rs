@@ -322,7 +322,10 @@ pub async fn magisk_install(
 /// adb 재부팅 — fastboot_reboot의 adb 짝 (fastboot 진입/복귀)
 #[tauri::command]
 pub async fn root_reboot(serial: Option<String>, target: String) -> Result<(), String> {
-    if !cfg!(feature = "root-write") && !cfg!(feature = "fastboot-write") {
+    if !cfg!(feature = "root-write")
+        && !cfg!(feature = "fastboot-write")
+        && !(target == "os" && cfg!(feature = "efs-write"))
+    {
         return Err("기기 재부팅은 이 빌드에서 비활성화되어 있습니다".into());
     }
     require_serial(&serial)?;

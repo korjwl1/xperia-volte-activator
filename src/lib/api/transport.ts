@@ -32,6 +32,11 @@ export function createTransport(port: BackendPort) {
   }
   return {
     result,
+    /** 구조화된 네이티브 오류를 해석하는 facade는 원래 오류 객체를 받는다. */
+    async invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+      if (!port.available()) throw new Error("데스크톱 앱에서만 사용할 수 있습니다");
+      return port.invoke<T>(command, args);
+    },
     async optional<T>(command: string, args?: Record<string, unknown>): Promise<T | null> {
       const response = await result<T>(command, args);
       return response.ok ? response.value : null;

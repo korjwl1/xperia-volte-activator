@@ -7,10 +7,10 @@ status: 진행 전 — 2026-10-05 기준 아래 항목은 모두 **실기기에�
 
 ## 규칙
 
-- 단계의 `REAL_STEPS` 플래그(`src/lib/data/runMode.ts`)와 쓰기 Cargo 기능(`fastboot-write`·`root-write`)은 **그 단계의 항목이 모두 체크되기 전까지 켜서 배포하지 않는다.**
+- 단계의 `REAL_STEPS` 플래그(`src/lib/data/runMode.ts`)와 쓰기 Cargo 기능(`fastboot-write`·`root-write`·`efs-write`)은 **그 단계의 항목이 모두 체크되기 전까지 켜서 배포하지 않는다.**
 - 확인할 때는 `[x]`로 바꾸고 날짜·기종(모델·펌웨어)·결과 한 줄을 적는다. 실패하면 체크하지 말고 "결과"에 증상을 적은 뒤 코드를 고친다.
 - 파괴 단계(언락·기록·리락)는 백업 완료·순정 펌웨어 준비 상태에서, 복구 가능한 테스트 기기로만 확인한다.
-- EFS(VoLTE 적용) 항목은 `feat/efs-native` 브랜치 문서에서 관리한다(이 브랜치에는 EFS 실전 코드가 없다).
+- 네이티브 EFS도 이 목록에서 관리한다. 2026-10-05 병합·오프라인 검증 완료는 실기기 확인으로 간주하지 않는다.
 
 ## 1. 공통 기기 I/O (모든 단계의 전제)
 
@@ -73,6 +73,7 @@ status: 진행 전 — 2026-10-05 기준 아래 항목은 모두 **실기기에�
 
 - [ ] Windows 드라이버 바인딩·rusb open/claim·재연결, getvar:all 형식, is-userspace
 - [ ] **응답 대기**: `oem unlock`(초기화)·`flash:` 응답이 300초 안에 오는가, 10초 이상 걸리는 실제 시간
+  - INFO/TEXT가 계속 와도 종결 응답 전체 제한(일반 10초·언락/기록 300초)이 늘어나지 않는가. DATA 송신 전체 600초·개별 bulk 최대 60초가 정상 기록에 충분한가
 - [ ] 언락 후 unlocked 조회 시점·자동 재부팅·USB 분리
 - [ ] 기록: DATA 전송·양 슬롯 기록·이력(started/done/failed), 중간 분리 시 이력과 기기 상태
 - [ ] 재부팅 OS/bootloader 전환과 wizard 다음 단계 진행
@@ -91,3 +92,18 @@ status: 진행 전 — 2026-10-05 기준 아래 항목은 모두 **실기기에�
 - [ ] 백업 파일 삭제(`backup_delete`): 실제 백업 폴더 삭제, 탐색기·백신이 파일을 잡고 있을 때 실패 후 재시도
 - [ ] 작업 중 PC 보호(절전·종료 방지) 켜짐/해제, 창 닫기·Windows 로그아웃 중 진행 기록 보존
 - [ ] 쓰기 기능을 켠 release 빌드(`--features fastboot-write,root-write`)로 실제 앱 실행
+
+## 10. 네이티브 EFS/NV (`REAL_STEPS.efs`, `efs-write`)
+
+- [ ] qcser 드라이버와 명시적 COM이 선택한 Sony ADB serial의 같은 폰을 가리키는지 확인. 포트 자동 추정 없음. 다른 폰·여러 포트·포트 점유는 명확한 오류로 중단하는가
+- [ ] Magisk su 승인 → ADB DIAG 전환 → COM 38400/8N1 → hello/query/auth/suppression → EFS 초기화 순서가 실제 펌웨어에서 동작하는가. 7000ms 교환 제한이 적절한가
+- [ ] 8개 balance 프리셋 각각의 파일·item PUT(원본 할당 padding·10진 flags/mode)·짧은 NV를 실제 폰에서 리드백 비교. 슬롯별 스냅샷 → 2회 업로드 → 전체 활성 대상 확인 순서 검증
+- [ ] KT의 빈 NV 6789/6849 미변경 경고 및 알 수 없는 짧은 NV prefix 검증 경고가 UI·결과에 남는가. 미검증 tail이나 빈 NV를 검증 완료로 주장하지 않는가
+- [ ] 서로 충돌하는 혼합 통신사 글로벌 NV는 어떤 기기 작업보다 먼저 차단되는가. 지원 가능한 조합의 동작은 별도 확인(충돌을 자동 덮어쓰지 않음)
+- [ ] 스냅샷이 기존 EFS 내용·mode/type·기록된 시간·없는 대상·raw 128B NV를 정확히 보존하는가. 공간 부족·취소·USB 분리 시 incomplete로 남고 복원 입력으로 거부되는가
+- [ ] 명시적 복원: EFS 파일·item·raw NV 복구, 새 대상 제거, mode/type·내용 리드백. 여러 슬롯 복원은 스냅샷 생성 역순. 시간 재적용 및 생성한 부모 폴더 제거는 미지원임을 확인
+- [ ] 손상·잘린 응답·분리·취소 후 자동 재전송 없음, 소유한 descriptor 정리 실패가 오류에 포함되는가. 결과 불명 상태를 성공으로 처리하지 않는가
+- [ ] 백업·복구·fastboot·Magisk·EFS 동시 실행 차단, 중단·재시도·창 닫기 및 PC 보호 유지가 실제 지연 I/O 중에도 일관적인가
+- [ ] persist.dbg 4종이 모두 성공한 뒤에만 재부팅하고 끊김→재연결을 확인하는가. efs-write 단독 빌드의 OS 재부팅·실전 최종 확인, bootloader 재부팅 거부 확인
+- [ ] 실제 IMS 셀룰러 등록 및 사용자 발신·수신 확인. EFS 리드백·속성 설정 성공과 통화 검증이 구분되는가
+- [ ] 모든 쓰기 기능을 켠 검증용 release(`--features fastboot-write,root-write,efs-write`)에서 선택한 실전 플래그 조합을 확인. 기본 release는 모든 쓰기 기능·REAL_STEPS 꺼짐 유지

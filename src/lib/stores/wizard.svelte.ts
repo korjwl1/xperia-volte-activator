@@ -8,7 +8,7 @@ import { bootloaderOnly, buildPlan, stepHazard, updateTarget, type PlanOptions }
 import { firmwareUpdateProblems } from "$lib/domain/verify";
 import { SIMULATED_RUN, REAL_STEPS } from "$lib/data/runMode";
 import { EFS_PRESET_MODE, EFS_PRESET_VERSION, efsPreset } from "$lib/data/efsPresets";
-import type { BackupProgress, BackupSummary } from "$lib/types";
+import type { BackupProgress, BackupSummary, EfsConfiguration } from "$lib/types";
 import { AsyncQueue } from "$lib/domain/asyncQueue";
 import { decodeJournal } from "$lib/domain/journal";
 import { waitUntil } from "$lib/domain/waitUntil";
@@ -253,6 +253,8 @@ export class Wizard {
 
   /** 실행 진행 상태 초기화 — 새 실행·재개·세션 변경·처음으로 공통 (실행 결과물·입력값은 유지) */
   private resetExecution() {
+    void api.efsCancel();
+    this.efsRunConfiguration = null;
     this.runGen++;
     this.pause();
     this.stopWatch();
@@ -416,6 +418,8 @@ export class Wizard {
   private runGen = 0;
   /** 단계 id → 실전 엔진을 시작한 세대 (재시도·재개로 세대가 바뀌면 다시 시작) */
   private readonly engineRan = new Map<string, number>();
+  /** 첫 사전 검사에서 고정. 실행 중 PC 설정 변경이 다른 COM/프리셋으로 작업을 돌리지 않게 한다. */
+  private efsRunConfiguration: EfsConfiguration | null = null;
   /** 아직 끝나지 않은 엔진·게이트·자동 다운로드 수 — 0이 될 때까지 [이어서]로 다시 진행하지 않는다 */
   busy = $state(0);
   /** 그중 기기 쓰기 엔진 수 — 창 닫기·PC 보호 해제를 막는다 */
@@ -742,11 +746,16 @@ export class Wizard {
   /** [실행]/[이어서] 버튼 — 이전 엔진·게이트·다운로드가 끝나기 전에는 다시 진행하지 않는다
    *  (엔진 내부의 진행은 begin()을 직접 부른다) */
   resumeRun() {
+    if (!this.readyToResume()) return;
+    this.begin();
+  }
+
+  private readyToResume(): boolean {
     if (this.busy > 0) {
       this.log(this.runSteps[this.cursor], "[대기] 이전 작업이 아직 끝나지 않았습니다 — 끝난 뒤 다시 눌러 주세요");
-      return;
+      return false;
     }
-    this.begin();
+    return true;
   }
 
   pause() {
@@ -805,7 +814,7 @@ export class Wizard {
         return REAL_STEPS.verify ? { start: () => this.runRealFwVerify(cur), danger: false } : null;
       case "final-verify":
         // 재부팅·재연결 후 VoLTE 등록 확인(수동 안내) → 재진입하면 마무리
-        return REAL_STEPS.verify
+        return REAL_STEPS.verify || REAL_STEPS.efs
           ? { start: () => this.runRealFinalVerify(cur), resume: () => this.finishRealFinalVerify(cur), danger: false }
           : null;
       case "unlock":
@@ -820,6 +829,16 @@ export class Wizard {
         return REAL_STEPS.root
           ? { start: () => this.runRealRoot(cur), resume: () => this.dispatchEngine(() => this.finishRealRoot(cur)), danger: true }
           : null;
+      case "volte-props":
+        return REAL_STEPS.efs ? { start: () => this.runRealVolteProps(cur), danger: true } : null;
+      case "comm-check":
+        return REAL_STEPS.efs ? { start: () => this.runRealCommCheck(cur), danger: false } : null;
+      case "efs-input":
+        return REAL_STEPS.efs ? { start: () => this.runRealEfsInputs(cur), danger: false } : null;
+      case "efs-preflight":
+      case "efs":
+      case "verify":
+        return REAL_STEPS.efs ? { start: () => this.runRealNativeEfs(cur), danger: true } : null;
       default:
         return null;
     }
@@ -854,12 +873,12 @@ export class Wizard {
       void this.persist(true);
     }
     // 시뮬레이션 스위치는 시뮬레이션으로 도는 단계에만 적용 — 실전 백업을 가짜 오류로 멈추지 않는다
-    if (SIMULATED_RUN && this.simulateEfsFail && !this.efsFailedOnce && cur.id === "efs" && cur.progress > 0.5) {
+    if (SIMULATED_RUN && !REAL_STEPS.efs && this.simulateEfsFail && !this.efsFailedOnce && cur.id === "efs" && cur.progress > 0.5) {
       this.efsFailedOnce = true;
       this.failStep("EFS 업로드 실패 — SIM1 2차 업로드, 도구 종료 코드 1 (시뮬레이션)");
       return;
     }
-    if (SIMULATED_RUN && this.simulateUsbError && !this.erroredOnce && ((cur.id === "backup" && !REAL_STEPS.backup) || cur.id === "efs")) {
+    if (SIMULATED_RUN && this.simulateUsbError && !this.erroredOnce && ((cur.id === "backup" && !REAL_STEPS.backup) || (cur.id === "efs" && !REAL_STEPS.efs))) {
       this.erroredOnce = true;
       this.usbErrorCount++;
       this.usbError = true;
@@ -913,7 +932,7 @@ export class Wizard {
       case "backup": return items.map((l) => `${l} 백업`);
       case "restore": return items.map((l) => `${l} 복원`);
       case "root": return ["Magisk 받기", "부트 이미지·패치 도구 전송", "Magisk 패치", "패치 결과 확인", "패치 이미지 기록", "Magisk 앱 설치"];
-      case "efs-preflight": return ["USB 연결 확인", "드라이버 확인", "전원 관리 해제", "연결 안정성 테스트"];
+      case "efs-preflight": return ["DIAG 포트 전환", "EFS 프로토콜 초기화", "응답 확인"];
       case "efs":
         return this.volteConfig.sims
           .filter((s) => s.carrier !== null)
@@ -933,7 +952,7 @@ export class Wizard {
       case "backup": return `파일 복사 중… ${pct}%`;
       case "unlock": return `잠금 해제 중… ${pct}%`;
       case "root": return ["Magisk 최신 버전 받는 중…", "부트 이미지·패치 도구 전송", "Magisk 패치 실행(boot_patch.sh)", "패치 결과 확인(ANDROID!·크기)", "fastboot로 패치 이미지 기록", "Magisk 앱 설치"][Math.floor(p * 6) % 6];
-      case "efs-preflight": return ["USB 연결 확인", "드라이버 확인", "전원 관리 일시 해제", "연결 안정성 테스트 통과"][Math.floor(p * 4) % 4];
+      case "efs-preflight": return ["DIAG 포트 전환", "EFS 프로토콜 초기화", "응답 확인"][Math.floor(p * 3) % 3];
       case "efs": return `프로파일 적용 중… (${Math.floor(p * 46)}/46 파일)`;
       case "verify": return `무결성 검증 중… ${pct}%`;
       case "fw-download": return `펌웨어 다운로드 중… ${pct}%`;
@@ -1327,7 +1346,7 @@ export class Wizard {
 
   /** 목업 실행에서만 — 폰이 실제로 재부팅되지 않아 확인할 수 없는 단계 건너뛰기 */
   get manualSkippable(): boolean {
-    return SIMULATED_RUN && !REAL_STEPS.fastboot && !REAL_STEPS.root && !REAL_STEPS.verify && (this.manualVerifiable || this.manualCurrent?.id === "firmware-select");
+    return SIMULATED_RUN && !REAL_STEPS.fastboot && !REAL_STEPS.root && !REAL_STEPS.verify && !REAL_STEPS.efs && (this.manualVerifiable || this.manualCurrent?.id === "firmware-select");
   }
 
   /** 직접 지정한 펌웨어 폴더 — 고르는 즉시 검사 */
@@ -1638,6 +1657,11 @@ export class Wizard {
     const rb = await api.rootReboot(this.device?.serial, "os");
     if (gen !== this.runGen) return null;
     if (!rb.ok) return `재부팅 요청 실패: ${rb.error}`;
+    return this.waitForOsReconnect(gen);
+  }
+
+  /** 재부팅 전의 연결을 복귀로 오인하지 않도록 끊김과 재연결을 순서대로 확인한다. */
+  private async waitForOsReconnect(gen: number): Promise<string | null> {
     // 재부팅 요청 직후에는 아직 연결돼 있을 수 있다 — 끊겼다가 다시 붙는 것까지 확인
     const down = await this.waitFor(gen, async () => !(await this.usbDebugReady()), 60_000);
     if (gen !== this.runGen) return null;
@@ -1673,6 +1697,164 @@ export class Wizard {
     }
     cur.progress = 1;
     this.stepDone(cur);
+  }
+
+  // ── 실전 VoLTE 설정·통신/최종 확인 (REAL_STEPS.efs) ──
+
+  /** VoLTE 활성화 설정 — persist.dbg 4종 setprop 후 재부팅, adb 복귀 대기 */
+  private async runRealVolteProps(cur: RunStep) {
+    const gen = this.runGen;
+    cur.progress = 0.3;
+    this.log(cur, "[설정] VoLTE·영상통화·Wi-Fi 통화 프롭 적용 — 루트 권한 필요");
+    const r = await api.voltePropsSet(this.device?.serial);
+    if (gen !== this.runGen) return;
+    if (!r.ok) return this.failStep(`VoLTE 설정 실패: ${r.error}`);
+    for (const p of r.value) this.log(cur, `[설정] ${p}`);
+    this.log(cur, "[재부팅] 설정 적용 후 재부팅 — 폰이 다시 부팅될 때까지 기다립니다");
+    void this.persist(true);
+    const error = await this.waitForOsReconnect(gen);
+    if (gen !== this.runGen) return;
+    if (error) return this.failStep(`VoLTE 설정 후 ${error}`);
+    cur.progress = 1;
+    this.log(cur, "[완료] VoLTE 설정 적용 — 다음 단계(최종 확인)에서 IMS 등록을 확인합니다");
+    this.stepDone(cur);
+  }
+
+  /** 통신 확인 — ims-precheck 수동 개입 + imsReady 자동 판정 */
+  private async runRealCommCheck(cur: RunStep) {
+    const gen = this.runGen;
+    cur.progress = 0.5;
+    // imsReady 호출 — IMS 등록 + 슬롯별 상태 표시
+    const ready = await this.imsReady();
+    if (gen !== this.runGen) return;
+    if (ready) {
+      cur.progress = 1;
+      this.log(cur, "[확인] VoLTE(IMS) 등록 확인됨");
+      this.stepDone(cur);
+      return;
+    }
+    // 미등록 — 수동 개입(ims-precheck)이 아직 처리 안 됐으면 수동으로 넘김
+    // (ims-precheck는 PlanStep.manual에 있으므로 openManual이 처리)
+    // 여기까지 왔다는 건 수동도 끝났는데도 미등록 → 실패
+    this.failStep("통신이 확인되지 않습니다 — [다시 패치]로 VoLTE 적용부터 다시 진행할 수 있습니다");
+  }
+
+  /** PC 입력만 검사. 언락·루팅 전에 실행하고, 각 EFS 단계에서도 다시 검사한다. */
+  private async validatedEfsInputs(gen: number): Promise<EfsConfiguration | null> {
+    const cfg = this.efsRunConfiguration ? { ok: true as const, value: this.efsRunConfiguration } : await api.efsConfiguration();
+    if (gen !== this.runGen) return null;
+    if (!cfg.ok) { this.failStep(cfg.error); return null; }
+    if (!cfg.value) { this.failStep("EFS COM·프리셋·스냅샷 위치를 작업 옵션에서 먼저 설정해 주세요"); return null; }
+    const selected = this.volteConfig.sims.filter(s => s.carrier !== null).map(s => efsPreset(s.carrier!, s.slot)?.folder);
+    if (!selected.length || selected.some(folder => !folder)) { this.failStep("선택한 SIM 프리셋을 찾을 수 없습니다"); return null; }
+    const validation = await api.efsValidatePresets(selected as string[], cfg.value);
+    if (gen !== this.runGen) return null;
+    if (!validation.ok) { this.failStep(validation.error); return null; }
+    return this.efsRunConfiguration = { ...cfg.value };
+  }
+
+  private async runRealEfsInputs(cur: RunStep) {
+    const gen = this.runGen;
+    if (this.runSteps.some(s => ["root", "unroot"].includes(s.id)) && (!REAL_STEPS.root || !REAL_STEPS.fastboot)) {
+      return this.failStep("실전 EFS 계획의 루팅·언루팅에는 실전 root·fastboot 엔진이 모두 필요합니다");
+    }
+    if (this.runSteps.some(s => s.id === "unlock") && !REAL_STEPS.fastboot) {
+      return this.failStep("실전 EFS 계획의 언락을 시뮬레이션으로 진행할 수 없습니다");
+    }
+    if (this.runSteps.some(s => s.id === "fw-flash") && !this.hasRealEngine("fw-flash")) {
+      return this.failStep("펌웨어 기록이 실전으로 구현되지 않아 업데이트와 실전 EFS를 함께 진행할 수 없습니다");
+    }
+    if (!await this.validatedEfsInputs(gen)) return;
+    const tool = await api.efsToolCheck();
+    if (gen !== this.runGen) return;
+    if (!tool.ok) return this.failStep(tool.error);
+    if (!tool.value.deviceExecution) return this.failStep("이 빌드에서는 EFS 기기 실행이 비활성화되어 있습니다");
+    const needsRoot = this.runSteps.some(s => ["root", "unroot"].includes(s.id));
+    if (needsRoot && !tool.value.rootExecution) return this.failStep("이 계획에 필요한 root-write 기능이 빌드에 없습니다");
+    if ((needsRoot || this.runSteps.some(s => s.id === "unlock")) && !tool.value.fastbootExecution) {
+      return this.failStep("이 계획에 필요한 fastboot-write 기능이 빌드에 없습니다");
+    }
+    this.log(cur, "[확인] EFS 설정·선택한 프리셋 해시·슬롯 간 충돌 검사 통과 (기기 접근 없음)");
+    cur.progress = 1;
+    this.stepDone(cur);
+  }
+
+  /** Native EFS: explicit COM, before-image, two passes per slot and target readback. */
+  private async runRealNativeEfs(cur: RunStep) {
+    const gen = this.runGen;
+    let unlog = () => {};
+    let unprogress = () => {};
+    let progressBase = 0;
+    let progressScale = 0;
+    try {
+      const cfg = await this.validatedEfsInputs(gen);
+      if (!cfg) return;
+      unlog = await api.onEfsLog(ev => { if (gen === this.runGen) this.log(cur, `[EFS/${ev.cmd}] ${ev.line}`); });
+      if (gen !== this.runGen) return;
+      unprogress = await api.onEfsProgress(ev => {
+        if (gen === this.runGen && ev.total > 0) cur.progress = Math.min(0.99, progressBase + progressScale * ev.n / ev.total);
+      });
+      if (gen !== this.runGen) return;
+      const showWarnings = (warnings: { code: string; target: string; message: string }[]) => {
+        for (const w of warnings) this.log(cur, `[경고/${w.code}] ${w.target}: ${w.message}`);
+      };
+      if (cur.id === "efs-preflight") {
+        const diag = await api.efsDiagOpen(this.device?.serial);
+        if (gen !== this.runGen) return;
+        if (!diag.ok) return this.failStep(diag.error);
+        const r = await api.efsPreflight(cfg);
+        if (gen !== this.runGen) return;
+        if (!r.ok) return this.failStep(r.error);
+        for (const line of r.value.log) this.log(cur, line);
+        for (const w of r.value.warnings) this.log(cur, `[경고/setup] ${w}`);
+        if (r.value.errors.length) return this.failStep(r.value.errors.join(" / "));
+        this.markSub(cur, cur.sub?.list.length ?? 0);
+      } else {
+        const targets = this.volteConfig.sims.filter(s => s.carrier !== null).toSorted((a, b) => a.slot - b.slot);
+        if (!targets.length) return this.failStep("패치 대상 SIM이 없습니다");
+        for (const [index, target] of targets.entries()) {
+          const preset = efsPreset(target.carrier!, target.slot);
+          if (!preset) return this.failStep(`SIM${target.slot} 프리셋이 없습니다`);
+          if (cur.id === "efs") {
+            progressBase = index / targets.length;
+            progressScale = 1 / (3 * targets.length);
+            const dest = `${cfg.snapshotRoot}/${Date.now()}-sim${target.slot}`;
+            const snap = await api.efsSnapshot(dest, preset.folder, cfg);
+            if (gen !== this.runGen) return;
+            if (!snap.ok) return this.failStep(snap.error);
+            this.log(cur, `[before-image] SIM${target.slot}: ${snap.value.path}`);
+            showWarnings(snap.value.warnings);
+            for (let round = 1; round <= 2; round++) {
+              progressBase = (index + round / 3) / targets.length;
+              this.log(cur, `[EFS] SIM${target.slot} ${round}차 업로드`);
+              const r = await api.efsUpload(preset.folder, cfg);
+              if (gen !== this.runGen) return;
+              if (!r.ok) return this.failStep(r.error);
+              showWarnings(r.value.warnings);
+              if (r.value.errors.length) return this.failStep(r.value.errors.join(" / "));
+              this.log(cur, `[EFS] 쓴 항목 ${r.value.filesSeen}/${r.value.planned}, 건너뜀 ${r.value.skipped}`);
+              this.markSub(cur, index * 2 + round);
+            }
+          } else {
+            progressBase = index / targets.length;
+            progressScale = 1 / targets.length;
+            const r = await api.efsVerify(preset.folder, cfg);
+            if (gen !== this.runGen) return;
+            if (!r.ok) return this.failStep(r.error);
+            showWarnings(r.value.warnings);
+            if (!r.value.ok) return this.failStep(`SIM${target.slot} 리드백 실패: ${[...r.value.missing, ...r.value.mismatches].join(" / ")}`);
+            this.log(cur, `[검증] SIM${target.slot} ${r.value.matched}/${r.value.files} 일치, 제외 ${r.value.skipped}`);
+            this.markSub(cur, index + 1);
+          }
+          cur.progress = (index + 1) / targets.length;
+          void this.persist(true);
+        }
+      }
+      cur.progress = 1;
+      this.stepDone(cur);
+    } catch (e) {
+      if (gen === this.runGen) this.failStep(`EFS 실행 실패: ${String(e)}`);
+    } finally { unlog(); unprogress(); }
   }
 
   /** 단계 완료 공통 처리 — 시뮬레이션 tick의 완료 블록과 같은 규칙 */
@@ -2091,6 +2273,7 @@ export class Wizard {
 
   /** 실패한 단계를 처음부터 다시 */
   retryStep() {
+    if (!this.readyToResume()) return;
     const cur = this.runSteps[this.cursor];
     if (!cur || cur.status !== "failed") return;
     cur.status = "pending";
@@ -2106,6 +2289,7 @@ export class Wizard {
 
   /** 통신 확인 실패 시 VoLTE 적용부터 다시 (리락 전이라 루트가 남아 있음) */
   repatch() {
+    if (!this.readyToResume()) return;
     const idx = this.runSteps.findIndex((s) => s.id === "efs-preflight" || s.id === "efs");
     if (idx < 0 || idx > this.cursor) return;
     for (let k = idx; k <= this.cursor; k++) {
@@ -2127,6 +2311,7 @@ export class Wizard {
   }
 
   dismissUsbError() {
+    if (!this.readyToResume()) return;
     this.usbError = false;
     const cur = this.runSteps[this.cursor];
     if (cur) { cur.status = "running"; this.log(cur, "[재개] 재연결 확인 — 이어서 진행합니다"); }
@@ -2135,6 +2320,7 @@ export class Wizard {
 
   /** 실행을 멈춘 뒤 돌아오더라도 running/manual-wait가 남아 단계를 건너뛰지 않게 한다. */
   private stopRun(resetFailed: boolean) {
+    void api.efsCancel();
     this.runGen++;
     this.pause();
     this.stopWatch();

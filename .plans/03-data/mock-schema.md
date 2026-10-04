@@ -40,3 +40,7 @@ DeviceStatus += state:'device'|'unauthorized'|'offline'|'usb'…,  SimInfo += st
 - device.ts: 브라우저 dev 전용 (데스크톱은 실측만, mock으로 위장하지 않음). env 체크는 빈 목록
 - plan.ts: 실행 계획 단일 생성기 buildPlan (00-architecture "실행 계획" 참조)
 - 실행 시뮬레이션 러너는 stores/wizard.svelte.ts (진행률/로그/수동대기/USB 오류 유발 토글)
+- EFS facade 브라우저 mock(`src/lib/api/efs.ts`): EfsUploadResult/EfsVerifyReport에 planned/skipped/warnings 추가. KT의 빈 NV 두 항목은 mock에서도 filesSeen/files/matched에서 제외. `simulation` 경고는 기기 결과가 아님을 명시한다. 실제 Tauri native 실패는 mock 성공으로 대체하지 않는다. REAL_STEPS.efs 기본 false로 기존 진행 시뮬레이션 유지.
+- 패치 계획에 `efs-input`(기기 접근 전 설정·프리셋 확인)을 먼저 포함한다. `efs-preflight`의 수동 안내는 `su-grant`이며 세부 작업은 DIAG 전환·프로토콜 초기화·응답 확인. EFS 설정 화면은 mock 기본 모드에서 숨긴다.
+- EFS facade의 설정 기반 메서드는 선택적 실행별 `EfsConfiguration` 인자를 받는다. 이를 지정하면 이후 PC 설정 변경이 해당 실행의 COM·프리셋·스냅샷 루트를 바꾸지 않는다.
+- `EfsToolCheck`는 `deviceExecution`·`rootExecution`·`fastbootExecution`을 반환한다. 브라우저 mock은 모두 false, Rust는 각각 Cargo 쓰기 feature의 컴파일 여부를 반환한다.

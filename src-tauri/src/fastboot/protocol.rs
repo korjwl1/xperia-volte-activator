@@ -1,10 +1,10 @@
 //! fastboot 프로토콜 — OKAY/FAIL/INFO/DATA 유한 상태머신(§9-3)과 명령 API.
-//! 원본 CLI 계승: `o        match terminal? {m unlock 0x{code}` · `oem lock` · `flash <part>_a/_b` · `reboot` (src/adb.py)
+//! 원본 CLI 계승: `oem unlock 0x{code}` · `oem lock` · `flash <part>_a/_b` · `reboot` (src/adb.py)
 //! INFO 프레임은 로그 콜백으로 흘리고 종결 응답(OKAY/FAIL/DATA)만 반환 — 무한 루프 방지 상한.
 
 use crate::fastboot::transport::{FastbootTransport, LONG_RESPONSE_TIMEOUT, RESPONSE_TIMEOUT};
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// 종결 응답 — INFO는 콜백으로 처리되어 여기 오지 않는다
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,15 +36,21 @@ impl<T: FastbootTransport> FastbootDevice<T> {
     }
 
     /// 응답 읽기 — INFO는 로그로 흘리고(on_info에도 전달) 종결 프레임을 기다린다.
-    /// timeout은 프레임 1개당 대기 시간 — INFO가 오면 다시 기다린다.
+    /// timeout은 종결 응답까지의 전체 상한 — INFO가 와도 제한 시간을 늘리지 않는다.
     fn read_terminal_with(
         &mut self,
         timeout: Duration,
         on_info: &mut dyn FnMut(&str),
     ) -> Result<Terminal, String> {
+        let deadline = Instant::now() + timeout;
         for frame in 0..=MAX_INFO_FRAMES {
             let mut buf = [0u8; 256];
-            let n = self.transport.read_frame(&mut buf, timeout)?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            // libusb의 밀리초 timeout=0은 무제한이므로 1ms 미만은 보내지 않는다.
+            if remaining < Duration::from_millis(1) {
+                return Err("fastboot 종결 응답 시간 초과".into());
+            }
+            let n = self.transport.read_frame(&mut buf, remaining)?;
             if !(4..=buf.len()).contains(&n) {
                 return Err(format!("응답이 너무 짧습니다({n}바이트)"));
             }
@@ -322,6 +328,7 @@ pub mod fake {
         pub frames: VecDeque<Frame>,
         /// read_frame마다 받은 대기 시간
         pub timeouts: Vec<std::time::Duration>,
+        pub latency: Duration,
     }
 
     impl FakeTransport {
@@ -331,6 +338,7 @@ pub mod fake {
                 sent_data: vec![],
                 frames: frames.into(),
                 timeouts: vec![],
+                latency: Duration::ZERO,
             }
         }
     }
@@ -347,6 +355,12 @@ pub mod fake {
             timeout: std::time::Duration,
         ) -> Result<usize, String> {
             self.timeouts.push(timeout);
+            if !self.latency.is_zero() {
+                std::thread::sleep(self.latency.min(timeout));
+                if self.latency >= timeout {
+                    return Err("fastboot 응답 시간 초과".into());
+                }
+            }
             let Some(frame) = self.frames.pop_front() else {
                 return Err("fastboot 응답 시간 초과".into());
             };
@@ -540,7 +554,11 @@ mod tests {
         d.oem_unlock("1234567890abcdef").unwrap();
         assert_eq!(d.transport.sent_cmds[0], "oem unlock 0x1234567890abcdef");
         // 초기화가 끝날 때까지 기다린다(10초 고정 대기로 성공을 실패로 기록하지 않는다)
-        assert_eq!(d.transport.timeouts, vec![LONG_RESPONSE_TIMEOUT]);
+        assert_eq!(d.transport.timeouts.len(), 1);
+        assert!(
+            d.transport.timeouts[0] <= LONG_RESPONSE_TIMEOUT
+                && d.transport.timeouts[0] > RESPONSE_TIMEOUT
+        );
 
         let (mut bad, _) = dev_with(vec![]);
         assert!(bad.oem_unlock("0x1234").is_err()); // 0x 포함/짧음 거부
@@ -576,15 +594,15 @@ mod tests {
         assert_eq!(d.transport.sent_cmds[0], "getvar:max-download-size");
         assert_eq!(d.transport.sent_cmds[1], format!("download:{:08x}", 1024));
         assert_eq!(d.transport.sent_cmds[2], "flash:boot_a");
-        assert_eq!(
-            d.transport.timeouts,
-            vec![
-                RESPONSE_TIMEOUT,
-                RESPONSE_TIMEOUT,
-                LONG_RESPONSE_TIMEOUT,
-                LONG_RESPONSE_TIMEOUT
-            ]
-        );
+        assert_eq!(d.transport.timeouts.len(), 4);
+        for (actual, limit) in d.transport.timeouts.iter().zip([
+            RESPONSE_TIMEOUT,
+            RESPONSE_TIMEOUT,
+            LONG_RESPONSE_TIMEOUT,
+            LONG_RESPONSE_TIMEOUT,
+        ]) {
+            assert!(*actual <= limit && *actual > limit - Duration::from_secs(1));
+        }
         assert_eq!(d.transport.sent_data, image);
     }
 
@@ -624,6 +642,16 @@ mod tests {
         let frames: Vec<Frame> = (0..300).map(|_| Frame::Info("loop")).collect();
         let (mut d, _) = dev_with(frames);
         assert!(d.expect_ok("getvar:x").is_err());
+    }
+
+    #[test]
+    fn slow_info_does_not_restart_the_response_deadline() {
+        let (mut d, _) = dev_with(vec![Frame::Info("working"); 20]);
+        d.transport.latency = Duration::from_millis(6);
+        let err = d.read_terminal(Duration::from_millis(15)).unwrap_err();
+        assert!(err.contains("시간 초과"));
+        assert!(d.transport.timeouts.len() < 20);
+        assert!(d.transport.timeouts.windows(2).all(|t| t[1] < t[0]));
     }
 
     #[test]

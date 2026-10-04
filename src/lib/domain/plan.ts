@@ -42,6 +42,9 @@ export function buildPlan(
   if (only) return finalize(bootloaderOnlyPlan(device, only, opts, hasBackup));
   const steps: Seed[] = [];
   const patch = config.sims.some((s) => s.carrier !== null); // VoLTE 패치 대상 슬롯이 있는지
+  if (patch) {
+    steps.push({ id: "efs-input", kind: "setup", title: "VoLTE 프리셋 확인", desc: "설정·프리셋 해시·슬롯 간 충돌을 기기 작업 전에 확인", estSec: 5 });
+  }
   const update = updateTarget(device, config);
   const needsUnlock = patch && device.bootloader === "locked"; // 업데이트만이면 잠금 상태로도 순정 펌웨어 기록 가능
   const bootloaderKnown = device.bootloader === "locked" || device.bootloader === "unlocked";
@@ -104,9 +107,9 @@ export function buildPlan(
       .filter((s) => s.carrier !== null)
       .map((s) => `SIM${s.slot}=${CARRIER_LABEL[s.carrier!]}`)
       .join(", ");
-    steps.push({ id: "efs-preflight", kind: "efs-preflight", title: "연결 안정성 검사", desc: "USB 포트·케이블 상태 확인", estSec: 60 });
+    steps.push({ id: "efs-preflight", kind: "efs-preflight", title: "EFS 연결 확인", desc: "루트 권한 승인 · DIAG 연결 및 프로토콜 응답 확인", estSec: 60, manual: ["su-grant"] });
     // 원본 beta11 계승: 슬롯별 두 번 업로드 → 전수 리드백. 두 번 썼다는 것만으로 성공 판정하지 않는다
-    steps.push({ id: "efs", kind: "efs", title: "VoLTE 적용", desc: `${targets} 프로파일을 슬롯별로 두 번 주입합니다`, risk: "danger", estSec: 420, manual: ["su-grant"] });
+    steps.push({ id: "efs", kind: "efs", title: "VoLTE 적용", desc: `${targets} 프로파일을 슬롯별로 두 번 주입합니다`, risk: "danger", estSec: 420 });
     steps.push({ id: "verify", kind: "verify", title: "적용 확인", desc: "주입한 파일 전수 리드백·해시 비교 — 누락·불일치는 실패", estSec: 120 });
     steps.push({ id: "volte-props", kind: "volte-props", title: "VoLTE 활성화 설정", desc: "VoLTE·영상통화·Wi-Fi 통화 설정을 켜고 재부팅 (통신사 서비스 검증은 아님)", estSec: 120 });
     // 언루팅·리락 전에 실제 통신 확인 — 리락 뒤 문제가 있으면 다시 고치려면 초기화가 한 번 더 필요

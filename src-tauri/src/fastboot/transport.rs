@@ -1,7 +1,7 @@
 //! fastboot 트랜스포트 — 프로토콜 로직(protocol.rs)을 하드웨어에서 분리하는 트레이트와 rusb 구현.
 //! rusb 구현은 컴파일만 확인(실기기 테스트 금지 — 사용자 승인 2026-10-03), 프로토콜 검증은 FakeTransport로.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// fastboot 인터페이스 (AOSP 표준) — class 0xFF / subclass 0x42 / protocol 0x03
 pub const FB_CLASS: u8 = 0xFF;
@@ -160,10 +160,19 @@ impl FastbootTransport for RusbTransport {
     fn write_data(&mut self, data: &[u8]) -> Result<(), String> {
         // 청크 단위 전송 — max-download-size 상한은 프로토콜 층에서 검사했다
         const CHUNK: usize = 512 * 1024; // fastboot 표준 max chunk
+        let deadline = Instant::now() + Duration::from_secs(600);
         for piece in data.chunks(CHUNK) {
             write_all_data(piece, |remaining| {
+                let time_left = deadline.saturating_duration_since(Instant::now());
+                if time_left < Duration::from_millis(1) {
+                    return Err("fastboot 데이터 전체 전송 시간 초과".into());
+                }
                 self.handle
-                    .write_bulk(self.ep_out, remaining, Duration::from_secs(60))
+                    .write_bulk(
+                        self.ep_out,
+                        remaining,
+                        time_left.min(Duration::from_secs(60)),
+                    )
                     .map_err(|e| format!("데이터 전송 실패: {e}"))
             })?;
         }

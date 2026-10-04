@@ -5,6 +5,7 @@ mod app_paths;
 mod backup;
 mod boot_image;
 mod device_io;
+mod efs;
 mod env;
 mod fastboot;
 mod firmware;
@@ -43,6 +44,19 @@ pub fn run() {
             adb::read_imei1,
             adb::open_settings_screen,
             usbmode::usb_modes,
+            efs::efs_tool_check,
+            efs::efs_validate_presets,
+            efs::config::efs_config_get,
+            efs::config::efs_config_set,
+            efs::config::efs_resolve_preset,
+            efs::efs_diag_open,
+            efs::efs_preflight,
+            efs::efs_upload,
+            efs::efs_verify,
+            efs::efs_snapshot,
+            efs::efs_rollback,
+            efs::efs_cancel,
+            efs::volte::volte_props_set,
             host::disk_free,
             env::env_check,
             firmware::firmware_fetch,

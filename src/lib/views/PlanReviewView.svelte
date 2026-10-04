@@ -9,6 +9,8 @@
   import { api, inDesktop as desktopRuntime } from "$lib/api";
   import { simIssue, type BackupItem } from "$lib/types";
   import { stepHazard } from "$lib/domain/plan";
+  import { REAL_STEPS } from "$lib/data/runMode";
+  import EfsSetup from "$lib/components/EfsSetup.svelte";
 
   // 선택 상태·실측 결과는 스토어에 보관 — 이전/다음으로 오가도 유지 (기기가 바뀔 때만 초기화)
   wizard.ensureOptions();
@@ -16,6 +18,8 @@
   let activeTab = $state<"backup" | "rooting">("backup");
   let showPathAlert = $state(false);
   let pathAlertTimer: ReturnType<typeof setTimeout> | undefined;
+  let efsNeedsSave = $state(true);
+  const efsBlocked = $derived(REAL_STEPS.efs && wizard.hasPatchTarget && efsNeedsSave);
   $effect(() => () => clearTimeout(pathAlertTimer));
 
   const bootloaderKnown = $derived(wizard.device?.bootloader === "locked" || wizard.device?.bootloader === "unlocked");
@@ -139,9 +143,10 @@
   const riskySteps = $derived(planSteps.filter((s) => s.hazard !== null));
   const hasWipe = $derived(planSteps.some((s) => s.wipe));
   // 백업 미선택 이중 확인은 초기화가 있을 때만
-  const canLaunch = $derived(hazardAck && (anyBackupChecked || !hasWipe || noBackupAck));
+  const canLaunch = $derived(!efsBlocked && hazardAck && (anyBackupChecked || !hasWipe || noBackupAck));
 
   function confirm() {
+    if (efsBlocked) return;
     // 방어: 백업 선택 + 경로 미지정 or 용량 부족
     // 용량 계산 중에는 여유 공간 판단이 불완전하므로 실행 보류
     if (anyBackupChecked && (!wizard.backupPath.trim() || diskWarning || diskUnknown || sizesLoading)) {
@@ -162,6 +167,7 @@
   }
 
   function launch() {
+    if (efsBlocked) return;
     confirmOpen = false;
     wizard.launch();
   }
@@ -189,6 +195,7 @@
       </div>
 
       <div class="flex-1 min-h-0 overflow-y-auto">
+        {#if REAL_STEPS.efs && patching}<EfsSetup bind:dirty={efsNeedsSave} />{/if}
         {#if activeTab === "backup"}
           {#if anyBackupChecked}
             <div class="sticky top-0 z-10 mb-3 bg-background/95 backdrop-blur border-b pb-3 space-y-2">
@@ -387,7 +394,7 @@
 
   <footer class="h-14 shrink-0 border-t bg-muted/40 flex items-center justify-between px-6">
     <Button variant="ghost" size="sm" onclick={() => (wizard.view = "step1")}>← 이전</Button>
-    <Button size="sm" onclick={confirm}>실행</Button>
+    <Button size="sm" onclick={confirm} disabled={efsBlocked}>실행</Button>
   </footer>
 </div>
 

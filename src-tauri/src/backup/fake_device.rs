@@ -52,6 +52,7 @@ pub struct FakeADBDevice {
     pub pushed: BTreeMap<String, Vec<u8>>,
     /// install 호출 기록
     pub installs: Vec<String>,
+    pub reboot_calls: usize,
     /// 현재 시각(unix 초) — mtime 기본값
     pub now: u32,
     /// exec 명령의 종료 코드(종료 코드 표식을 붙인 명령에만 반영)
@@ -421,6 +422,7 @@ impl ADBDeviceExt for FakeADBDevice {
     }
 
     fn reboot(&mut self, _reboot_type: RebootType) -> Result<(), RustADBError> {
+        self.reboot_calls += 1;
         Ok(())
     }
 
