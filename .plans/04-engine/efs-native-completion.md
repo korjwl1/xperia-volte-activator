@@ -57,6 +57,8 @@ The fake tests exercise fragmented/coalesced frames, CRC corruption, partial wri
 
 The native branch includes committed `fix/full-review` (`9323498`) through merge `9a419e9` and consolidates `feat/efs-wrapper` (`ccd4806`) with both histories retained. Claude's uncommitted work in the main checkout was neither copied nor changed. Driver and verification worktrees remain separate.
 
+Integration merge: `291b7a0`. All three input tips were verified as ancestors before deleting the obsolete `feat/efs-wrapper` branch. Its Git worktree registration is removed. Git could not fully delete the old `../xperia-volte-activator-efs` directory (`Directory not empty`); the subsequent bounded leftover-directory cleanup was rejected by automatic policy review. That unregistered directory remains, and no policy bypass was attempted. The temporary Orca resources described above were successfully removed and their absence verified.
+
 The old `src-tauri/src/efstools` subprocess implementation and `scripts/build-efstools.ps1` are removed. Existing VoLTE property/reboot and IMS communication/final verification stages remain connected to the reviewed wizard engine. `volte_props_set` now uses explicit selected-device ADB with the native EFS execution gate, exclusive operation owner and cancellation token. The EFS facade uses the existing transport boundary, preserving structured native errors. Generation checks release late event listeners and prevent a cancelled/reset run from starting DIAG. Both the frontend and Rust execution gates remain off by default.
 
 Final integrated validation:
