@@ -81,6 +81,15 @@ invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb r
 4. 검증 실패 분기: 매직 없음 / 해시 동일(원본과 동일 = 패치 안 됨) / 크기 초과 → 각각 오류, 작업 폴더는 항상 정리
 5. GitHub 파서: 릴리스 JSON에서 `Magisk-v*.apk` 자산 선택(디버그·기타 자산 제외)
 
+## 자체 리뷰 반영 (2026-10-04)
+
+- **셸 보간 제거**: 기기 측 부트 이미지명은 고정 `boot.img` — 로컬 파일명("my boot;rm.img" 등)이 셸 명령에 들어가던 문제 해소(§12.5). 결과 경로도 파티션명 기반 `magisk/<partition>-patched.img`
+- **원자 다운로드**: magisk_prepare가 임시 파일→rename으로 저장 — 중단 시 반쪽 APK가 캐시로 오인되지 않게. 256 MiB 상한(디스크 채우기 방어)
+- **크기 하한**: 패치 결과 ≥ 원본/2 — 매직·해시 검증만으론 9바이트 가짜가 통과할 수 있었음
+- **실패 판정 정합화**: must_ok는 종료 코드 + stderr만(기존 settings.rs 규칙) — 출력에 "not found" 문자열이 있으면 실패 오판하던 휴리스틱 제거
+- **waitFor 예외 방어**: check throw 시에도 타임아웃이 최종 판정(미처리 rejection 제거)
+- **sub 체크포인트**: 실전 루팅도 시뮬레이션과 같은 6단위로 갱신 + 기록·설치 후 즉시 journal 저장
+
 ## 리스크·검증 대기
 
 | 항목 | 상태 | 대응 |

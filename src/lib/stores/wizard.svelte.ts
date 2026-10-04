@@ -1547,6 +1547,7 @@ export class Wizard {
     if (gen !== this.runGen) return;
     if (!prep.ok) return this.failStep(`Magisk 다운로드 실패: ${prep.error}`);
     cur.logs.push(`[루팅] Magisk ${prep.value.version} 준비 (sha256 ${prep.value.sha256.slice(0, 12)}…)`);
+    this.markRootSub(cur, 1); // 받기
     void this.persist(true);
     // 2) 부트 패치(스테이징·스크립트·검증·수신)
     cur.progress = 0.15;
@@ -1555,12 +1556,13 @@ export class Wizard {
       cur.logs.push(`[magisk] ${line}`);
       void this.persist();
     });
-    const patch = await api.magiskPatch(this.device?.serial, prep.value.apkPath, imagePath);
+    const patch = await api.magiskPatch(this.device?.serial, prep.value.apkPath, imagePath, partition);
     un();
     if (gen !== this.runGen) return;
     if (!patch.ok) return this.failStep(`부트 패치 실패: ${patch.error}`);
     this.patchedImage = patch.value.path;
     cur.logs.push(`[루팅] 패치 완료 — ${(patch.value.bytes / 1024 ** 2).toFixed(1)} MiB · 원본과 해시 상이 확인`);
+    this.markRootSub(cur, 4); // 받기·전송·패치·결과 확인
     void this.persist(true);
     // 3) 부트로더 진입 → fastboot 감지 대기
     cur.progress = 0.5;
@@ -1577,6 +1579,8 @@ export class Wizard {
     if (gen !== this.runGen) return;
     if (!flash.ok) return this.failStep(`부트 이미지 기록 실패: ${flash.error}`);
     cur.logs.push(`[루팅] ${partition}_a/_b 기록 완료`);
+    this.markRootSub(cur, 5); // 기록
+    void this.persist(true);
     // 5) 재부팅 → adb 복귀 대기
     await api.fastbootReboot("os");
     const back = await this.waitFor(gen, () => this.usbDebugReady(), 240_000);
@@ -1587,6 +1591,8 @@ export class Wizard {
     const inst = await api.magiskInstall(this.device?.serial, prep.value.apkPath);
     if (gen !== this.runGen) return;
     if (!inst.ok) return this.failStep(`Magisk 앱 설치 실패: ${inst.error}`);
+    this.markRootSub(cur, 6); // 앱 설치
+    void this.persist(true);
     // 7) su 승인(수동 개입) — 확인 버튼·자동 감지가 root_check로 검증
     const stepDef = this.steps.find((s) => s.id === "root");
     if (stepDef && !stepDef.manual?.includes("su-grant")) stepDef.manual = [...(stepDef.manual ?? []), "su-grant"];
@@ -1608,22 +1614,36 @@ export class Wizard {
     }
   }
 
-  /** 조건 폴링 대기 — 세대 가드·타임아웃 포함 (모드 전환 대기 공용) */
+  /** 루팅 세부 작업 체크포인트 갱신 — subtasksFor("root") 6종과 대응(시뮬레이션과 같은 단위) */
+  private markRootSub(cur: RunStep, done: number) {
+    if (!cur.sub) return;
+    const reached = Math.min(cur.sub.list.length, done);
+    if (reached > cur.sub.done) {
+      for (let k = cur.sub.done; k < reached; k++) cur.logs.push(`[체크포인트] ${cur.sub.list[k]} 완료`);
+      cur.sub.done = reached;
+    }
+  }
+
+  /** 조건 폴링 대기 — 세대 가드·타임아웃·check 예외 방어(모드 전환 대기 공용) */
   private waitFor(gen: number, check: () => Promise<boolean>, timeoutMs: number, everyMs = 2000): Promise<boolean> {
     return new Promise((resolve) => {
       const start = Date.now();
       const t = setInterval(async () => {
-        if (gen !== this.runGen) {
-          clearInterval(t);
-          return resolve(false);
-        }
-        if (await check()) {
-          clearInterval(t);
-          return resolve(true);
-        }
-        if (Date.now() - start > timeoutMs) {
-          clearInterval(t);
-          return resolve(false);
+        try {
+          if (gen !== this.runGen) {
+            clearInterval(t);
+            return resolve(false);
+          }
+          if (await check()) {
+            clearInterval(t);
+            return resolve(true);
+          }
+          if (Date.now() - start > timeoutMs) {
+            clearInterval(t);
+            return resolve(false);
+          }
+        } catch {
+          // 조회 실패는 "아직 아님"으로 본다 — 타임아웃이 최종 판정
         }
       }, everyMs);
     });

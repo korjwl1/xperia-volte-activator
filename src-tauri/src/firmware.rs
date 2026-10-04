@@ -474,10 +474,10 @@ pub(crate) fn zip_extract_named(
     let tail_start = total - tail_len;
     let tail = f.read_at(tail_start, tail_len)?;
     let (cd_off, cd_size) = find_central_directory(&tail, tail_start, f)?;
-    let cd_end = cd_off
+    cd_off
         .checked_add(cd_size)
         .filter(|end| *end <= total)
-        .ok_or(ZIP_BAD)?;
+        .ok_or(ZIP_BAD)?; // 범위 검증 — 값 자체는 아래 슬라이스에 사용
     let cd = if cd_off >= tail_start {
         tail[(cd_off - tail_start) as usize..(cd_off - tail_start + cd_size) as usize].to_vec()
     } else {

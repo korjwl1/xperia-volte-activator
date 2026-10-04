@@ -5,10 +5,11 @@
 use crate::firmware::zip_extract_named;
 use adb_client::ADBDeviceExt;
 use sha2::{Digest, Sha256};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub const WORKDIR: &str = "/data/local/tmp/xvolte-magisk";
+/// 기기 측 부트 이미지명 — 로컬 파일명과 무관한 고정명(셸 보간 없음, §12.5)
+const REMOTE_BOOT_IMG: &str = "boot.img";
 
 /// APK 항목 → 기기 측 파일명 (계약 2번 단계, arm64 고정)
 pub const APK_ENTRIES: &[(&str, &str)] = &[
@@ -51,13 +52,20 @@ fn shell_out(dev: &mut dyn ADBDeviceExt, cmd: &str) -> Result<(String, Option<u8
     Ok((String::from_utf8_lossy(&out).to_string(), code))
 }
 
+/// 실패 판정은 종료 코드 + stderr — 기존(settings.rs run)과 같은 규칙. 출력 문자열 휴리스틱 없음
 fn must_ok(dev: &mut dyn ADBDeviceExt, cmd: &str) -> Result<String, String> {
-    let (out, code) = shell_out(dev, cmd)?;
-    let failed = matches!(code, Some(c) if c != 0) || out.contains("not found");
-    if failed {
-        return Err(format!("명령 실패(`{cmd}`): {}", out.trim()));
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let code = dev
+        .shell_command(&cmd, Some(&mut out), Some(&mut err))
+        .map_err(|e| format!("{e}: {}", String::from_utf8_lossy(&err).trim()))?;
+    if matches!(code, Some(c) if c != 0) {
+        return Err(format!("명령 실패(`{cmd}`): {}", String::from_utf8_lossy(&out).trim()));
     }
-    Ok(out)
+    if !err.is_empty() {
+        return Err(format!("명령 실패(`{cmd}`): {}", String::from_utf8_lossy(&err).trim()));
+    }
+    Ok(String::from_utf8_lossy(&out).to_string())
 }
 
 /// APK에서 패치 도구를 PC 임시 폴더로 추출 → (기기 측 이름, 로컬 경로) 목록
@@ -91,10 +99,6 @@ pub fn run_patch(
 ) -> Result<PatchOutcome, String> {
     let orig = std::fs::read(image).map_err(|e| format!("순정 이미지 읽기 실패: {e}"))?;
     let orig_sha = sha256_hex(&orig);
-    let img_name = image
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "boot.img".into());
 
     // 임시 추출 — 패치 도구 (pid+나노초 — 병렬 실행 충돌 방지)
     let nonce = std::time::SystemTime::now()
@@ -116,8 +120,8 @@ pub fn run_patch(
             let mut reader = &bytes[..];
             dev.push(&mut reader, &remote).map_err(|e| format!("{name} 전송 실패: {e}"))?;
         }
-        // 순정 이미지 push
-        let remote_img = format!("{WORKDIR}/{img_name}");
+        // 순정 이미지 push — 기기 측 고정명(로컬 파일명은 셸에 넣지 않는다, §12.5)
+        let remote_img = format!("{WORKDIR}/{REMOTE_BOOT_IMG}");
         {
             let mut reader = &orig[..];
             dev.push(&mut reader, &remote_img).map_err(|e| format!("순정 이미지 전송 실패: {e}"))?;
@@ -127,7 +131,7 @@ pub fn run_patch(
         let execs = EXECUTABLES.iter().map(|e| format!("{WORKDIR}/{e}")).collect::<Vec<_>>().join(" ");
         must_ok(dev, &format!("chmod 755 {execs}"))?;
         // 패치 스크립트 — 종료 코드 판정(위장 성공 금지)
-        let script = format!("cd {WORKDIR} && {PATCH_ENV} ./busybox sh -o standalone ./boot_patch.sh {img_name}");
+        let script = format!("cd {WORKDIR} && {PATCH_ENV} ./busybox sh -o standalone ./boot_patch.sh {REMOTE_BOOT_IMG}");
         on_log("> boot_patch.sh".into());
         let (out, code) = shell_out(dev, &script)?;
         for line in out.lines().filter(|l| !l.trim().is_empty()) {
@@ -142,13 +146,20 @@ pub fn run_patch(
         let remote_new = format!("{WORKDIR}/new-boot.img");
         let mut buf = Vec::new();
         dev.pull(&remote_new, &mut buf).map_err(|e| format!("new-boot.img 수신 실패: {e}"))?;
-        // 검증
+        // 검증 — 매직·크기 상하한·해시. 하한 없이는 9바이트 "ANDROID!"도 통과해 버릴 수 있다
         if !buf.starts_with(b"ANDROID!") {
             return Err("패치 결과가 ANDROID! 부트 이미지가 아닙니다".into());
         }
         if buf.len() as u64 > orig.len() as u64 {
             return Err(format!(
                 "패치 결과({}B)가 순정 이미지({}B)보다 큽니다 — 파티션에 넣을 수 없습니다",
+                buf.len(),
+                orig.len()
+            ));
+        }
+        if (buf.len() as u64) * 2 < orig.len() as u64 {
+            return Err(format!(
+                "패치 결과({}B)가 순정 이미지({}B)의 절반보다 작습니다 — 정상 패치 결과로 볼 수 없습니다",
                 buf.len(),
                 orig.len()
             ));
@@ -236,12 +247,12 @@ mod tests {
         assert_eq!(r.bytes, 4096);
         assert_ne!(r.orig_sha256, r.patched_sha256);
         assert_eq!(std::fs::read(&out).unwrap(), patched);
-        // 스테이징: 페이로드 8종 + 이미지
+        // 스테이징: 페이로드 8종 + 이미지(기기 측 고정명 — 로컬 파일명 미사용)
         for (_, name) in APK_ENTRIES {
             assert!(d.pushed.contains_key(&format!("{WORKDIR}/{name}")), "{name} 미전송");
         }
-        assert!(d.pushed.contains_key(&format!("{WORKDIR}/init_boot.img")));
-        // 스크립트 명령 형태 — 실측 환경 변수·standalone 포함 (chmod에 파일명이 겹치니 실행 구문으로 찾는다)
+        assert!(d.pushed.contains_key(&format!("{WORKDIR}/boot.img")));
+        // 스크립트 명령 형태 — 실측 환경 변수·standalone·고정명 포함 (chmod에 파일명이 겹치니 실행 구문으로 찾는다)
         let script = d
             .shell_calls
             .iter()
@@ -249,7 +260,7 @@ mod tests {
             .expect("boot_patch.sh 실행 명령");
         assert!(script.contains("KEEPVERITY=true"));
         assert!(script.contains("KEEPFORCEENCRYPT=true"));
-        assert!(script.contains("./busybox sh -o standalone ./boot_patch.sh init_boot.img"));
+        assert!(script.contains("./busybox sh -o standalone ./boot_patch.sh boot.img"));
         // 마지막에 정리(고정 경로 rm 2회: 시작+종료)
         assert!(d.shell_calls.iter().filter(|c| c.contains("rm -rf /data/local/tmp/xvolte-magisk")).count() >= 2);
         // 로그에 실측 마커
@@ -293,6 +304,43 @@ mod tests {
         let out = f.dir.path().join("patched.img");
         let err = run_patch(&mut d, &f.apk, &f.image, &out, &mut |_| {}).unwrap_err();
         assert!(err.contains("파티션에 넣을 수 없습니다"));
+    }
+
+    #[test]
+    fn tiny_output_fails_lower_bound() {
+        // 매직은 맞지만 터무니없이 작은 결과 — 하한 없이는 성공으로 오판할 수 있다
+        let orig = vec![0x41u8; 8192];
+        let tiny = b"ANDROID!".to_vec();
+        let f = fixture(&orig);
+        let mut d = dev_ready(&tiny);
+        let out = f.dir.path().join("patched.img");
+        let err = run_patch(&mut d, &f.apk, &f.image, &out, &mut |_| {}).unwrap_err();
+        assert!(err.contains("절반보다 작습니다"));
+        assert!(!out.exists());
+    }
+
+    #[test]
+    fn weird_local_filename_is_never_interpolated() {
+        // 로컬 이미지명에 셸 특수문자가 있어도 기기 측 명령은 고정명만 쓴다
+        let orig = vec![0x41u8; 2048];
+        let mut patched = b"ANDROID!".to_vec();
+        patched.extend_from_slice(&[0xBB; 2040]);
+        let dir = tempfile::tempdir().unwrap();
+        let apk = dir.path().join("Magisk-v30.7.apk");
+        std::fs::write(
+            &apk,
+            build_zip(&APK_ENTRIES.iter().map(|(n, _)| (*n, n.as_bytes())).collect::<Vec<_>>()),
+        )
+        .unwrap();
+        let image = dir.path().join("my boot;rm -rf .img"); // 위험한 로컬명
+        std::fs::write(&image, &orig).unwrap();
+        let mut d = dev_ready(&patched);
+        let out = dir.path().join("patched.img");
+        run_patch(&mut d, &apk, &image, &out, &mut |_| {}).unwrap();
+        let script = d.shell_calls.iter().find(|c| c.contains("boot_patch.sh boot.img")).unwrap();
+        assert!(!script.contains("my boot"));
+        assert!(!script.contains(";"));
+        assert!(d.pushed.contains_key(&format!("{WORKDIR}/boot.img")));
     }
 
     #[test]

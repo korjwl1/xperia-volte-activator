@@ -95,8 +95,8 @@ export interface Api {
   fastbootFlash(partition: string, path: string, confirm: boolean): Promise<ApiResult<null>>;
   /** Magisk 최신 APK 확보(GitHub·캐시) — 기기 무관 준비 단계 */
   magiskPrepare(): Promise<ApiResult<MagiskPrepared>>;
-  /** 부트 패치 — 스테이징·boot_patch.sh·검증(ANDROID!·크기·해시)·pull·정리 (root-write 게이트) */
-  magiskPatch(serial: string | undefined, apkPath: string, imagePath: string): Promise<ApiResult<PatchResult>>;
+  /** 부트 패치 — 스테이징·boot_patch.sh·검증(ANDROID!·크기·해시)·pull·정리 (root-write 게이트). partition은 결과명에 사용 */
+  magiskPatch(serial: string | undefined, apkPath: string, imagePath: string, partition: string): Promise<ApiResult<PatchResult>>;
   /** Magisk 앱 설치 (root-write 게이트) */
   magiskInstall(serial: string | undefined, apkPath: string): Promise<ApiResult<null>>;
   /** adb 재부팅 — os | bootloader (root-write 게이트) */
@@ -302,9 +302,9 @@ const hybridApi: Api = {
     return await invokeResult<MagiskPrepared>("magisk_prepare");
   },
 
-  async magiskPatch(serial, apkPath, imagePath) {
+  async magiskPatch(serial, apkPath, imagePath, partition) {
     if (!REAL_STEPS.root) return { ok: false, error: "루팅 실전 실행이 비활성화되어 있습니다" };
-    return await invokeResult<PatchResult>("magisk_patch", { serial: serial ?? null, apkPath, imagePath });
+    return await invokeResult<PatchResult>("magisk_patch", { serial: serial ?? null, apkPath, imagePath, partition });
   },
 
   async magiskInstall(serial, apkPath) {

@@ -60,9 +60,12 @@ fn pick_asset(json: &serde_json::Value) -> Result<(String, String, String), Stri
     Err("Magisk APK 자산을 찾을 수 없습니다 (릴리스 형식 변경 가능)".into())
 }
 
-/// Magisk 최신 APK 확보 — 캐시 재사용(D12 패턴). 기기 무관·준비 단계(게이트 밖)
+/// Magisk 최신 APK 확보 — 캐시 재사용(D12 패턴). 기기 무관·준비 단계(게이트 밖).
+/// 다운로드는 임시 파일에 받은 뒤 원자 교체 — 중단 시 반쪽 APK가 캐시로 오인되지 않게.
 #[tauri::command]
 pub async fn magisk_prepare() -> Result<MagiskPrepareOut, String> {
+    /// 정상 Magisk APK는 ~12MiB — 이보다 크면 비정상으로 본다(디스크 채우기 방지)
+    const MAX_APK: u64 = 256 * 1024 * 1024;
     let json = gh_get_json(GH_LATEST)?;
     let (tag, name, url) = pick_asset(&json)?;
     let dir = app_paths::data_dir()
@@ -70,17 +73,23 @@ pub async fn magisk_prepare() -> Result<MagiskPrepareOut, String> {
         .ok_or("앱 데이터 폴더를 확인할 수 없습니다")?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("캐시 폴더 생성 실패: {e}"))?;
     let path = dir.join(&name);
-    if !path.exists() {
+    if !path.is_file() {
         let mut reader = ureq::get(&url)
             .timeout(std::time::Duration::from_secs(300))
             .call()
             .map_err(|e| format!("APK 다운로드 실패: {e}"))?
-            .into_reader();
+            .into_reader()
+            .take(MAX_APK + 1);
         let mut bytes = Vec::new();
         reader
             .read_to_end(&mut bytes)
             .map_err(|e| format!("APK 수신 실패: {e}"))?;
-        std::fs::write(&path, &bytes).map_err(|e| format!("APK 저장 실패: {e}"))?;
+        if bytes.len() as u64 > MAX_APK {
+            return Err("다운로드한 APK가 비정상적으로 큽니다(256 MiB 초과)".into());
+        }
+        let tmp = dir.join(format!(".{name}.tmp"));
+        std::fs::write(&tmp, &bytes).map_err(|e| format!("APK 저장 실패: {e}"))?;
+        std::fs::rename(&tmp, &path).map_err(|e| format!("APK 저장 마무리 실패: {e}"))?;
     }
     let data = std::fs::read(&path).map_err(|e| format!("APK 읽기 실패: {e}"))?;
     Ok(MagiskPrepareOut {
@@ -90,13 +99,15 @@ pub async fn magisk_prepare() -> Result<MagiskPrepareOut, String> {
     })
 }
 
-/// 부트 패치 — 스테이징 → boot_patch.sh → 검증 → pull → 정리 (전 과정 adb)
+/// 부트 패치 — 스테이징 → boot_patch.sh → 검증 → pull → 정리 (전 과정 adb).
+/// partition은 결과 파일명에만 쓴다(기기 측 이미지명은 고정) — boot|init_boot 등 계약 파티션명.
 #[tauri::command]
 pub async fn magisk_patch(
     app: tauri::AppHandle,
     serial: Option<String>,
     apk_path: String,
     image_path: String,
+    partition: String,
 ) -> Result<PatchOutcome, String> {
     ensure_root_write()?;
     let apk = PathBuf::from(&apk_path);
@@ -107,10 +118,16 @@ pub async fn magisk_patch(
     if !image.is_file() {
         return Err("순정 부트 이미지 경로가 올바르지 않습니다 — 사전 준비에서 펌웨어를 먼저 받아 주세요".into());
     }
-    // 결과는 항상 앱 데이터 폴더(쓰기 보장) — <원본이름>-patched.img
-    let stem = image.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    if !partition
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        || partition.is_empty()
+    {
+        return Err("부트 파티션 이름이 올바르지 않습니다".into());
+    }
+    // 결과는 항상 앱 데이터 폴더(쓰기 보장) — 파티션명 기반 고정 경로(사용자 파일명 미사용)
     let out = app_paths::data_dir()
-        .map(|d| d.join("magisk").join(format!("{stem}-patched.img")))
+        .map(|d| d.join("magisk").join(format!("{partition}-patched.img")))
         .ok_or("앱 데이터 폴더를 확인할 수 없습니다")?;
     let work = move || {
         adb::with_first_device(&serial, move |dev| {

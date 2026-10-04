@@ -103,9 +103,10 @@ Magisk 자동 패치 (사용자 조작 없음) — 2026-10-03 XQ-DQ44 / Android 
 invoke('magisk_prepare') → { version, apkPath, sha256 }
 //   GitHub releases(topjohnwu/Magisk latest)에서 Magisk-v<ver>.apk 다운로드 → 앱 데이터 캐시(재사용)
 //   기기 무관·준비 단계 — 게이트 밖(firmware_fetch와 같은 성격)
-invoke('magisk_patch', { serial, apkPath, imagePath }) → { path, origSha256, patchedSha256, bytes, log: string[] }
+invoke('magisk_patch', { serial, apkPath, imagePath, partition }) → { path, origSha256, patchedSha256, bytes, log: string[] }
 //   위 검증 절차 2~5: 페이로드 추출(zip) → push/chmod → boot_patch.sh(종료 코드 판정) →
-//   new-boot.img 검증(ANDROID! 매직 · 크기 ≤ 원본 · 해시 ≠ 원본) → pull → 작업 폴더 정리(고정 경로만)
+//   new-boot.img 검증(ANDROID! 매직 · 원본/2 ≤ 크기 ≤ 원본 · 해시 ≠ 원본) → pull → 작업 폴더 정리(고정 경로만)
+//   기기 측 이미지명은 고정 boot.img — 로컬 파일명은 셸에 넣지 않는다(§12.5). 결과는 앱 데이터 magisk/<partition>-patched.img
 //   이벤트 'magisk:log': { line } — 스크립트 출력·진행
 invoke('magisk_install', { serial, apkPath }) → void          // 검증 절차 6의 adb install
 invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb reboot — fastboot_reboot의 adb 짝
