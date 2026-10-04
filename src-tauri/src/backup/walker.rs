@@ -60,6 +60,13 @@ pub fn walk(dev: &mut dyn ADBDeviceExt, root: &str, skip: &dyn Fn(&str) -> bool)
     depth.insert(root.to_string(), 0);
     while let Some(dir) = queue.pop() {
         let entries = match dev.list(&dir) {
+            // adbd의 LIST는 열 수 없는 폴더(권한·없음)도 빈 목록으로 답한다 — 비었으면 셸로 실제 상태를 확인
+            Ok(l) if l.is_empty() => {
+                if let Err(e) = confirm_empty(dev, &dir) {
+                    out.errors.push(e);
+                }
+                continue;
+            }
             Ok(l) => l,
             Err(e) => {
                 out.errors.push(format!(
@@ -141,6 +148,26 @@ pub fn fs_rest_skip(path: &str) -> bool {
     path == "/sdcard/Android/data" || path.starts_with("/sdcard/Android/data/")
 }
 
+/// 셸 단일 인용 — 기기 파일명을 그대로 넣는다(작은따옴표만 이스케이프)
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+const MISSING_MARK: &str = "__XV_MISSING__";
+
+/// LIST가 빈 폴더 — 실제로 비었거나 없는 경우만 통과. 읽을 수 없거나(권한) 항목이 보이면 오류(완결 불가)
+fn confirm_empty(dev: &mut dyn ADBDeviceExt, dir: &str) -> Result<(), String> {
+    let q = sh_quote(dir);
+    let cmd = format!("if [ ! -e {q} ]; then echo {MISSING_MARK}; else ls -A -- {q}; fi");
+    match crate::device_io::shell(dev, &cmd) {
+        Err(e) => Err(format!("{dir}: 폴더를 읽을 수 없습니다(권한) — {e}")),
+        Ok(out) if out.trim() == MISSING_MARK || out.trim().is_empty() => Ok(()),
+        Ok(_) => Err(format!(
+            "{dir}: 폴더 목록을 받지 못했습니다(안에 항목이 있음) — 읽기 권한 문제일 수 있습니다"
+        )),
+    }
+}
+
 pub fn join(dir: &str, name: &str) -> String {
     let trimmed = dir.strip_suffix('/').unwrap_or(dir);
     format!("{trimmed}/{name}")
@@ -150,6 +177,34 @@ pub fn join(dir: &str, name: &str) -> String {
 mod tests {
     use super::*;
     use crate::backup::fake_device::FakeADBDevice;
+
+    #[test]
+    fn empty_listing_is_confirmed_before_counting_as_done() {
+        let mut d = FakeADBDevice::new();
+        d.add_dir("/sdcard/Download/empty");
+        d.add_dir("/sdcard/Download/it's locked");
+        d.add_file(
+            "/sdcard/Download/it's locked/secret.jpg",
+            b"x",
+            1700000000,
+            0o600,
+        );
+        d.deny_list.insert("/sdcard/Download/it's locked".into());
+        let r = walk(&mut d, "/sdcard/Download", &|_| false);
+        // 진짜 빈 폴더는 통과, 권한 없는 폴더는 비어 보여도 오류(완결 불가)
+        assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
+        assert!(r.errors[0].contains("it's locked"));
+        assert!(r.files.is_empty());
+        // 없는 기명 폴더(예: Recordings)는 오류가 아니다
+        let missing = walk(&mut d, "/sdcard/Recordings", &|_| false);
+        assert!(missing.errors.is_empty(), "{:?}", missing.errors);
+    }
+
+    #[test]
+    fn shell_quoting_keeps_names_literal() {
+        assert_eq!(sh_quote("a b"), "'a b'");
+        assert_eq!(sh_quote("it's;rm -rf"), r"'it'\''s;rm -rf'");
+    }
 
     fn dev_with_sdcard() -> FakeADBDevice {
         let mut d = FakeADBDevice::new();

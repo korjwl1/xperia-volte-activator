@@ -25,6 +25,8 @@ pub struct FakeADBDevice {
     symlinks: BTreeMap<String, String>,
     /// list()가 실패하게 만들 경로
     pub fail_list: BTreeSet<String>,
+    /// 읽기 권한이 없는 폴더 — 실제 adbd처럼 list()는 빈 목록, 셸 ls는 권한 오류
+    pub deny_list: BTreeSet<String>,
     /// list()가 보고할 크기 덮어쓰기 — SYNC u32 wrap 시뮬레이션
     pub list_size_override: BTreeMap<String, u32>,
     /// pull()이 실패하게 만들 경로
@@ -128,6 +130,35 @@ impl FakeADBDevice {
         out: &mut Vec<u8>,
         err: &mut Vec<u8>,
     ) -> Result<u8, RustADBError> {
+        // walker::confirm_empty — 빈 목록 폴더의 실제 상태(없음·빈 폴더·권한 없음)
+        if let Some(dir) = cmd
+            .strip_prefix("if [ ! -e '")
+            .and_then(|rest| rest.split_once("' ]; then"))
+            .map(|(quoted, _)| quoted.replace(r"'\''", "'"))
+        {
+            if self.deny_list.contains(&dir) {
+                write!(err, "ls: {dir}: Permission denied")?;
+                return Ok(1);
+            }
+            if !self.dirs.contains(&dir) {
+                out.write_all(
+                    b"__XV_MISSING__
+",
+                )?;
+                return Ok(0);
+            }
+            for child in self
+                .dirs
+                .iter()
+                .chain(self.files.keys())
+                .chain(self.symlinks.keys())
+            {
+                if Self::parent_of(child) == dir && child != &dir {
+                    writeln!(out, "{}", Self::name_of(child))?;
+                }
+            }
+            return Ok(0);
+        }
         if self.fail_shell.iter().any(|prefix| cmd.starts_with(prefix)) {
             err.write_all(b"injected shell failure")?;
             return Ok(1);
@@ -343,8 +374,9 @@ impl ADBDeviceExt for FakeADBDevice {
                 "list failed for {dir}"
             )));
         }
-        if !self.dirs.contains(dir) {
-            return Err(RustADBError::ADBRequestFailed(format!("no such dir {dir}")));
+        // 실제 adbd(LIST v1)는 열 수 없는 폴더(없음·권한)도 오류 없이 빈 목록으로 답한다
+        if !self.dirs.contains(dir) || self.deny_list.contains(dir) {
+            return Ok(Vec::new());
         }
         let mut out = Vec::new();
         // 하위 디렉터리
