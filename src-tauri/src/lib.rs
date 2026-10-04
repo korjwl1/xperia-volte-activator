@@ -52,6 +52,7 @@ pub fn run() {
             fastboot::fastboot_lock,
             fastboot::fastboot_flash,
             fastboot::fastboot_reboot,
+            fastboot::relock_gate_check,
             magisk::magisk_prepare,
             magisk::magisk_patch,
             magisk::magisk_install,
