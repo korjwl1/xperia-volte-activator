@@ -797,7 +797,7 @@ pub async fn firmware_versions(serial: Option<String>) -> Result<FirmwareVersion
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// 테스트용 stored 방식 ZIP 빌더 — 로컬 헤더 + 데이터 + central directory + EOCD
