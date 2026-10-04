@@ -5,9 +5,10 @@ export const SIMULATED_RUN = true;
 
 // 단계별 실전 전환 (사용자 승인: 백업·복구·fastboot 2026-10-03, 루팅 2026-10-04 —
 // 실기기 검증 전까지 실행은 시뮬레이션 유지 — 데스크톱 빌드에서도 기본 꺼짐)
-export const REAL_STEPS: { backup: boolean; restore: boolean; fastboot: boolean; root: boolean } = {
+export const REAL_STEPS: { backup: boolean; restore: boolean; fastboot: boolean; root: boolean; efs: boolean } = {
   backup: false,
   restore: false,
   fastboot: false,
   root: false,
+  efs: false,
 };

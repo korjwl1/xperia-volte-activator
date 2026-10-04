@@ -257,6 +257,39 @@ export interface RelockGate {
   checked: { partition: string; slot: string; ok: boolean; detail: string }[];
 }
 
+/** EFS 도구 확인 — 백엔드 efs_tool_check (기기 무관·읽기 전용) */
+export interface EfsToolCheck {
+  version: string;
+  path: string;
+}
+
+/** EFS 사전 점검 — 백엔드 efs_preflight (targetInfo + efsInfo) */
+export interface EfsPreflight {
+  log: string[];
+  errors: string[];
+}
+
+/** EFS 업로드 결과 — 백엔드 efs_upload (1회 — 슬롯별 2회는 wizard가 호출) */
+export interface EfsUploadResult {
+  errors: string[];
+  filesSeen: number;
+}
+
+/** EFS 전수 리드백 검증 — 백엔드 efs_verify. 성공 판정의 유일한 최종 근거 */
+export interface EfsVerifyReport {
+  ok: boolean;
+  files: number;
+  matched: number;
+  mismatches: string[];
+  missing: string[];
+}
+
+/** EFS 로그 이벤트 페이로드 — 'efs:log' */
+export interface EfsLogEvent {
+  cmd: string;
+  line: string;
+}
+
 /** Magisk APK 확보 결과 — 백엔드 magisk_prepare */
 export interface MagiskPrepared {
   version: string;

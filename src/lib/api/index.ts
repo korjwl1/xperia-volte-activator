@@ -3,7 +3,7 @@
 // 단계별 실행 플래그는 data/runMode.ts에서 관리. fastboot 쓰기/재부팅은 facade에서도 차단.
 // 컴포넌트에서 @tauri-apps/api 직접 import 금지.
 
-import type { MagiskPatchRequest, FirmwareDirInfo, AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FastbootVars, FirmwareResult, FirmwareVersions, MagiskPrepared, PatchResult, RestoreOutcome, RelockGate, SettingsOverview, SmsIeOutcome, UnlockResult } from "$lib/types";
+import type { MagiskPatchRequest, FirmwareDirInfo, AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EfsLogEvent, EfsPreflight, EfsToolCheck, EfsUploadResult, EfsVerifyReport, EnvCheckItem, FastbootVars, FirmwareResult, FirmwareVersions, MagiskPrepared, PatchResult, RestoreOutcome, RelockGate, SettingsOverview, SmsIeOutcome, UnlockResult } from "$lib/types";
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
 import type { ApiResult } from "$lib/types";
 import { REAL_STEPS } from "$lib/data/runMode";
@@ -107,6 +107,22 @@ export interface Api {
   rootReboot(serial: string | undefined, target: "os" | "bootloader"): Promise<ApiResult<null>>;
   /** Magisk 패치 로그 이벤트 구독 */
   onMagiskLog(cb: (line: string) => void): Promise<() => void>;
+  /** EFS 도구 확인 — EfsTools version 실행 (기기 무관·읽기 전용) */
+  efsToolCheck(): Promise<ApiResult<EfsToolCheck>>;
+  /** DIAG 포트 전환 — su setprop (efs-write 게이트, 원본 efs.py 계승) */
+  efsDiagOpen(serial: string | undefined): Promise<ApiResult<null>>;
+  /** EFS 사전 점검 — targetInfo + efsInfo (efs-write 게이트) */
+  efsPreflight(): Promise<ApiResult<EfsPreflight>>;
+  /** EFS 업로드 1회 — uploadDirectory (efs-write 게이트, 슬롯별 2회는 wizard가 호출) */
+  efsUpload(presetDir: string): Promise<ApiResult<EfsUploadResult>>;
+  /** EFS 전수 리드백 검증 — downloadDirectory → SHA-256 비교 (efs-write 게이트). 성공 판정의 유일한 근거 */
+  efsVerify(presetDir: string): Promise<ApiResult<EfsVerifyReport>>;
+  /** EFS before-image 스냅샷 — downloadDirectory / (efs-write 게이트) */
+  efsSnapshot(dest: string): Promise<ApiResult<EfsUploadResult>>;
+  /** 진행 중 EfsTools 프로세스 취소 */
+  efsCancel(): Promise<ApiResult<null>>;
+  /** EFS 로그 이벤트 구독 */
+  onEfsLog(cb: (ev: EfsLogEvent) => void): Promise<() => void>;
 }
 
 const hybridApi: Api = {
@@ -334,6 +350,44 @@ const hybridApi: Api = {
 
   async onMagiskLog(cb) {
     return transport.subscribe<string>("magisk:log", cb);
+  },
+
+  async efsToolCheck() {
+    return await invokeResult<EfsToolCheck>("efs_tool_check");
+  },
+
+  async efsDiagOpen(serial) {
+    if (!REAL_STEPS.efs) return { ok: false, error: "EFS 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<null>("efs_diag_open", { serial: serial ?? null });
+  },
+
+  async efsPreflight() {
+    if (!REAL_STEPS.efs) return { ok: false, error: "EFS 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<EfsPreflight>("efs_preflight");
+  },
+
+  async efsUpload(presetDir) {
+    if (!REAL_STEPS.efs) return { ok: false, error: "EFS 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<EfsUploadResult>("efs_upload", { presetDir });
+  },
+
+  async efsVerify(presetDir) {
+    if (!REAL_STEPS.efs) return { ok: false, error: "EFS 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<EfsVerifyReport>("efs_verify", { presetDir });
+  },
+
+  async efsSnapshot(dest) {
+    if (!REAL_STEPS.efs) return { ok: false, error: "EFS 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<EfsUploadResult>("efs_snapshot", { dest });
+  },
+
+  async efsCancel() {
+    if (!REAL_STEPS.efs) return { ok: false, error: "EFS 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<null>("efs_cancel");
+  },
+
+  async onEfsLog(cb) {
+    return transport.subscribe<EfsLogEvent>("efs:log", cb);
   },
 
   async openExternal(url) {

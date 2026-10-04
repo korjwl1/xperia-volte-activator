@@ -333,6 +333,9 @@ export class Wizard {
   private relockRanGen = -1;
   private rootRanGen = -1;
   private unrootRanGen = -1;
+  private efsPreflightRanGen = -1;
+  private efsRanGen = -1;
+  private efsVerifyRanGen = -1;
   private timer: ReturnType<typeof setInterval> | undefined;
   private cursor = 0;
 
@@ -747,6 +750,31 @@ export class Wizard {
           this.pause();
           this.dispatchEngine(() => this.finishRealRoot(cur));
         }
+      }
+      return;
+    }
+    // 실전 EFS — 래퍼 엔진 (REAL_STEPS.efs 전환 시). efs(슬롯별 2회 업로드) → verify(전수 리드백)
+    if (cur.id === "efs-preflight" && REAL_STEPS.efs) {
+      if (cur.status === "running" && this.efsPreflightRanGen !== this.runGen) {
+        this.efsPreflightRanGen = this.runGen;
+        this.pause();
+        this.dispatchEngine(() => this.runRealEfsPreflight(cur));
+      }
+      return;
+    }
+    if (cur.id === "efs" && REAL_STEPS.efs) {
+      if (cur.status === "running" && this.efsRanGen !== this.runGen) {
+        this.efsRanGen = this.runGen;
+        this.pause();
+        this.dispatchEngine(() => this.runRealEfsUpload(cur));
+      }
+      return;
+    }
+    if (cur.id === "verify" && REAL_STEPS.efs) {
+      if (cur.status === "running" && this.efsVerifyRanGen !== this.runGen) {
+        this.efsVerifyRanGen = this.runGen;
+        this.pause();
+        this.dispatchEngine(() => this.runRealEfsVerify(cur));
       }
       return;
     }
@@ -1817,6 +1845,148 @@ export class Wizard {
     }
   }
 
+  // ── 실전 EFS (REAL_STEPS.efs 전환 시) — .plans/04-engine/efstools-wrapper.md ──
+
+  /** 로그 구독 공용 — EfsTools 라인을 단계 로그로 흘린다 */
+  private async subscribeEfsLog(gen: number, cur: RunStep) {
+    return api.onEfsLog((ev) => {
+      if (gen !== this.runGen) return;
+      cur.logs.push(`[EFS/${ev.cmd}] ${ev.line}`);
+      void this.persist();
+    });
+  }
+
+  /** EFS 사전 점검 — DIAG 전환 → targetInfo + efsInfo */
+  private async runRealEfsPreflight(cur: RunStep) {
+    const gen = this.runGen;
+    // DIAG 전환 (원본 efsPortOpen 계승)
+    cur.progress = 0.2;
+    cur.logs.push("[EFS] DIAG 포트 전환 — 폰의 루트 권한 요청을 허용해 주세요");
+    const diag = await api.efsDiagOpen(this.device?.serial);
+    if (gen !== this.runGen) return;
+    if (!diag.ok) return this.failStep(`DIAG 포트 전환 실패: ${diag.error}`);
+    cur.logs.push("[EFS] DIAG 전환 완료 — EfsTools 사전 점검 실행");
+    // 점검
+    cur.progress = 0.5;
+    const un = await this.subscribeEfsLog(gen, cur);
+    const r = await api.efsPreflight();
+    un();
+    if (gen !== this.runGen) return;
+    if (!r.ok) return this.failStep(`EFS 사전 점검 실패: ${r.error}`);
+    for (const line of r.value.log) cur.logs.push(`[EFS] ${line}`);
+    if (r.value.errors.length > 0) {
+      for (const e of r.value.errors) cur.logs.push(`[경고] ${e}`);
+      cur.logs.push("[주의] 점검에서 경고가 발견되었습니다 — 연결 상태를 확인한 뒤 진행합니다");
+    } else {
+      cur.logs.push("[EFS] 사전 점검 통과");
+    }
+    cur.progress = 1;
+    this.stepDone(cur);
+  }
+
+  /** EFS 업로드 — 슬롯별 2회(원본 계승). 성공 판정은 하지 않는다(verify 단계가 담당) */
+  private async runRealEfsUpload(cur: RunStep) {
+    const gen = this.runGen;
+    // 프리셋 경로 결정 — 각 슬롯의 통신사에 대응
+    const targets = this.volteConfig.sims.filter((s) => s.carrier !== null);
+    if (targets.length === 0) return this.failStep("패치 대상 SIM이 없습니다");
+    const un = await this.subscribeEfsLog(gen, cur);
+    let uploadIdx = 0;
+    const totalUploads = targets.length * 2; // 슬롯별 2회
+    for (const t of targets) {
+      const preset = efsPreset(t.carrier!, t.slot);
+      if (!preset) {
+        un();
+        return this.failStep(`SIM${t.slot} ${t.carrier} — 번들 프리셋을 찾을 수 없습니다`);
+      }
+      // 프리셋 폴더 경로 — efsPresets.ts의 folder 필드 (프로젝트 루트 상대)
+      const presetDir = preset.folder;
+      for (let round = 1; round <= 2; round++) {
+        cur.progress = Math.min(0.95, (uploadIdx + 0.5) / totalUploads);
+        cur.logs.push(`[EFS] SIM${t.slot} ${t.carrier} — ${round}차 업로드 (${uploadIdx + 1}/${totalUploads})`);
+        void this.persist(true);
+        const r = await api.efsUpload(presetDir);
+        if (gen !== this.runGen) return un();
+        if (!r.ok) {
+          un();
+          return this.failStep(`SIM${t.slot} ${round}차 업로드 실패: ${r.error}`);
+        }
+        if (r.value.errors.length > 0) {
+          cur.logs.push(`[경고] 업로드 중 오류 라인 ${r.value.errors.length}개 — 확인 단계에서 최종 판정합니다`);
+        }
+        uploadIdx++;
+        if (cur.sub) {
+          const subIdx = cur.sub.list.findIndex((s) => s.includes(`SIM${t.slot}`) && s.includes(`${round}차`));
+          if (subIdx >= 0 && cur.sub.done < subIdx + 1) {
+            cur.sub.done = subIdx + 1;
+            void this.persist(true);
+          }
+        }
+      }
+    }
+    un();
+    cur.progress = 1;
+    cur.logs.push(`[EFS] 업로드 완료 — ${totalUploads}회 — 다음 단계(적용 확인)에서 전수 리드백 검증합니다`);
+    this.stepDone(cur);
+  }
+
+  /** EFS 전수 리드백 검증 — 업로드 성공의 유일한 최종 근거 */
+  private async runRealEfsVerify(cur: RunStep) {
+    const gen = this.runGen;
+    const targets = this.volteConfig.sims.filter((s) => s.carrier !== null);
+    if (targets.length === 0) return this.failStep("검증할 패치 대상 SIM이 없습니다");
+    const un = await this.subscribeEfsLog(gen, cur);
+    let allOk = true;
+    let totalMatched = 0;
+    let totalFiles = 0;
+    let slotIdx = 0;
+    for (const t of targets) {
+      const preset = efsPreset(t.carrier!, t.slot);
+      if (!preset) {
+        un();
+        return this.failStep(`SIM${t.slot} ${t.carrier} — 번들 프리셋을 찾을 수 없습니다`);
+      }
+      cur.progress = Math.min(0.95, (slotIdx + 0.5) / targets.length);
+      cur.logs.push(`[검증] SIM${t.slot} ${t.carrier} — 전수 리드백·해시 비교`);
+      void this.persist(true);
+      const r = await api.efsVerify(preset.folder);
+      if (gen !== this.runGen) return un();
+      if (!r.ok) {
+        un();
+        return this.failStep(`SIM${t.slot} 검증 실패: ${r.error}`);
+      }
+      const report = r.value;
+      totalMatched += report.matched;
+      totalFiles += report.files;
+      if (report.ok) {
+        cur.logs.push(`[검증] SIM${t.slot} 통과 — ${report.matched}/${report.files} 파일 해시 일치`);
+      } else {
+        allOk = false;
+        for (const m of report.mismatches.slice(0, 5)) cur.logs.push(`[불일치] ${m}`);
+        if (report.mismatches.length > 5) cur.logs.push(`… 외 ${report.mismatches.length - 5}개 불일치`);
+        for (const m of report.missing.slice(0, 5)) cur.logs.push(`[누락] ${m}`);
+        if (report.missing.length > 5) cur.logs.push(`… 외 ${report.missing.length - 5}개 누락`);
+      }
+      if (cur.sub) {
+        const subIdx = cur.sub.list.findIndex((s) => s.includes(`SIM${t.slot}`));
+        if (subIdx >= 0 && cur.sub.done < subIdx + 1) {
+          cur.sub.done = subIdx + 1;
+          void this.persist(true);
+        }
+      }
+      slotIdx++;
+    }
+    un();
+    if (!allOk) {
+      return this.failStep(
+        `전수 리드백 검증 실패 — 매칭 ${totalMatched}/${totalFiles}. [이 단계 다시 시도]로 재검증하거나 [중단]할 수 있습니다`,
+      );
+    }
+    cur.progress = 1;
+    cur.logs.push(`[완결] 전수 리드백 통과 — ${totalMatched}/${totalFiles} 파일 해시 일치`);
+    this.stepDone(cur);
+  }
+
   /** 조건 폴링 대기 — 세대 가드·타임아웃·check 예외 방어(모드 전환 대기 공용) */
   private waitFor(gen: number, check: () => Promise<boolean>, timeoutMs: number, everyMs = 2000): Promise<boolean> {
     return waitUntil(check, () => gen === this.runGen, timeoutMs, everyMs);
@@ -2010,6 +2180,9 @@ export class Wizard {
     this.relockRanGen = -1;
     this.rootRanGen = -1;
     this.unrootRanGen = -1;
+    this.efsPreflightRanGen = -1;
+    this.efsRanGen = -1;
+    this.efsVerifyRanGen = -1;
     this.journalSims = undefined;
     this.sessionFor = null;
     this.pendingJournal = null;
