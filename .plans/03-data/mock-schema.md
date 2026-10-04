@@ -38,3 +38,4 @@ DeviceStatus += state:'device'|'unauthorized'|'offline'|'usb'…,  SimInfo += st
 - device.ts: 브라우저 dev 전용 (데스크톱은 실측만, mock으로 위장하지 않음). env 체크는 빈 목록
 - plan.ts: 실행 계획 단일 생성기 buildPlan (00-architecture "실행 계획" 참조)
 - 실행 시뮬레이션 러너는 stores/wizard.svelte.ts (진행률/로그/수동대기/USB 오류 유발 토글)
+- EFS facade 브라우저 mock(`src/lib/api/efs.ts`): EfsUploadResult/EfsVerifyReport에 planned/skipped/warnings 추가. KT의 빈 NV 두 항목은 mock에서도 filesSeen/files/matched에서 제외. `simulation` 경고는 기기 결과가 아님을 명시한다. 실제 Tauri native 실패는 mock 성공으로 대체하지 않는다. REAL_STEPS.efs 기본 false로 기존 진행 시뮬레이션 유지.

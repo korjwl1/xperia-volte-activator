@@ -1,9 +1,10 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod adb;
 mod backup;
+mod efs;
 mod firmware;
-mod host;
 mod guard;
+mod host;
 mod journal;
 mod usbmode;
 
@@ -32,6 +33,18 @@ pub fn run() {
             adb::read_imei1,
             adb::open_settings_screen,
             usbmode::usb_modes,
+            efs::efs_tool_check,
+            efs::efs_validate_presets,
+            efs::config::efs_config_get,
+            efs::config::efs_config_set,
+            efs::config::efs_resolve_preset,
+            efs::efs_diag_open,
+            efs::efs_preflight,
+            efs::efs_upload,
+            efs::efs_verify,
+            efs::efs_snapshot,
+            efs::efs_rollback,
+            efs::efs_cancel,
             host::disk_free,
             firmware::firmware_fetch,
             firmware::firmware_versions,

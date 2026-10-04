@@ -68,3 +68,11 @@ status: implemented (mock 시뮬레이션)
   IMS 미확인 시 [다시 패치] → VoLTE 적용(연결 안정성 검사)부터 다시
 - 완료 화면: 통신 확인을 생략했으면 "작업 종료 · 통신 미검증"(성공 표시와 구분). 패치했으면 직접 확인 목록
   (실제 발신·수신, 문자·MMS·5G 데이터, 해외 로밍은 별개, SIM 교체·망 변경·모뎀 포함 업데이트 후 재확인)
+## Native EFS integration (2026-10-04)
+
+- REAL_STEPS.efs는 기본 false. 기존 화면·위험 확인 게이트·시뮬레이션을 유지한다.
+- 실전 러너는 api facade의 설정된 COM·bundle root·snapshot root를 사용한다. 설정 미지정·전체 선택의 공유 EFS/NV 충돌은 DIAG 전환 전에 failed로 중단한다.
+- efs-preflight: efsValidatePresets → efsDiagOpen(선택한 ADB serial) → efsPreflight(설정된 COM).
+- efs: 슬롯별 scoped before-image efsSnapshot → efsUpload 1차·2차. verify: 슬롯별 efsVerify, 누락·불일치·읽기 오류는 failed 유지.
+- native 구조화 오류와 setup/emptyNvSkipped/nvPrefixVerification 경고를 로그에 표시한다. skipped 항목은 written/verified 수에 포함하지 않는다. 리드백은 IMS·실제 통화 성공의 증거와 별개다.
+- [중단]/[처음으로]는 api.efsCancel 호출·세대 가드로 후속 작업을 멈춘다. 이벤트 구독은 finally 해제. 슬롯별 before-image 폴더를 로그에 남기며 자동 rollback은 하지 않는다.

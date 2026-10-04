@@ -673,6 +673,11 @@ export class Wizard {
       }
       return;
     }
+    if (REAL_STEPS.efs && ["efs-preflight", "efs", "verify"].includes(cur.id)) {
+      this.pause();
+      void this.runRealNativeEfs(cur);
+      return;
+    }
     cur.progress = Math.min(1, cur.progress + 0.04 + Math.random() * 0.05);
     if (Math.random() < 0.35) cur.logs.push(this.mockLog(cur.id, cur.progress));
     if (cur.sub) {
@@ -1270,6 +1275,78 @@ export class Wizard {
     }
   }
 
+  /** Native EFS: explicit COM, before-image, two passes per slot and target readback. */
+  private async runRealNativeEfs(cur: RunStep) {
+    const gen = this.runGen;
+    let unlog = () => {};
+    let unprogress = () => {};
+    try {
+      const cfg = await api.efsConfiguration();
+      if (gen !== this.runGen) return;
+      if (!cfg.ok) return this.failStep(cfg.error);
+      if (!cfg.value) return this.failStep("EFS COM·번들 루트·스냅샷 루트를 먼저 명시적으로 설정해 주세요");
+      const selected = this.volteConfig.sims.filter(s => s.carrier !== null).map(s => efsPreset(s.carrier!, s.slot)?.folder);
+      if (!selected.length || selected.some(folder => !folder)) return this.failStep("선택한 SIM 프리셋을 찾을 수 없습니다");
+      const validation = await api.efsValidatePresets(selected as string[]);
+      if (gen !== this.runGen) return;
+      if (!validation.ok) return this.failStep(validation.error);
+      unlog = await api.onEfsLog(ev => { if (gen === this.runGen) cur.logs.push(`[EFS/${ev.cmd}] ${ev.line}`); });
+      unprogress = await api.onEfsProgress(ev => { if (gen === this.runGen) cur.logs.push(`[진행] ${ev.file} ${ev.n}/${ev.total}`); });
+      if (gen !== this.runGen) return;
+      const showWarnings = (warnings: { code: string; target: string; message: string }[]) => {
+        for (const w of warnings) cur.logs.push(`[경고/${w.code}] ${w.target}: ${w.message}`);
+      };
+      if (cur.id === "efs-preflight") {
+        const diag = await api.efsDiagOpen(this.device?.serial);
+        if (gen !== this.runGen) return;
+        if (!diag.ok) return this.failStep(diag.error);
+        const r = await api.efsPreflight();
+        if (gen !== this.runGen) return;
+        if (!r.ok) return this.failStep(r.error);
+        cur.logs.push(...r.value.log);
+        for (const w of r.value.warnings) cur.logs.push(`[경고/setup] ${w}`);
+        if (r.value.errors.length) return this.failStep(r.value.errors.join(" / "));
+      } else {
+        const targets = this.volteConfig.sims.filter(s => s.carrier !== null);
+        if (!targets.length) return this.failStep("패치 대상 SIM이 없습니다");
+        for (const [index, target] of targets.entries()) {
+          const preset = efsPreset(target.carrier!, target.slot);
+          if (!preset) return this.failStep(`SIM${target.slot} 프리셋이 없습니다`);
+          if (cur.id === "efs") {
+            const dest = `${cfg.value.snapshotRoot}/${Date.now()}-sim${target.slot}`;
+            const snap = await api.efsSnapshot(dest, preset.folder);
+            if (gen !== this.runGen) return;
+            if (!snap.ok) return this.failStep(snap.error);
+            cur.logs.push(`[before-image] SIM${target.slot}: ${snap.value.path}`);
+            showWarnings(snap.value.warnings);
+            for (let round = 1; round <= 2; round++) {
+              cur.logs.push(`[EFS] SIM${target.slot} ${round}차 업로드`);
+              const r = await api.efsUpload(preset.folder);
+              if (gen !== this.runGen) return;
+              if (!r.ok) return this.failStep(r.error);
+              showWarnings(r.value.warnings);
+              if (r.value.errors.length) return this.failStep(r.value.errors.join(" / "));
+              cur.logs.push(`[EFS] 쓴 항목 ${r.value.filesSeen}/${r.value.planned}, 건너뜀 ${r.value.skipped}`);
+            }
+          } else {
+            const r = await api.efsVerify(preset.folder);
+            if (gen !== this.runGen) return;
+            if (!r.ok) return this.failStep(r.error);
+            showWarnings(r.value.warnings);
+            if (!r.value.ok) return this.failStep(`SIM${target.slot} 리드백 실패: ${[...r.value.missing, ...r.value.mismatches].join(" / ")}`);
+            cur.logs.push(`[검증] SIM${target.slot} ${r.value.matched}/${r.value.files} 일치, 제외 ${r.value.skipped}`);
+          }
+          cur.progress = (index + 1) / targets.length;
+          void this.persist(true);
+        }
+      }
+      cur.progress = 1;
+      this.stepDone(cur);
+    } catch (e) {
+      if (gen === this.runGen) this.failStep(`EFS 실행 실패: ${String(e)}`);
+    } finally { unlog(); unprogress(); }
+  }
+
   /** 단계 완료 공통 처리 — 시뮬레이션 tick의 완료 블록과 같은 규칙 */
   private stepDone(cur: RunStep) {
     cur.status = "done";
@@ -1430,6 +1507,7 @@ export class Wizard {
   }
 
   abort() {
+    void api.efsCancel();
     this.runGen++;
     this.stepError = "";
     this.pause();
@@ -1461,6 +1539,7 @@ export class Wizard {
 
   /** [처음으로] — 모든 선택·입력·실행 상태 초기화 */
   restart() {
+    void api.efsCancel();
     this.runGen++;
     this.pause();
     this.stopWatch();

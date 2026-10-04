@@ -15,7 +15,8 @@ Xperia VoLTE 활성화 통합 도구. Tauri 2 + SvelteKit 2 + Svelte 5 + TypeScr
 - 예외(사용자 승인 2026-10-03): 작업 진행 기록(journal) — 실행 상태를 앱 데이터 폴더 journal/<기기 해시>.json에 저장해 끊긴 작업을 이어서 진행 (src-tauri/src/journal.rs). 언락 코드·IMEI는 기록하지 않음.
 - 예외(사용자 승인 2026-10-03): 순정 펌웨어 부트 이미지(init_boot/boot)를 Sony 서버에서 부분 다운로드해 앱 데이터 폴더 firmware/ 캐시에 저장한다 — 저장 공간이 부족하면 사용자가 고른 다른 폴더에 저장 (src-tauri/src/firmware.rs, 재배포 금지).
 - 예외(사용자 승인 2026-10-03, feat/backup-engine 워크트리): **백업·복구 엔진 실전 코드 작성 허용** — 백업(폰에서 읽기만)은 사용자 요청으로 실기기 검증 완료(2026-10-03). 복구(폰에 쓰기)는 실기기 테스트 금지 유지 — 모의 실행(live_restore_dryrun)과 FakeADBDevice 단위 테스트로 검증. 실행은 `REAL_STEPS` 플래그가 꺼져 있는 동안 시뮬레이션 유지. 설계는 `.plans/04-engine/backup-engine.md`.
-- 기기 통신은 `adb_client` 크레이트(ADB 프로토콜 순수 Rust) — 실행 중인 adb 서버 재사용 → USB 직접 연결 폴백. adb 바이너리 설치/PATH 탐색 불필요. adb 바이너리를 직접 실행하는 코드는 금지.
+- 예외(사용자 승인 2026-10-04, efs-native-rust 격리 워크트리): **네이티브 Rust EFS/NV 구현·오프라인 검증·커밋 허용**. `src-tauri/src/efs/`의 COM/HDLC/DIAG/EFS/NV, `adb_client`를 통한 DIAG 전환, 스냅샷·업로드·리드백·롤백을 작성한다. 실기기 작업·DIAG 전환 테스트는 금지. Cargo `efs-write`와 `REAL_STEPS.efs`는 기본 꺼짐 유지. 공유 원본 프리셋·상위 tasks·다른 워크트리는 수정하지 않는다. 설계: `.plans/04-engine/efs-native.md`.
+- 기기 통신: ADB는 `adb_client` 크레이트(ADB 프로토콜 순수 Rust) — 실행 중인 adb 서버 재사용 → USB 직접 연결 폴백. EFS/NV는 명시적으로 지정한 COM의 순수 Rust DIAG 세션. adb·EfsTools 바이너리 직접 실행 및 .NET 런타임 의존 금지.
 
 ## 필수 작업 규칙
 

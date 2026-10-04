@@ -290,3 +290,15 @@ export const RISK_LABEL: Record<PlanStep["risk"], string> = {
   danger: "위험",
 };
 
+/** Native EFS/NV results. Phone payloads and credentials remain in Rust. */
+export interface EfsError { code: string; operation: string; message: string; status?: number; cleanup?: string[] }
+export type EfsResult<T> = { ok: true; value: T } | { ok: false; error: string; details?: EfsError };
+export interface EfsWarning { code: string; target: string; message: string }
+export interface EfsConfiguration { port: string; presetRoot: string; snapshotRoot: string }
+export interface EfsToolCheck { version: string; path: string; native: boolean; deviceExecution: boolean }
+export interface EfsPreflight { log: string[]; errors: string[]; warnings: string[]; parameters: number[] }
+export interface EfsUploadResult { errors: string[]; filesSeen: number; planned: number; skipped: number; warnings: EfsWarning[] }
+export interface EfsVerifyReport { ok: boolean; files: number; matched: number; planned: number; skipped: number; missing: string[]; mismatches: string[]; warnings: EfsWarning[] }
+export interface EfsSnapshotResult { path: string; filesSeen: number; warnings: EfsWarning[] }
+export interface EfsProgress { operation: string; file: string; n: number; total: number }
+export interface EfsLogEvent { cmd: string; line: string }

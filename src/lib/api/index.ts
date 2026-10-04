@@ -6,6 +6,7 @@
 import type { AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FirmwareResult, FirmwareVersions, RestoreOutcome, SettingsOverview, SmsIeOutcome } from "$lib/types";
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
 import { classifyApp, SAMPLE_FLAGS, type AppFlag } from "$lib/data/appRules";
+import { efsApi, type EfsApi } from "./efs";
 
 // ── Tauri 백엔드 경유 (데스크톱 빌드) ──
 const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -31,7 +32,7 @@ async function invokeResult<T>(cmd: string, args?: Record<string, unknown>): Pro
   }
 }
 
-export interface Api {
+export interface Api extends EfsApi {
   /** null = 조회 실패(일시적 오류 포함), [] = 연결된 기기 없음 */
   deviceList(): Promise<DeviceStatus[] | null>;
   deviceStatus(serial: string): Promise<DeviceStatus | null>;
@@ -100,6 +101,7 @@ export interface Api {
 }
 
 const hybridApi: Api = {
+  ...efsApi,
   async deviceList() {
     if (inTauri()) {
       // 데스크톱: 백엔드 실측이 유일한 소스 — mock으로 위장하지 않음
