@@ -54,6 +54,8 @@
 
   onMount(() => {
     alive = true;
+    // PC 환경(드라이버) 점검은 한 번만 — 기기 폴링과 별개, [다시 확인]으로 재조회
+    void wizard.loadEnv();
     void refresh().finally(() => {
       if (alive) loading = false;
     });
@@ -178,6 +180,25 @@
               </div>
             {/each}
           </div>
+
+          <!-- PC 환경 안내 — VoLTE 적용용 DIAG 드라이버가 없다고 확인된 경우만(작업 시작은 막지 않음) -->
+          {#if wizard.diagDriverMissing}
+            <div class="w-full rounded-xl bg-amber-400/20 border border-amber-200/40 px-5 py-3 flex items-center gap-3">
+              <TriangleAlert size={18} class="shrink-0 text-amber-200" />
+              <div class="min-w-0 flex-1 space-y-0.5">
+                <div class="text-sm font-semibold">{wizard.diagDriverMissing.label}</div>
+                <div class="text-xs opacity-80 leading-relaxed">{wizard.diagDriverMissing.detail}</div>
+              </div>
+              <button
+                type="button"
+                class="shrink-0 rounded-md bg-white/15 px-3 py-1.5 text-xs font-medium hover:bg-white/25 transition-colors disabled:opacity-50"
+                disabled={wizard.envLoading}
+                onclick={() => wizard.loadEnv()}
+              >
+                {wizard.envLoading ? "확인 중…" : "다시 확인"}
+              </button>
+            </div>
+          {/if}
 
           <!-- 작업 시작 버튼 -->
           <button

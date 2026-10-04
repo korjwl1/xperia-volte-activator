@@ -365,3 +365,35 @@ test("mock mode pre-fills the unlock code only when fastboot is simulated and th
     flags.fastboot = false;
   }
 });
+
+test("DIAG driver notice shows only when the driver is confirmed missing and ignores stale checks", async () => {
+  const w = wizard();
+  const first = deferred(), second = deferred();
+  const replies = [first.promise, second.promise];
+  api.envCheck = () => replies.shift();
+  const stale = w.loadEnv();
+  const fresh = w.loadEnv();
+  second.resolve([{ id: "diag-driver", label: "드라이버", state: "pass", detail: "", fixable: false }]);
+  await fresh;
+  first.resolve([{ id: "diag-driver", label: "드라이버", state: "warn", detail: "없음", fixable: false }]);
+  await stale;
+  assert.equal(w.diagDriverMissing, null); // 늦게 온 이전 결과가 덮어쓰지 않는다
+  assert.equal(w.envLoading, false);
+
+  api.envCheck = async () => [{ id: "diag-driver", label: "드라이버", state: "info", detail: "확인 불가", fixable: false }];
+  await w.loadEnv();
+  assert.equal(w.diagDriverMissing, null); // 확인 불가는 없다고 단정하지 않는다
+  api.envCheck = async () => [{ id: "diag-driver", label: "드라이버", state: "warn", detail: "없음", fixable: false }];
+  await w.loadEnv();
+  assert.equal(w.diagDriverMissing?.detail, "없음");
+});
+
+test("a failed driver re-check keeps the previous notice instead of hiding it", async () => {
+  const w = wizard();
+  api.envCheck = async () => [{ id: "diag-driver", label: "드라이버", state: "warn", detail: "없음", fixable: false }];
+  await w.loadEnv();
+  api.envCheck = async () => null;
+  await w.loadEnv();
+  assert.equal(w.diagDriverMissing?.detail, "없음");
+  assert.equal(w.envLoading, false);
+});

@@ -169,6 +169,26 @@ export class Wizard {
   view = $state<WizardView>("device");
   device: DeviceStatus | null = $state(null);
   env: EnvCheckItem[] = $state([]);
+  envLoading = $state(false);
+  private envReq = 0;
+
+  /** PC 환경 점검(읽기 전용) — 첫 화면 진입·[다시 확인] 때. 늦게 온 이전 응답은 버린다 */
+  async loadEnv() {
+    const req = ++this.envReq;
+    this.envLoading = true;
+    try {
+      const items = await api.envCheck();
+      // 조회 실패(null)는 이전 결과를 유지한다 — [다시 확인] 실패로 안내가 사라져 설치된 것처럼 보이지 않게
+      if (req === this.envReq && items) this.env = items;
+    } finally {
+      if (req === this.envReq) this.envLoading = false;
+    }
+  }
+
+  /** VoLTE 적용(EFS)에 필요한 DIAG 드라이버가 없다고 확인된 경우만 — 확인 불가는 단정하지 않는다 */
+  get diagDriverMissing(): EnvCheckItem | null {
+    return this.env.find((e) => e.id === "diag-driver" && (e.state === "warn" || e.state === "fail")) ?? null;
+  }
   volteConfig = $state<VolteConfig>(defaultVolteConfig());
 
   /** 패치할 슬롯이 하나라도 있는지 */

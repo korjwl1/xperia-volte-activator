@@ -13,7 +13,7 @@ status: implemented (데스크톱 실측 + 브라우저 mock)
 - 기기 카드: 모델명(XQ-DQ44), 제품명(Xperia 1 V), 펌웨어(67.2.A.3.178), Android(15), 모드(Android/bootloader-fastboot/fastbootd/flashmode), serial(부분 마스킹)
 - 상태 배지: 부트로더(잠김/언락/unknown), 루팅(yes/no/unknown — 미승인 구분), VoLTE(on/off/unknown + 사유), SIM 슬롯별(450/05 SKT 등)
 - USB 정보 행: 토폴로지(루트허브 직결/허브 경유), 컨트롤러, 링크 스피드
-- 환경검사 패널: EnvCheckItem[] (pass/warn/fail/info + 자동수리 버튼)
+- 환경 안내(2026-10-04): 화면 진입 시 `env_check`를 한 번 조회(폴링과 별개). VoLTE 적용용 DIAG 드라이버(qcser)가 없다고 확인되면(warn/fail) 기기 카드의 [작업 시작] 위에 안내 줄 + [다시 확인] 버튼. 확인 불가(info)·설치됨(pass)은 표시하지 않는다. 작업 시작은 막지 않는다(드라이버는 VoLTE 적용 단계에만 필요). 자동 설치·수리는 하지 않는다(감지+안내)
 
 SIM 줄의 VoLTE 표기: on → "VoLTE 활성화" / off → "VoLTE 비활성화" / unknown → "VoLTE 상태 확인 불가" (추측 표기 금지).
   판정 출처는 IMS 음성 등록 상태(전화 앱 히든 메뉴 *#*#4636#*#*와 동일) — 패치 프롭이 아님.
@@ -24,7 +24,7 @@ SIM 줄의 VoLTE 표기: on → "VoLTE 활성화" / off → "VoLTE 비활성화"
 |---|---|---|
 | 자동 감지 | 화면 진입 시 폴링/이벤트 | `device_list`, 이벤트 `device:changed` |
 | 연결 점검 | 3초 폴링, 실패 시 재시도 팝업 | `adb_status` (`available=false` → 팝업) |
-| [환경 항목 자동 수리] | 개별 fix 실행 | `env_fix({id})` |
+| [다시 확인](드라이버 안내) | 환경 재조회(늦은 이전 응답 무시) | `env_check` |
 | [작업 시작] | 상태 기반 계획 생성 → ②로 | `plan_generate` (mock: wizard.goPlan()) |
 | 새로고침 아이콘 | 재스캔 | `device_status({serial})` |
 
@@ -32,7 +32,7 @@ SIM 줄의 VoLTE 표기: on → "VoLTE 활성화" / off → "VoLTE 비활성화"
 뒤로 갈 곳 없음(첫 화면). 상태는 스토어에 유지.
 
 ## 비주얼 (desktop-ui 스킬)
-DeviceHero(gradient 히어로 + 폰 SVG 일러스트 + 반투명 상태 칩) / USB 정보 바(Usb 아이콘·info 컬러) / 환경검사 리스트(의미색 아이콘 배지 + tonal 컨테이너, sticky 헤더).
+DeviceHero(gradient 히어로 + 폰 SVG 일러스트 + 반투명 상태 칩) / USB 정보 바(Usb 아이콘·info 컬러) / 드라이버 안내 줄(히어로 카드 안 앰버 반투명 줄 + [다시 확인], 없다고 확인된 경우만).
 
 - [작업 시작](wizard.startSession): 기기를 고정. 이전과 다른 기기면 SIM·펌웨어 선택, 동의, 입력값(언락 코드·펌웨어)을 새로 시작
 - 화면을 떠난 뒤 도착한 기기 조회 결과는 버림 — 작업 중 선택 기기가 바뀌지 않음
