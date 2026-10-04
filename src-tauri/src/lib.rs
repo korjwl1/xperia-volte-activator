@@ -4,6 +4,7 @@ mod app_paths;
 mod backup;
 mod boot_image;
 mod device_io;
+mod efstools;
 mod fastboot;
 mod firmware;
 mod guard;
@@ -68,7 +69,14 @@ pub fn run() {
             backup::smsie_collect,
             backup::restore_run,
             backup::smsie_restore_stage,
-            backup::smsie_restore_finish
+            backup::smsie_restore_finish,
+            efstools::efs_tool_check,
+            efstools::efs_diag_open,
+            efstools::efs_preflight,
+            efstools::efs_upload,
+            efstools::efs_verify,
+            efstools::efs_snapshot,
+            efstools::efs_cancel
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
