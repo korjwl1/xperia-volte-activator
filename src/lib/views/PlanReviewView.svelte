@@ -134,12 +134,12 @@
 
   // 실행 전 확인 모달 — 위험 단계(초기화·기록·모뎀 설정 수정)가 포함된 계획에서만 (AGENTS 규칙 7)
   let confirmOpen = $state(false);
-  let wipeAck = $state(false);
+  let hazardAck = $state(false);
   let noBackupAck = $state(false);
   const riskySteps = $derived(planSteps.filter((s) => s.hazard !== null));
   const hasWipe = $derived(planSteps.some((s) => s.wipe));
   // 백업 미선택 이중 확인은 초기화가 있을 때만
-  const canLaunch = $derived(wipeAck && (anyBackupChecked || !hasWipe || noBackupAck));
+  const canLaunch = $derived(hazardAck && (anyBackupChecked || !hasWipe || noBackupAck));
 
   function confirm() {
     // 방어: 백업 선택 + 경로 미지정 or 용량 부족
@@ -153,7 +153,7 @@
     }
     showPathAlert = false;
     if (riskySteps.length > 0) {
-      wipeAck = false;
+      hazardAck = false;
       noBackupAck = false;
       confirmOpen = true;
       return;
@@ -400,7 +400,7 @@
           <TriangleAlert size={20} />
         </span>
         <div class="space-y-0.5">
-          <h2 class="text-base font-semibold">{hasWipe ? "핸드폰 데이터가 초기화됩니다" : "기기에 직접 기록하는 단계가 있습니다"}</h2>
+          <h2 class="text-base font-semibold">실행 전 위험성을 확인해 주세요</h2>
           <p class="text-xs text-muted-foreground">실행 순서에 아래 되돌리기 어려운 단계가 포함되어 있습니다</p>
         </div>
       </div>
@@ -413,9 +413,12 @@
           {#if !st.wipe}<li class="pl-5 text-[11px] text-muted-foreground">{st.hazard?.detail}</li>{/if}
         {/each}
       </ul>
-      <label class="flex items-center gap-2.5 rounded-lg border px-4 py-2.5 cursor-pointer {wipeAck ? 'border-destructive/40 bg-danger-container/40' : 'border-border'}">
-        <Checkbox checked={wipeAck} onCheckedChange={(v: boolean | "indeterminate") => (wipeAck = v === true)} />
-        <span class="text-[13px] font-medium">{hasWipe ? "데이터가 초기화되는 것을 확인했습니다" : "위 작업이 진행되는 것을 확인했습니다"}</span>
+      <p class="text-xs leading-relaxed text-muted-foreground">
+        실행으로 발생하는 기기 손상·데이터 손실 등 모든 문제에 대해 이 프로그램과 제작자는 책임지지 않으며, 그 책임은 사용자에게 있습니다.
+      </p>
+      <label class="flex items-center gap-2.5 rounded-lg border px-4 py-2.5 cursor-pointer {hazardAck ? 'border-destructive/40 bg-danger-container/40' : 'border-border'}">
+        <Checkbox checked={hazardAck} onCheckedChange={(v: boolean | "indeterminate") => (hazardAck = v === true)} />
+        <span class="text-[13px] font-medium">위 단계들의 모든 위험성을 확인했으며, 책임은 사용자에게 있음에 동의합니다</span>
       </label>
       {#if hasWipe && !anyBackupChecked}
         <div class="rounded-lg bg-danger-container/60 px-4 py-2 text-xs text-destructive">

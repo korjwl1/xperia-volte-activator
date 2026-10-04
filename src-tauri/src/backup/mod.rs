@@ -23,7 +23,7 @@ use model::BackupSummary;
 use puller::CancelFlag;
 use serde::Serialize;
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -254,6 +254,68 @@ pub async fn backup_cancel(run_id: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
+/// 이 앱이 만든 백업 폴더인지 확인한 뒤 통째로 지운다(되돌릴 수 없음).
+/// 조건: 실제 폴더(심볼릭 링크·정션 아님) · 이름이 `backup-` 로 시작 · 유효한 manifest.json.
+/// 사용자가 고른 상위 폴더나 다른 폴더를 잘못 넘겨도 지우지 않는다.
+fn delete_backup_dir(dir: &Path) -> Result<(), String> {
+    // 상대 경로는 프로세스 작업 폴더 기준으로 풀리므로 받지 않는다
+    if !dir.is_absolute() {
+        return Err("백업 폴더 경로가 올바르지 않습니다".into());
+    }
+    let meta = std::fs::symlink_metadata(dir).map_err(|e| format!("백업 폴더 확인 실패: {e}"))?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err("백업 폴더가 아닙니다".into());
+    }
+    let is_backup_name = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with("backup-"));
+    if !is_backup_name {
+        return Err("이 앱이 만든 백업 폴더(backup-…)만 삭제할 수 있습니다".into());
+    }
+    model::load_manifest(dir)
+        .map_err(|e| format!("백업 폴더로 확인되지 않아 삭제하지 않습니다 — {e}"))?;
+    // manifest를 맨 마지막에 지운다 — 중간에 잠긴 파일로 실패해도 다시 시도할 때 백업 폴더로 확인된다
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("백업 폴더 읽기 실패: {e}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("백업 폴더 읽기 실패: {e}"))?;
+        if entry.file_name() == "manifest.json" {
+            continue;
+        }
+        let path = entry.path();
+        let kind = entry
+            .file_type()
+            .map_err(|e| format!("백업 폴더 읽기 실패: {e}"))?;
+        // remove_dir_all은 링크·정션을 따라가지 않고 링크 자체만 지운다
+        let removed = if kind.is_dir() || kind.is_symlink() && path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        removed.map_err(|e| {
+            format!(
+                "백업 폴더 삭제 실패({}): {e}",
+                entry.file_name().to_string_lossy()
+            )
+        })?;
+    }
+    std::fs::remove_file(dir.join("manifest.json"))
+        .and_then(|_| std::fs::remove_dir(dir))
+        .map_err(|e| format!("백업 폴더 삭제 실패: {e}"))
+}
+
+/// 완료 화면 [백업 파일 삭제] — 사용자 확인 후에만 호출(사용자 승인 2026-10-04)
+#[tauri::command]
+pub async fn backup_delete(dir: String) -> Result<(), String> {
+    // 다른 기기 변경 작업(백업·복원·fastboot·Magisk)이 진행 중이면 지우지 않는다(전역 실행권)
+    let operation = Operation::acquire()?;
+    crate::tasks::blocking("백업 삭제", move || {
+        let _operation = operation;
+        delete_backup_dir(Path::new(&dir))
+    })
+    .await
+}
+
 /// 기존 백업 폴더 완결 검사 — 백업을 건너뛰고 파괴 단계로 갈 때 게이트의 입력 (§3-3)
 #[tauri::command]
 pub async fn backup_manifest_check(dir: String) -> Result<Option<BackupSummary>, String> {
@@ -451,6 +513,38 @@ mod tests {
         reg.end("run-2");
         reg.cancel(None);
         assert!(reg.current.is_none());
+    }
+
+    #[test]
+    fn only_app_backup_folders_with_a_manifest_are_deleted() {
+        let parent = tempfile::tempdir().unwrap();
+        // 사용자가 고른 상위 폴더 — 이름이 backup- 아님
+        assert!(delete_backup_dir(parent.path()).is_err());
+        assert!(parent.path().exists());
+        // 이름은 맞지만 manifest 없음
+        let bare = parent.path().join("backup-20261004-000000-XQ-DQ44");
+        std::fs::create_dir(&bare).unwrap();
+        std::fs::write(bare.join("photo.jpg"), b"x").unwrap();
+        assert!(delete_backup_dir(&bare).is_err());
+        assert!(bare.join("photo.jpg").exists());
+        // 이 앱이 만든 백업 폴더
+        let real = parent.path().join("backup-20261004-000001-XQ-DQ44");
+        std::fs::create_dir(&real).unwrap();
+        model::save_manifest_atomic(
+            &model::Manifest::new("XQ-DQ44", "AB1234****", "v1", "15"),
+            &real,
+        )
+        .unwrap();
+        std::fs::write(real.join("photo.jpg"), b"x").unwrap();
+        std::fs::create_dir_all(real.join("sdcard/DCIM/Camera")).unwrap();
+        std::fs::write(real.join("sdcard/DCIM/Camera/a.jpg"), b"y").unwrap();
+        // 상대 경로·일반 파일은 거부
+        assert!(delete_backup_dir(Path::new("backup-20261004-000001-XQ-DQ44")).is_err());
+        assert!(delete_backup_dir(&real.join("photo.jpg")).is_err());
+        assert!(real.join("photo.jpg").exists());
+        delete_backup_dir(&real).unwrap();
+        assert!(!real.exists());
+        assert!(parent.path().exists());
     }
 
     #[test]

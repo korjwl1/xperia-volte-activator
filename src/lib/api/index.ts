@@ -66,6 +66,8 @@ export interface Api {
   backupRun(serial: string | undefined, items: string[], dest: string, runId: string, resumeDir?: string): Promise<ApiResult<BackupSummary>>;
   /** 백업 취소 요청 — runId가 있으면 그 실행만(시작 전이면 시작 즉시 멈춤), 없으면 지금 실행 중인 백업 */
   backupCancel(runId?: string): Promise<void>;
+  /** 백업 폴더 삭제(완료 화면, 사용자 확인 후) — 이 앱이 만든 backup-* 폴더만. 목 모드는 아무것도 지우지 않음 */
+  backupDelete(dir: string): Promise<ApiResult<null>>;
   /** 기존 백업 폴더 완결 검사(파괴 단계 게이트용) — 폴더가 없으면 null */
   backupManifestCheck(dir: string): Promise<BackupSummary | null>;
   /** SMS Import/Export 설치·권한·임시 폴더 준비 — 로그 문구 목록 반환 */
@@ -235,6 +237,11 @@ const hybridApi: Api = {
 
   async backupCancel(runId) {
     await invokeBackend<null>("backup_cancel", { runId: runId ?? null });
+  },
+
+  async backupDelete(dir) {
+    if (!REAL_STEPS.backup) return { ok: true, value: null };
+    return await invokeResult<null>("backup_delete", { dir });
   },
 
   async backupManifestCheck(dir) {

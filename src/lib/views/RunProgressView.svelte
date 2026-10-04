@@ -105,9 +105,8 @@
           <div class="text-sm font-semibold truncate">
             {currentStep?.title ?? (wizard.finished ? "완료" : "대기 중")}
           </div>
-          {#if currentStep}
-            <div class="text-[11px] text-muted-foreground">{Math.round(currentStep.progress * 100)}%</div>
-          {/if}
+          <!-- 단계 사이(진행 중 단계가 잠깐 없는 순간)에도 줄을 남겨 카드 높이가 흔들리지 않게 한다 -->
+          <div class="text-[11px] text-muted-foreground {currentStep ? '' : 'invisible'}">{Math.round((currentStep?.progress ?? 0) * 100)}%</div>
         </div>
         <div class="flex items-center gap-2 shrink-0">
           <div class="flex items-center gap-1.5 mr-1">
@@ -154,11 +153,10 @@
             </div>
           {/each}
         {/each}
-        {#if wizard.running && !wizard.manualCurrent}
-          <div class="flex gap-2 text-primary">
-            <ChevronsRight size={13} class="animate-pulse" />
-          </div>
-        {/if}
+        <!-- 진행 표시는 자리를 유지한 채 보이기만 바꾼다(단계 전환마다 로그 높이가 바뀌어 스크롤이 튀지 않게) -->
+        <div class="flex gap-2 text-primary {wizard.running && !wizard.manualCurrent ? '' : 'invisible'}">
+          <ChevronsRight size={13} class="animate-pulse" />
+        </div>
       </div>
     </CardContent>
   </Card>

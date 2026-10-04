@@ -14,7 +14,7 @@
 </script>
 
 <div class="flex-1 overflow-y-auto flex">
-  <div class="m-auto w-full max-w-2xl p-6 space-y-4">
+  <div class="m-auto w-full max-w-5xl p-6 space-y-4">
     <!-- 1. OMD 등록 확인 -->
     <Card class="elev-1">
       <CardHeader>
@@ -28,14 +28,15 @@
       </CardHeader>
       <CardContent class="space-y-3">
         <p class="text-[13px] leading-relaxed">{omdCommonGuide}</p>
-        <div class="space-y-3">
+        <div class="@container space-y-3">
           {#each omdInfo as o (o.carrier)}
             <div class="rounded-xl border p-4 space-y-3">
               <div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <span class="text-sm font-bold">{o.label}</span>
                 <span class="text-[12px] text-muted-foreground">{o.summary}</span>
               </div>
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <!-- 카드 폭 기준: 넓으면 한 줄에 3개(SKT 5G 코드 3개가 같은 줄) -->
+              <div class="grid grid-cols-1 @md:grid-cols-2 @3xl:grid-cols-3 gap-2">
                 {#each o.codes as c (c.code)}
                   <div class="rounded-lg bg-muted/50 px-3 py-2 space-y-1">
                     <div class="flex items-start justify-between gap-2">

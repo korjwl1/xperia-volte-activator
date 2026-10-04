@@ -172,6 +172,8 @@ invoke('backup_prepare', { serial, dest }) → string  // 고유 백업 폴더 �
 invoke('backup_run', { serial, items: string[], dest, resumeDir?: string, runId: string }) → BackupSummary
 //   runId: 프론트가 실행마다 만든 식별값(crypto.randomUUID). 취소는 이 값으로 대상을 지정한다.
 // invoke('backup_cancel', { runId?: string }) → void — runId 실행만 취소(시작 전에 오면 시작 즉시 멈춤), 없으면 실행 중인 백업
+// invoke('backup_delete', { dir }) → void — 완료 화면에서 사용자 확인 후. 절대 경로 · 이름 backup-* · 유효한 manifest.json · 실제 폴더(링크·정션 아님)일 때만 삭제.
+//   manifest.json을 맨 마지막에 지운다(중간 실패 후 다시 시도해도 백업 폴더로 확인됨). 다른 기기 변경 작업(백업·복원·fastboot·Magisk) 중에는 거부(전역 실행권)
 // 실행: 항목별 열거 → pull(sha256 동시 계산) → manifest 원자 저장 → quarantine 격리 → 설정·연락처 덤프 → sms-ie 산출물 수령
 // 이벤트 'backup:progress': { itemId, phase: 'scan'|'copy'|'quarantine'|'settings'|'contacts'|'smsie',
 //   file: string|null, filesDone, filesTotal, bytesDone, bytesTotal }

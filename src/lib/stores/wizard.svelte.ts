@@ -12,6 +12,9 @@ import { AsyncQueue } from "$lib/domain/asyncQueue";
 import { decodeJournal } from "$lib/domain/journal";
 import { waitUntil } from "$lib/domain/waitUntil";
 
+/** 목 모드 언락 코드 예시값 — 16자리 16진수 형식만 맞춘 가짜 값(실전 fastboot에서는 채우지 않음) */
+const MOCK_UNLOCK_CODE = "0x1234567890ABCDEF";
+
 export type WizardView = "device" | "warning" | "step1" | "step2" | "step3" | "step4";
 
 export const MACRO_STEPS = [
@@ -259,6 +262,8 @@ export class Wizard {
     this.backupDir = "";
     this.patchedImage = "";
     this.backupSummary = null;
+    this.backupDeleteState = "idle";
+    this.backupDeleteError = "";
     this.imsUnverified = false;
     this.usbErrorCount = 0;
     this.simulateUsbError = false;
@@ -364,6 +369,9 @@ export class Wizard {
   backupSummary: BackupSummary | null = $state(null);
   /** 실전 백업이 만든 폴더(manifest 위치) — 재시도 이어받기·복구·journal에 저장 */
   backupDir = $state("");
+  /** 완료 화면 [백업 파일 삭제] 상태 */
+  backupDeleteState = $state<"idle" | "deleting" | "deleted" | "failed">("idle");
+  backupDeleteError = $state("");
   /** 진행 중인 실전 백업의 실행 식별값 — 취소를 이 실행에만 보낸다(이전 실행의 취소가 다음 실행에 남지 않게) */
   private backupRunId: string | undefined;
   /** 실전 루팅이 만든 패치 이미지 경로 — 언루팅(순정 재기록)·journal에 저장 */
@@ -463,6 +471,39 @@ export class Wizard {
     if (journal.model !== this.device?.model || journal.serialMasked !== this.device?.serialMasked) return false;
     this.pendingJournal = journal;
     return true;
+  }
+
+  /** 백업을 지우면 되돌릴 수 없는 데이터가 남는지 — 초기화 단계가 끝났는데 복구가 실제로 끝나지 않은 경우.
+   *  초기화가 없었으면 폰 데이터가 그대로라 해당 없음. 백업은 실전·복구는 시뮬레이션이면 실제로 복원된 것이 아니다 */
+  get backupStillNeeded(): boolean {
+    const wiped = this.runSteps.some((r) => r.status === "done" && this.steps.find((s) => s.id === r.id)?.wipe);
+    if (!wiped) return false;
+    const restore = this.runSteps.find((r) => r.id === "restore");
+    return !(restore?.status === "done" && (REAL_STEPS.restore || !REAL_STEPS.backup));
+  }
+
+  /** 완료 화면 [백업 파일 삭제] — 사용자 확인 후에만. 이 실행이 만든 백업 폴더(backupDir)만 지운다
+   *  (사용자가 고른 상위 저장 위치 backupPath는 절대 넘기지 않는다). 목 모드는 표시만 바뀐다 */
+  async deleteBackup() {
+    if (this.backupDeleteState === "deleting" || this.backupDeleteState === "deleted") return;
+    const dir = this.backupDir;
+    if (REAL_STEPS.backup && !dir) {
+      this.backupDeleteState = "failed";
+      this.backupDeleteError = "삭제할 백업 폴더 정보가 없습니다";
+      return;
+    }
+    this.backupDeleteState = "deleting";
+    this.backupDeleteError = "";
+    const gen = this.runGen;
+    const r = await api.backupDelete(dir);
+    // 삭제 중 [처음으로]를 누르면 결과를 다음 세션에 남기지 않는다
+    if (gen !== this.runGen) return;
+    if (r.ok) {
+      this.backupDeleteState = "deleted";
+    } else {
+      this.backupDeleteState = "failed";
+      this.backupDeleteError = r.error;
+    }
   }
 
   /** [새로 시작] — 이전 기록은 discarded로 보관하고 1단계부터 */
@@ -1023,6 +1064,8 @@ export class Wizard {
   /** 수동 개입이 열릴 때 자동 동작 — 언락: 발급 페이지 열기 + IMEI 읽기 / 펌웨어: 자동 다운로드 / smsie: 앱 준비 */
   private onManualOpen(id: ManualId) {
     if (id === "unlock-code") {
+      // 목 모드(fastboot 실전 꺼짐)에서는 코드가 기기에 쓰이지 않으므로 예시값을 채워 [입력 완료]만 누르면 되게 한다
+      if (!REAL_STEPS.fastboot && !this.unlockCode.trim()) this.unlockCode = MOCK_UNLOCK_CODE;
       void api.openExternal(LINKS.unlock);
       void this.loadImei();
     } else if (id === "ims-precheck") {

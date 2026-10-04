@@ -46,7 +46,7 @@ RunProgress 실행 중 폰 측 조작이 필요한 지점(§12)에서 모달로 
   | mode-wait / flash-mode | usb_modes에 fastboot / flashmode |
   | su-grant | root_check (su -c id = uid=0) |
   | ims-check | 패치한 슬롯이 모두 IMS 음성 등록. 실패 시 [확인 없이 마무리] 허용 — SIM 없이 미리 패치하는 경우 등, 작업은 이미 끝난 상태 (완료 화면에 "VoLTE 등록은 확인하지 못했습니다" 안내) |
-  | unlock-code | 형식(16자리 16진수)만 — 실제 백엔드는 fastboot가 거부하면 그 단계에서 멈추고 다시 입력받음 |
+  | unlock-code | 형식(16자리 16진수)만 — 실제 백엔드는 fastboot가 거부하면 그 단계에서 멈추고 다시 입력받음. 목 모드(REAL_STEPS.fastboot 꺼짐)에서는 빈 입력란에 예시값 0x1234567890ABCDEF를 채운다(입력한 값은 덮어쓰지 않음) |
   | firmware(직접 지정) | firmware_dir_check: SIN 후보 하나와 같은 폴더 update.xml 지문 필수, raw IMG를 캐시에 추출. 실제 기록 전에 boot_image_check로 현재 기기 펌웨어 지문 대조 |
   | backup-notice | 동의 체크(확인 대상 아님) |
 - 자동 감지(watcher)는 그대로 — 감지되면 자동 진행

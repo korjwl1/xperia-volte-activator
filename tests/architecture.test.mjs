@@ -285,3 +285,83 @@ test("run confirmation covers wipes, firmware, boot image writes and EFS edits",
     assert.equal(stepHazard({ kind, wipe: false }), null, kind);
   }
 });
+
+test("backup deletion targets the run's backup folder, never the chosen parent folder", async () => {
+  const w = wizard();
+  w.backupPath = "C:/Users/me/Documents";
+  w.backupDir = "C:/Users/me/Documents/backup-20261004-000000-XQ-DQ44";
+  const asked = [];
+  api.backupDelete = async dir => { asked.push(dir); return { ok: true, value: null }; };
+  await w.deleteBackup();
+  await w.deleteBackup(); // 삭제 후 중복 호출 없음
+  assert.deepEqual(asked, [w.backupDir]);
+  assert.equal(w.backupDeleteState, "deleted");
+
+  const missing = wizard();
+  missing.backupPath = "C:/Users/me/Documents";
+  missing.backupDir = "";
+  asked.length = 0;
+  await missing.deleteBackup();
+  assert.deepEqual(asked, []);
+  assert.equal(missing.backupDeleteState, "failed");
+});
+
+test("backup deletion can be retried after a failure and ignores results from a previous session", async () => {
+  const w = wizard();
+  w.backupDir = "C:/b/backup-20261004-000000-XQ-DQ44";
+  api.backupDelete = async () => ({ ok: false, error: "locked" });
+  await w.deleteBackup();
+  assert.equal(w.backupDeleteState, "failed");
+  assert.equal(w.backupDeleteError, "locked");
+  api.backupDelete = async () => ({ ok: true, value: null });
+  await w.deleteBackup();
+  assert.equal(w.backupDeleteState, "deleted");
+
+  const late = wizard(), pending = deferred();
+  late.backupDir = "C:/b/backup-20261004-000001-XQ-DQ44";
+  api.backupDelete = () => pending.promise;
+  const run = late.deleteBackup();
+  late.restart(); // 삭제 중 [처음으로]
+  pending.resolve({ ok: true, value: null });
+  await run;
+  assert.equal(late.backupDeleteState, "idle");
+});
+
+test("deleting the backup needs extra confirmation only when a wipe happened without a real restore", () => {
+  const w = wizard();
+  w.steps = [
+    { id: "unlock", kind: "unlock", wipe: true },
+    { id: "restore", kind: "restore", wipe: false },
+  ];
+  w.runSteps = [
+    { id: "unlock", status: "done", logs: [] },
+    { id: "restore", status: "failed", logs: [] },
+  ];
+  assert.equal(w.backupStillNeeded, true);
+  w.runSteps[1].status = "done";
+  flags.restore = true;
+  assert.equal(w.backupStillNeeded, false);
+  // 백업은 실전인데 복구가 시뮬레이션이면 실제로 복원된 것이 아니다
+  flags.restore = false;
+  assert.equal(w.backupStillNeeded, true);
+  // 초기화가 없었으면 해당 없음
+  w.runSteps[0].status = "pending";
+  assert.equal(w.backupStillNeeded, false);
+});
+
+test("mock mode pre-fills the unlock code only when fastboot is simulated and the field is empty", () => {
+  const w = wizard();
+  w.onManualOpen("unlock-code");
+  assert.equal(w.unlockCode, "0x1234567890ABCDEF");
+  w.unlockCode = "0xABCDEF0123456789";
+  w.onManualOpen("unlock-code");
+  assert.equal(w.unlockCode, "0xABCDEF0123456789"); // 입력한 값은 덮어쓰지 않는다
+  flags.fastboot = true;
+  try {
+    const real = wizard();
+    real.onManualOpen("unlock-code");
+    assert.equal(real.unlockCode, "");
+  } finally {
+    flags.fastboot = false;
+  }
+});
