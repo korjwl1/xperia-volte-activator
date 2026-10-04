@@ -59,9 +59,10 @@ fn stage_role(dev: &mut dyn ADBDeviceExt, state_dir: &Path) -> Result<(), String
     }
     Ok(())
 }
-/// 내보내기 산출물 파일명 접두사(앱 규칙) — messages-*.zip / call-logs-*.json
+/// 내보내기 산출물 파일명 접두사(sms-ie 규칙, 원본 소스 MainActivity.kt·ImportExportWorker.kt 확인 2026-10-05)
+/// — messages<날짜>.zip / calls<날짜>.json (예전 가정 call-logs-*.json은 sms-ie가 만들지 않는 이름이었다)
 const MESSAGES_PREFIX: &str = "messages";
-const CALLLOG_PREFIX: &str = "call-logs";
+const CALLLOG_PREFIX: &str = "calls";
 
 fn run(dev: &mut dyn ADBDeviceExt, cmd: &str) -> Result<String, String> {
     crate::device_io::shell(dev, cmd)
@@ -446,6 +447,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn export_names_follow_sms_ie() {
+        // sms-ie 원본: "messages$dateInString.zip", "calls$dateInString.json"
+        assert_eq!(item_for("messages-2026-10-05.zip"), Some("sms"));
+        assert_eq!(item_for("calls-2026-10-05.json"), Some("calllog"));
+        assert_eq!(item_for("Calls 2026-10-05.json"), Some("calllog"));
+        assert_eq!(item_for("contacts-2026-10-05.json"), None);
+    }
+
+    #[test]
     fn release_asset_requires_digest_official_origin_and_prefers_standard() {
         let base = "https://github.com/tmo1/sms-ie/releases/download/v2.11.1";
         let asset = |name: &str, url: String, digest: bool| {
@@ -499,7 +509,7 @@ mod tests {
             0o644,
         );
         d.add_file(
-            &format!("{DEVICE_TMP_DIR}/call-logs-2026-10-03.json"),
+            &format!("{DEVICE_TMP_DIR}/calls-2026-10-03.json"),
             b"[]",
             1700000001,
             0o644,
@@ -726,7 +736,7 @@ mod tests {
             1700000000,
             0o644,
         );
-        // call-logs 없음 → calllog 항목 partial + 오류 안내
+        // calls 없음 → calllog 항목 partial + 오류 안내
         let tmp = tempfile::tempdir().unwrap();
         match collect(&mut d, tmp.path(), &["sms", "calllog"]).unwrap() {
             CollectState::Records(recs) => {
