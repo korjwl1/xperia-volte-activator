@@ -26,6 +26,14 @@ fn ensure_efs_write() -> Result<(), String> {
 /// 원본 efs.py 계승 — DIAG 포트 개방 setprop (루트 필요)
 const DIAG_SETPROP: &str = "su -c setprop sys.usb.config diag,diag_mdm,diag_mdm2,qdss,qdss_mdm,serial_cdev,dpl,rmnet,adb";
 
+/// 원본 efs.py setVoLTE() 계승 — persist.dbg 4종 (루트 필요, 설정만: 통신사 검증 아님)
+const VOLTE_PROPS: &[&str] = &[
+    "su -c setprop persist.dbg.ims_avail_ovr 1",
+    "su -c setprop persist.dbg.volte_avail_ovr 1",
+    "su -c setprop persist.dbg.vt_avail_ovr 1",
+    "su -c setprop persist.dbg.wfc_avail_ovr 1",
+];
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCheck {
@@ -223,6 +231,28 @@ pub async fn efs_cancel() -> Result<(), String> {
     ensure_efs_write()?;
     EFS_CANCEL.store(true, Ordering::Relaxed);
     Ok(())
+}
+
+/// VoLTE 활성화 설정 — persist.dbg 4종 setprop 후 재부팅 (원본 setVoLTE 계승).
+/// 통신사 서비스 검증이 아님 — 최종 판정은 IMS 등록 확인(final-verify)이 담당.
+#[tauri::command]
+pub async fn volte_props_set(serial: Option<String>) -> Result<Vec<String>, String> {
+    ensure_efs_write()?;
+    crate::tasks::blocking("VoLTE 설정", move || {
+        adb::with_first_device(&serial, |dev| {
+            let mut applied = Vec::new();
+            for cmd in VOLTE_PROPS {
+                crate::device_io::shell(dev, cmd)
+                    .map_err(|e| format!("VoLTE 설정 실패(루트 필요): {e}"))?;
+                applied.push(cmd.to_string());
+            }
+            // 설정 후 재부팅 — persist는 /data에 저장되므로 재부팅해도 유지됨
+            dev.reboot(adb_client::RebootType::System)
+                .map_err(|e| format!("재부팅 요청 실패: {e}"))?;
+            Ok(applied)
+        })
+    })
+    .await
 }
 
 #[cfg(test)]

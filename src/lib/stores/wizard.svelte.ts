@@ -336,6 +336,9 @@ export class Wizard {
   private efsPreflightRanGen = -1;
   private efsRanGen = -1;
   private efsVerifyRanGen = -1;
+  private efsVolteRanGen = -1;
+  private efsCommRanGen = -1;
+  private efsFinalRanGen = -1;
   private timer: ReturnType<typeof setInterval> | undefined;
   private cursor = 0;
 
@@ -775,6 +778,33 @@ export class Wizard {
         this.efsVerifyRanGen = this.runGen;
         this.pause();
         this.dispatchEngine(() => this.runRealEfsVerify(cur));
+      }
+      return;
+    }
+    // 실전 VoLTE 설정 + 통신/최종 확인 — EFS 라이프사이클 완결 (REAL_STEPS.efs)
+    if (cur.id === "volte-props" && REAL_STEPS.efs) {
+      if (cur.status === "running" && this.efsVolteRanGen !== this.runGen) {
+        this.efsVolteRanGen = this.runGen;
+        this.pause();
+        this.dispatchEngine(() => this.runRealVolteProps(cur));
+      }
+      return;
+    }
+    if (cur.id === "comm-check" && REAL_STEPS.efs) {
+      // 통신 확인 — ims-precheck 수동 개입 후 자동 판정(imsReady)
+      if (cur.status === "running" && this.efsCommRanGen !== this.runGen) {
+        this.efsCommRanGen = this.runGen;
+        // 수동 개입이 이미 처리됐으면 imsReady만 확인
+        this.pause();
+        this.dispatchEngine(() => this.runRealCommCheck(cur));
+      }
+      return;
+    }
+    if (cur.id === "final-verify" && REAL_STEPS.efs) {
+      if (cur.status === "running" && this.efsFinalRanGen !== this.runGen) {
+        this.efsFinalRanGen = this.runGen;
+        this.pause();
+        this.dispatchEngine(() => this.runRealFinalVerify(cur));
       }
       return;
     }
@@ -1845,6 +1875,64 @@ export class Wizard {
     }
   }
 
+  // ── 실전 VoLTE 설정·통신/최종 확인 (REAL_STEPS.efs) ──
+
+  /** VoLTE 활성화 설정 — persist.dbg 4종 setprop 후 재부팅, adb 복귀 대기 */
+  private async runRealVolteProps(cur: RunStep) {
+    const gen = this.runGen;
+    cur.progress = 0.3;
+    cur.logs.push("[설정] VoLTE·영상통화·Wi-Fi 통화 프롭 적용 — 루트 권한 필요");
+    const r = await api.voltePropsSet(this.device?.serial);
+    if (gen !== this.runGen) return;
+    if (!r.ok) return this.failStep(`VoLTE 설정 실패: ${r.error}`);
+    for (const p of r.value) cur.logs.push(`[설정] ${p}`);
+    cur.logs.push("[재부팅] 설정 적용 후 재부팅 — 폰이 다시 부팅될 때까지 기다립니다");
+    void this.persist(true);
+    // adb 복귀 대기
+    const back = await this.waitFor(gen, () => this.usbDebugReady(), 240_000);
+    if (gen !== this.runGen) return;
+    if (!back) {
+      return this.failStep("재부팅 후 기기 연결이 확인되지 않습니다 — 설정은 적용됐으므로 폰을 확인한 뒤 이 단계를 다시 시도해 주세요");
+    }
+    cur.progress = 1;
+    cur.logs.push("[완료] VoLTE 설정 적용 — 다음 단계(최종 확인)에서 IMS 등록을 확인합니다");
+    this.stepDone(cur);
+  }
+
+  /** 통신 확인 — ims-precheck 수동 개입 + imsReady 자동 판정 */
+  private async runRealCommCheck(cur: RunStep) {
+    const gen = this.runGen;
+    cur.progress = 0.5;
+    // imsReady 호출 — IMS 등록 + 슬롯별 상태 표시
+    const ready = await this.imsReady();
+    if (gen !== this.runGen) return;
+    if (ready) {
+      cur.progress = 1;
+      cur.logs.push("[확인] VoLTE(IMS) 등록 확인됨");
+      this.stepDone(cur);
+      return;
+    }
+    // 미등록 — 수동 개열(ims-precheck)이 아직 처리 안 됐으면 수동으로 넘김
+    // (ims-precheck는 PlanStep.manual에 있으므로 openManual이 처리)
+    // 여기까지 왔다는 건 수동도 끝났는데도 미등록 → 실패
+    this.failStep("통신이 확인되지 않습니다 — [다시 패치]로 VoLTE 적용부터 다시 진행할 수 있습니다");
+  }
+
+  /** 최종 확인 — imsReady 자동 판정 (ims-check 수동 개입이 먼저 처리됨) */
+  private async runRealFinalVerify(cur: RunStep) {
+    const gen = this.runGen;
+    cur.progress = 0.5;
+    const ready = await this.imsReady();
+    if (gen !== this.runGen) return;
+    if (ready) {
+      cur.progress = 1;
+      cur.logs.push("[완료] VoLTE 등록 확인 — 작업 완료");
+      this.stepDone(cur);
+    } else {
+      this.failStep("최종 VoLTE 확인이 실패했습니다 — 신호가 잡힐 때까지 기다리거나 [이 단계 다시 시도]해 주세요");
+    }
+  }
+
   // ── 실전 EFS (REAL_STEPS.efs 전환 시) — .plans/04-engine/efstools-wrapper.md ──
 
   /** 로그 구독 공용 — EfsTools 라인을 단계 로그로 흘린다 */
@@ -2183,6 +2271,9 @@ export class Wizard {
     this.efsPreflightRanGen = -1;
     this.efsRanGen = -1;
     this.efsVerifyRanGen = -1;
+    this.efsVolteRanGen = -1;
+    this.efsCommRanGen = -1;
+    this.efsFinalRanGen = -1;
     this.journalSims = undefined;
     this.sessionFor = null;
     this.pendingJournal = null;

@@ -76,7 +76,8 @@ pub fn run() {
             efstools::efs_upload,
             efstools::efs_verify,
             efstools::efs_snapshot,
-            efstools::efs_cancel
+            efstools::efs_cancel,
+            efstools::volte_props_set
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

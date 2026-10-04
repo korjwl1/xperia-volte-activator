@@ -123,6 +123,8 @@ export interface Api {
   efsCancel(): Promise<ApiResult<null>>;
   /** EFS 로그 이벤트 구독 */
   onEfsLog(cb: (ev: EfsLogEvent) => void): Promise<() => void>;
+  /** VoLTE 활성화 설정 — persist.dbg 4종 setprop 후 재부팅 (efs-write 게이트, 원본 setVoLTE 계승) */
+  voltePropsSet(serial: string | undefined): Promise<ApiResult<string[]>>;
 }
 
 const hybridApi: Api = {
@@ -388,6 +390,11 @@ const hybridApi: Api = {
 
   async onEfsLog(cb) {
     return transport.subscribe<EfsLogEvent>("efs:log", cb);
+  },
+
+  async voltePropsSet(serial) {
+    if (!REAL_STEPS.efs) return { ok: false, error: "EFS 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<string[]>("volte_props_set", { serial: serial ?? null });
   },
 
   async openExternal(url) {
