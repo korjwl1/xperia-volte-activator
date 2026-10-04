@@ -12,19 +12,14 @@ use std::path::Path;
 
 /// 연락처 id 목록 조회 — `content query`의 "Row: 0 _id=57, ..." 형식에서 _id 추출
 fn contact_ids(dev: &mut dyn ADBDeviceExt) -> Result<Vec<String>, String> {
-    let mut out = Vec::new();
-    let mut err = Vec::new();
     let cmd = "content query --uri content://com.android.contacts/contacts --projection _id:";
-    dev.shell_command(&cmd, Some(&mut out), Some(&mut err))
-        .map_err(|e| format!("연락처 목록 조회 실패: {e}"))?;
-    let text = String::from_utf8_lossy(&out);
-    if !err.is_empty() && text.trim().is_empty() {
-        return Err(format!("연락처 목록 조회 실패: {}", String::from_utf8_lossy(&err).trim()));
-    }
+    let text = crate::device_io::shell(dev, cmd)?;
     let mut ids = Vec::new();
     for line in text.lines() {
         // 형식: Row: 0 _id=57, display_name=홍길동 — "_id=" 이후 값을 콤마까지
-        let Some(rest) = line.split_once("_id=") else { continue };
+        let Some(rest) = line.split_once("_id=") else {
+            continue;
+        };
         let id = rest.1.split(',').next().unwrap_or("").trim();
         if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
             ids.push(id.to_string());
@@ -36,7 +31,17 @@ fn contact_ids(dev: &mut dyn ADBDeviceExt) -> Result<Vec<String>, String> {
 /// 연락처 데이터 조회 — raw_contact_entities(연락처별 전체 데이터 행).
 /// 실측(2026-10-03 XQ-DQ44): 셸에서 contacts/<id>/as_vcard는 "No files supported by provider"로 읽을 수 없고,
 /// /data URI는 일부 행만 돌려준다. raw_contact_entities는 295명 전원·1677행을 돌려줬다
-const ENTITY_KEYS: &[&str] = &["contact_id", "deleted", "mimetype", "data1", "data2", "data3", "data4", "data5", "data6"];
+const ENTITY_KEYS: &[&str] = &[
+    "contact_id",
+    "deleted",
+    "mimetype",
+    "data1",
+    "data2",
+    "data3",
+    "data4",
+    "data5",
+    "data6",
+];
 
 /// content query 출력 → 행별 (키 → 값). 값 안의 개행(메모 등)은 다음 "Row: " 전까지 이어 붙인다.
 /// 값 경계는 투영 순서대로 ", <다음 키>=" 위치로 찾는다(값에 쉼표가 있어도 깨지지 않게)
@@ -52,13 +57,18 @@ fn parse_rows(text: &str, keys: &[&str]) -> Vec<std::collections::HashMap<String
     }
     let mut rows = Vec::new();
     for row in joined {
-        let Some(body) = row.strip_prefix("Row: ").map(|r| r.trim_start_matches(|c: char| c.is_ascii_digit()).trim_start()) else {
+        let Some(body) = row.strip_prefix("Row: ").map(|r| {
+            r.trim_start_matches(|c: char| c.is_ascii_digit())
+                .trim_start()
+        }) else {
             continue;
         };
         let mut map = std::collections::HashMap::new();
         let mut rest = body;
         for (i, key) in keys.iter().enumerate() {
-            let Some(after) = rest.strip_prefix(&format!("{key}=")) else { break };
+            let Some(after) = rest.strip_prefix(&format!("{key}=")) else {
+                break;
+            };
             let (value, next) = match keys.get(i + 1) {
                 Some(nk) => match after.find(&format!(", {nk}=")) {
                     Some(pos) => (&after[..pos], &after[pos + 2..]),
@@ -78,12 +88,19 @@ fn parse_rows(text: &str, keys: &[&str]) -> Vec<std::collections::HashMap<String
 
 /// vCard 3.0 값 이스케이프
 fn esc(v: &str) -> String {
-    v.replace('\\', "\\\\").replace(',', "\\,").replace(';', "\\;").replace('\n', "\\n")
+    v.replace('\\', "\\\\")
+        .replace(',', "\\,")
+        .replace(';', "\\;")
+        .replace('\n', "\\n")
 }
 
 /// 한 연락처의 데이터 행들 → vCard 3.0. 사진·그룹(라벨)·메신저 등은 포함하지 않는다(문서 명시)
 fn build_vcard(rows: &[&std::collections::HashMap<String, String>]) -> String {
-    let g = |r: &std::collections::HashMap<String, String>, k: &str| r.get(k).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let g = |r: &std::collections::HashMap<String, String>, k: &str| {
+        r.get(k)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
     let mut out = String::from("BEGIN:VCARD\r\nVERSION:3.0\r\n");
     let mut fn_name: Option<String> = None;
     let mut body = String::new();
@@ -157,14 +174,13 @@ fn build_vcard(rows: &[&std::collections::HashMap<String, String>]) -> String {
                     body.push_str(&format!("URL:{}\r\n", esc(&v)));
                 }
             }
-            "vnd.android.cursor.item/contact_event" => {
+            "vnd.android.cursor.item/contact_event"
                 // 생일(type 3)만
-                if g(r, "data2").as_deref() == Some("3") {
+                if g(r, "data2").as_deref() == Some("3") => {
                     if let Some(v) = g(r, "data1") {
                         body.push_str(&format!("BDAY:{}\r\n", esc(&v)));
                     }
                 }
-            }
             _ => {}
         }
     }
@@ -207,18 +223,16 @@ pub fn collect_contacts(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> ItemR
         "content query --uri content://com.android.contacts/raw_contact_entities --projection {}",
         ENTITY_KEYS.join(":")
     );
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    if let Err(e) = dev.shell_command(&cmd, Some(&mut out), Some(&mut err)) {
-        return fail(rec, format!("연락처 데이터 조회 실패: {e}"));
-    }
-    let text = String::from_utf8_lossy(&out);
-    if !err.is_empty() && text.trim().is_empty() {
-        return fail(rec, format!("연락처 데이터 조회 실패: {}", String::from_utf8_lossy(&err).trim()));
-    }
+    let text = match crate::device_io::shell(dev, &cmd) {
+        Ok(text) => text,
+        Err(e) => return fail(rec, format!("연락처 데이터 조회 실패: {e}")),
+    };
     let rows = parse_rows(&text, ENTITY_KEYS);
     // 연락처별로 묶기 — 삭제 표시된 원시 연락처는 제외
-    let mut by_contact: std::collections::BTreeMap<u64, Vec<&std::collections::HashMap<String, String>>> = Default::default();
+    let mut by_contact: std::collections::BTreeMap<
+        u64,
+        Vec<&std::collections::HashMap<String, String>>,
+    > = Default::default();
     for r in &rows {
         if r.get("deleted").map(String::as_str) == Some("1") {
             continue;
@@ -227,18 +241,23 @@ pub fn collect_contacts(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> ItemR
             by_contact.entry(id).or_default().push(r);
         }
     }
-    let dir = backup_root.join("contacts");
-    if let Err(e) = std::fs::create_dir_all(&dir) {
+    let path = match super::paths::write_target(backup_root, "contacts/contacts.vcf") {
+        Ok(path) => path,
+        Err(e) => return fail(rec, e),
+    };
+    let dir = path.parent().expect("contacts 부모");
+    if let Err(e) = std::fs::create_dir_all(dir) {
         return fail(rec, format!("폴더 생성 실패: {e}"));
     }
     let mut vcf = String::new();
     for id in &ids {
         match id.parse::<u64>().ok().and_then(|n| by_contact.get(&n)) {
             Some(rs) => vcf.push_str(&build_vcard(rs)),
-            None => rec.errors.push(format!("연락처 {id}: 데이터 행을 찾지 못했습니다")),
+            None => rec
+                .errors
+                .push(format!("연락처 {id}: 데이터 행을 찾지 못했습니다")),
         }
     }
-    let path = dir.join("contacts.vcf");
     let mut writer = match std::fs::File::create(&path) {
         Ok(f) => HashingWriter::new(f),
         Err(e) => return fail(rec, format!("contacts.vcf 생성 실패: {e}")),
@@ -247,6 +266,9 @@ pub fn collect_contacts(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> ItemR
         return fail(rec, format!("contacts.vcf 기록 실패: {e}"));
     }
     let (file, sha256, bytes) = writer.finish();
+    if let Err(e) = file.sync_all() {
+        return fail(rec, format!("contacts.vcf 디스크 저장 실패: {e}"));
+    }
     drop(file);
     rec.files = 1;
     rec.bytes = bytes;
@@ -260,7 +282,11 @@ pub fn collect_contacts(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> ItemR
         quarantined: false,
         error: None,
     });
-    rec.status = if rec.errors.is_empty() { ItemStatus::Done } else { ItemStatus::Partial };
+    rec.status = if rec.errors.is_empty() {
+        ItemStatus::Done
+    } else {
+        ItemStatus::Partial
+    };
     rec
 }
 
@@ -275,7 +301,10 @@ pub fn restore_check(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> Result<(
 
 /// 복원 — vcf를 기기에 올리고 연락처 앱 가져오기 안내(수동 1탭).
 /// 반환: (올린 경로, 안내 문구) — 실제 가져오기 확인은 사용자 몫(진행 로그에 기록)
-pub fn stage_restore_contacts(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> Result<(String, String), String> {
+pub fn stage_restore_contacts(
+    dev: &mut dyn ADBDeviceExt,
+    backup_root: &Path,
+) -> Result<(String, String), String> {
     let src = backup_root.join("contacts").join("contacts.vcf");
     let bytes = std::fs::read(&src).map_err(|e| format!("contacts.vcf 읽기 실패: {e}"))?;
     if bytes.is_empty() {
@@ -283,8 +312,10 @@ pub fn stage_restore_contacts(dev: &mut dyn ADBDeviceExt, backup_root: &Path) ->
     }
     let remote = "/sdcard/contacts-restore.vcf";
     let mut reader = &bytes[..];
-    dev.push(&mut reader, &remote).map_err(|e| format!("연락처 파일 전송 실패: {e}"))?;
-    let note = "연락처 앱 → 설정(⋮) → 가져오기 → .vcf 파일 → contacts-restore.vcf 선택 (수동 1회)".to_string();
+    dev.push(&mut reader, &remote)
+        .map_err(|e| format!("연락처 파일 전송 실패: {e}"))?;
+    let note = "연락처 앱 → 설정(⋮) → 가져오기 → .vcf 파일 → contacts-restore.vcf 선택 (수동 1회)"
+        .to_string();
     Ok((remote.to_string(), note))
 }
 
@@ -301,8 +332,14 @@ Row: 3 contact_id=63, deleted=0, mimetype=vnd.android.cursor.item/phone_v2, data
 
     fn dev() -> FakeADBDevice {
         let mut d = FakeADBDevice::new();
-        d.answer_shell("content query --uri content://com.android.contacts/contacts --projection _id:", IDS);
-        d.answer_shell("content query --uri content://com.android.contacts/raw_contact_entities", ENTITIES);
+        d.answer_shell(
+            "content query --uri content://com.android.contacts/contacts --projection _id:",
+            IDS,
+        );
+        d.answer_shell(
+            "content query --uri content://com.android.contacts/raw_contact_entities",
+            ENTITIES,
+        );
         d
     }
 
@@ -327,7 +364,10 @@ Row: 3 contact_id=63, deleted=0, mimetype=vnd.android.cursor.item/phone_v2, data
     #[test]
     fn missing_contact_data_is_partial() {
         let mut d = FakeADBDevice::new();
-        d.answer_shell("content query --uri content://com.android.contacts/contacts --projection _id:", "Row: 0 _id=1\nRow: 1 _id=99\n");
+        d.answer_shell(
+            "content query --uri content://com.android.contacts/contacts --projection _id:",
+            "Row: 0 _id=1\nRow: 1 _id=99\n",
+        );
         d.answer_shell(
             "content query --uri content://com.android.contacts/raw_contact_entities",
             "Row: 0 contact_id=1, deleted=0, mimetype=vnd.android.cursor.item/name, data1=A, data2=NULL, data3=NULL, data4=NULL, data5=NULL, data6=NULL\n",

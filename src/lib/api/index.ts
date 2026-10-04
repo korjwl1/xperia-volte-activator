@@ -1,35 +1,19 @@
 // 백엔드 facade — 데스크톱(Tauri) Rust 명령 우선, 브라우저 개발은 mock 폴백
 // adb 질의는 전부 백엔드(src-tauri/src/adb.rs)에서 수행 — 프론트/미들웨어에는 adb 코드 없음
-// 실쓰기(백업/플래싱/EFS)는 항상 mock — 실기기에는 영향 없음
+// 단계별 실행 플래그는 data/runMode.ts에서 관리. fastboot 쓰기/재부팅은 facade에서도 차단.
 // 컴포넌트에서 @tauri-apps/api 직접 import 금지.
 
-import type { AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FirmwareResult, FirmwareVersions, RestoreOutcome, SettingsOverview, SmsIeOutcome } from "$lib/types";
+import type { AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FastbootVars, FirmwareResult, FirmwareVersions, RestoreOutcome, SettingsOverview, SmsIeOutcome, UnlockResult } from "$lib/types";
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
+import type { ApiResult } from "$lib/types";
+import { REAL_STEPS } from "$lib/data/runMode";
 import { classifyApp, SAMPLE_FLAGS, type AppFlag } from "$lib/data/appRules";
+import { inDesktop as inTauri, transport } from "./transport";
+export { inDesktop, observeDesktopWindow } from "./transport";
 
 // ── Tauri 백엔드 경유 (데스크톱 빌드) ──
-const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-
-async function invokeBackend<T>(cmd: string, args?: Record<string, unknown>): Promise<T | null> {
-  if (!inTauri()) return null;
-  try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return await invoke<T>(cmd, args ?? {});
-  } catch {
-    return null; // 명령 실패 — 호출부에서 실패로 처리 (mock으로 위장하지 않음)
-  }
-}
-
-/** 실패 메시지가 필요한 명령용 — 백엔드 오류 문구를 그대로 전달 */
-async function invokeResult<T>(cmd: string, args?: Record<string, unknown>): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
-  if (!inTauri()) return { ok: false, error: "데스크톱 앱에서만 사용할 수 있습니다" };
-  try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return { ok: true, value: await invoke<T>(cmd, args ?? {}) };
-  } catch (e) {
-    return { ok: false, error: typeof e === "string" ? e : String(e) };
-  }
-}
+const invokeBackend = transport.optional;
+const invokeResult = transport.result;
 
 export interface Api {
   /** null = 조회 실패(일시적 오류 포함), [] = 연결된 기기 없음 */
@@ -42,7 +26,7 @@ export interface Api {
   /** IMEI 1 (전체 값 — UI에는 마스킹, 복사 버튼에만 사용), 실패 시 null */
   readImei1(serial?: string): Promise<string | null>;
   /** 기기와 같은 순정 펌웨어에서 부트 이미지만 받아 저장 (기본 앱 데이터 폴더, dest 지정 시 그 폴더). 공간 부족 오류는 "NO_SPACE|" 접두어 */
-  firmwareFetch(serial: string | undefined, partition: string, version?: string, dest?: string): Promise<{ ok: true; value: FirmwareResult } | { ok: false; error: string }>;
+  firmwareFetch(serial: string | undefined, partition: string, version?: string, dest?: string): Promise<ApiResult<FirmwareResult>>;
   /** 서버 펌웨어 버전 목록(설치된 버전 이상), 실패 시 null */
   firmwareVersions(serial?: string): Promise<FirmwareVersions | null>;
   /** 연결된 Sony 기기의 USB 모드 (android / fastboot / flashmode / other), 실패 시 null */
@@ -71,32 +55,42 @@ export interface Api {
   /** 루트 권한 승인 여부 (su -c id = uid=0), 조회 실패 시 null */
   rootCheck(serial?: string): Promise<boolean | null>;
   /** 직접 지정한 펌웨어 폴더 검사 — <partition>_*.sin 존재 + 부트 이미지 추출 가능 */
-  firmwareDirCheck(dir: string, partition: string): Promise<{ ok: true; value: { file: string; imageBytes: number } } | { ok: false; error: string }>;
+  firmwareDirCheck(dir: string, partition: string): Promise<ApiResult<{ file: string; imageBytes: number }>>;
   /** 작업 중 PC 보호 — 절전 방지 + Windows 종료 방지 (작업 중에만 켬) */
   runGuard(active: boolean, reason?: string): Promise<boolean>;
   /** 연락처 복원 확인 — 백업한 연락처 수와 지금 폰의 연락처 수, 조회 실패 시 null */
   contactsRestoreCheck(serial: string | undefined, dir: string): Promise<{ backedUp: number; onDevice: number } | null>;
   /** 백업 시작 — 지정 폴더 아래 시작 시각 기준 폴더 생성, 절대 경로 반환 */
-  backupPrepare(serial: string | undefined, dest: string): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
+  backupPrepare(serial: string | undefined, dest: string): Promise<ApiResult<string>>;
   /** 백업 실행(자동 항목) — 진행은 onBackupProgress로. 실패 시 error 문구 */
-  backupRun(serial: string | undefined, items: string[], dest: string, resumeDir?: string): Promise<{ ok: true; value: BackupSummary } | { ok: false; error: string }>;
+  backupRun(serial: string | undefined, items: string[], dest: string, resumeDir?: string): Promise<ApiResult<BackupSummary>>;
   /** 진행 중 백업 취소 요청 */
   backupCancel(): Promise<void>;
   /** 기존 백업 폴더 완결 검사(파괴 단계 게이트용) — 폴더가 없으면 null */
   backupManifestCheck(dir: string): Promise<BackupSummary | null>;
   /** SMS Import/Export 설치·권한·임시 폴더 준비 — 로그 문구 목록 반환 */
-  smsiePrepare(serial: string | undefined, download: boolean): Promise<{ ok: true; value: string[] } | { ok: false; error: string }>;
+  smsiePrepare(serial: string | undefined, download: boolean): Promise<ApiResult<string[]>>;
   /** SMS Import/Export 산출물 수집 — ready=false면 앱에서 아직 내보내지 않음 */
   smsieCollect(serial: string | undefined, backupDir: string): Promise<SmsIeOutcome | null>;
   /** 복구 실행(APK·파일 tar 스트리밍·설정·연락처 전송) — 진행은 onRestoreProgress */
-  restoreRun(serial: string | undefined, dir: string, items: string[]): Promise<{ ok: true; value: RestoreOutcome } | { ok: false; error: string }>;
+  restoreRun(serial: string | undefined, dir: string, items: string[]): Promise<ApiResult<RestoreOutcome>>;
   /** 문자·통화 기록 수동 복원 준비 — 파일 전송 + 기본 문자 앱 역할 (안내 문구 반환) */
-  smsieRestoreStage(serial: string | undefined, dir: string): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
+  smsieRestoreStage(serial: string | undefined, dir: string, items: string[]): Promise<ApiResult<string>>;
   /** 문자·통화 기록 수동 복원 마무리 — 기본 문자 앱 원복·임시 정리 (안내 로그 반환) */
-  smsieRestoreFinish(serial: string | undefined): Promise<{ ok: true; value: string[] } | { ok: false; error: string }>;
+  smsieRestoreFinish(serial: string | undefined): Promise<ApiResult<string[]>>;
   /** 백엔드 이벤트 구독 — unlisten 반환 (데스크톱 전용, 브라우저 dev은 즉시 no-op) */
   onBackupProgress(cb: (p: BackupProgress) => void): Promise<() => void>;
   onRestoreProgress(cb: (p: BackupProgress) => void): Promise<() => void>;
+  /** fastboot getvar:all — 읽기 전용 프로브 (unlocked·슬롯·헬스), 실패·미설치 시 null */
+  fastbootGetvar(): Promise<FastbootVars | null>;
+  /** 부트로더 언락 — oem unlock 0x{code} 후 getvar 이중 확인 (로그에 코드 마스킹) */
+  fastbootUnlock(code: string, confirm: boolean): Promise<ApiResult<UnlockResult>>;
+  /** 부트로더 리락 — oem lock 후 확인 */
+  fastbootLock(confirm: boolean): Promise<ApiResult<UnlockResult>>;
+  /** fastboot 재부팅 — os | bootloader (OKAY 확인 시 성공) */
+  fastbootReboot(target: "os" | "bootloader"): Promise<boolean>;
+  /** fastboot 로그 이벤트 구독 (INFO 프레임·명령·민감값 마스킹) */
+  onFastbootLog(cb: (line: string) => void): Promise<() => void>;
 }
 
 const hybridApi: Api = {
@@ -125,6 +119,7 @@ const hybridApi: Api = {
       }
     }
     // 브라우저 개발: 전체 경로를 알 수 없으므로 폴더 이름만
+    if (typeof window === "undefined") return null;
     const w = window as unknown as { showDirectoryPicker?: (opts: object) => Promise<FileSystemDirectoryHandle> };
     if (!w.showDirectoryPicker) return null;
     const handle = await w.showDirectoryPicker({ mode: "readwrite" }).catch(() => null);
@@ -213,10 +208,12 @@ const hybridApi: Api = {
   },
 
   async backupPrepare(serial, dest) {
+    if (!REAL_STEPS.backup) return { ok: false, error: "실전 백업이 비활성화되어 있습니다" };
     return await invokeResult<string>("backup_prepare", { serial: serial ?? null, dest });
   },
 
   async backupRun(serial, items, dest, resumeDir) {
+    if (!REAL_STEPS.backup) return { ok: false, error: "실전 백업이 비활성화되어 있습니다" };
     return await invokeResult<BackupSummary>("backup_run", { serial: serial ?? null, items, dest, resumeDir: resumeDir || null });
   },
 
@@ -229,45 +226,59 @@ const hybridApi: Api = {
   },
 
   async smsiePrepare(serial, download) {
+    if (!REAL_STEPS.backup) return { ok: false, error: "실전 백업이 비활성화되어 있습니다" };
     return await invokeResult<string[]>("smsie_prepare", { serial: serial ?? null, download });
   },
 
   async smsieCollect(serial, backupDir) {
+    if (!REAL_STEPS.backup) return null;
     return await invokeBackend<SmsIeOutcome>("smsie_collect", { serial: serial ?? null, backupDir });
   },
 
   async onBackupProgress(cb) {
-    if (!inTauri()) return () => {};
-    try {
-      const { listen } = await import("@tauri-apps/api/event");
-      const un = await listen<BackupProgress>("backup:progress", (e) => cb(e.payload));
-      return un;
-    } catch {
-      return () => {};
-    }
+    return transport.subscribe<BackupProgress>("backup:progress", cb);
   },
 
   async restoreRun(serial, dir, items) {
+    if (!REAL_STEPS.restore) return { ok: false, error: "실전 복구가 비활성화되어 있습니다" };
     return await invokeResult<RestoreOutcome>("restore_run", { serial: serial ?? null, dir, items });
   },
 
-  async smsieRestoreStage(serial, dir) {
-    return await invokeResult<string>("smsie_restore_stage", { serial: serial ?? null, dir });
+  async smsieRestoreStage(serial, dir, items) {
+    if (!REAL_STEPS.restore) return { ok: false, error: "실전 복구가 비활성화되어 있습니다" };
+    return await invokeResult<string>("smsie_restore_stage", { serial: serial ?? null, dir, items });
   },
 
   async smsieRestoreFinish(serial) {
+    if (!REAL_STEPS.restore) return { ok: false, error: "실전 복구가 비활성화되어 있습니다" };
     return await invokeResult<string[]>("smsie_restore_finish", { serial: serial ?? null });
   },
 
   async onRestoreProgress(cb) {
-    if (!inTauri()) return () => {};
-    try {
-      const { listen } = await import("@tauri-apps/api/event");
-      const un = await listen<BackupProgress>("restore:progress", (e) => cb(e.payload));
-      return un;
-    } catch {
-      return () => {};
-    }
+    return transport.subscribe<BackupProgress>("restore:progress", cb);
+  },
+
+  async fastbootGetvar() {
+    return await invokeBackend<FastbootVars>("fastboot_getvar");
+  },
+
+  async fastbootUnlock(code, confirm) {
+    if (!REAL_STEPS.fastboot) return { ok: false, error: "fastboot 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<UnlockResult>("fastboot_unlock", { code, confirm });
+  },
+
+  async fastbootLock(confirm) {
+    if (!REAL_STEPS.fastboot) return { ok: false, error: "fastboot 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<UnlockResult>("fastboot_lock", { confirm });
+  },
+
+  async fastbootReboot(target) {
+    if (!REAL_STEPS.fastboot) return false;
+    return (await invokeResult<null>("fastboot_reboot", { target })).ok;
+  },
+
+  async onFastbootLog(cb) {
+    return transport.subscribe<string>("fastboot:log", cb);
   },
 
   async openExternal(url) {
@@ -278,7 +289,7 @@ const hybridApi: Api = {
         return;
       } catch {}
     }
-    window.open(url, "_blank", "noopener");
+    if (typeof window !== "undefined") window.open(url, "_blank", "noopener");
   },
 
   async envCheck() {

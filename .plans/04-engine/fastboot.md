@@ -1,0 +1,90 @@
+# fastboot 엔진 (M2) — 언락/리락·플래시
+
+status: implemented / gated (실기기 미검증, 쓰기·재부팅 기본 비활성, 실전 리락 차단)
+
+- 정책: tasks/plan.md §3-3(리락·백업 의존성), §9-3(유한 처리), §10-2(모드 게이트).
+- 검증: FakeTransport와 메모리 API를 사용하는 wizard 테스트만 실행. USB 장치 open·프로브·쓰기 테스트는 실행하지 않는다.
+- 프로토콜 근거: [AOSP fastboot README](https://android.googlesource.com/platform/system/core/+/refs/heads/main/fastboot/README.md) (2026-10-04 확인).
+- 명령 길이는 Sony 호환을 위해 기존 64바이트 제한 유지. 응답은 최대 256바이트, DATA는 정확히 8자리 hex 크기.
+- INFO/TEXT는 최대 256개까지 허용한 다음 종결 응답을 읽는다. 각 USB 읽기/명령 쓰기는 10초, 데이터 청크 쓰기는 60초 제한.
+
+## 모듈
+
+- transport.rs: Sony VID 0x0FCE + FF/42/03 인터페이스 장치 정확히 한 대 선택. bulk IN/OUT 쌍과 실제 USB configuration/alternate setting을 적용한 뒤 claim한다.
+- 명령은 단일 전송 길이가 정확히 일치해야 성공. DATA는 짧은 쓰기만큼 남은 버퍼를 다시 보내고 0바이트 쓰기는 실패. Drop에서 인터페이스 release.
+- protocol.rs: OKAY/FAIL/INFO/TEXT/DATA 상태 머신, getvar·Sony oem unlock/lock·download·flash·reboot.
+- mod.rs: Tauri 명령, 동시 작업 거부, 민감 로그/반환 오류 마스킹, 기본 꺼진 쓰기 게이트, 플래시 이력.
+
+## 실행 게이트
+
+1. 프론트 REAL_STEPS.fastboot=false: wizard 시뮬레이션 유지, facade의 unlock/lock/reboot 직접 호출도 거부.
+2. Cargo feature fastboot-write는 기본 꺼짐: 직접 invoke해도 unlock/lock/flash/reboot를 USB open 전에 거부한다. 읽기 전용 getvar는 별도다.
+3. unlock/lock/flash는 confirm=true 필수. 언락 코드·파티션명은 USB open 전에 검증한다.
+4. backend unlock은 getvar:is-userspace=no와 unlocked=yes/no를 확인한다. fastbootd, 조회 실패, 미지원·빈 값은 거부. 이전 Sony에서 is-userspace 미지원이면 모드 근거를 추가하기 전까지 차단한다.
+5. 실전 리락은 프론트·백엔드 모두 차단. 언루팅 done/skipped, su 부재, 일반 confirm은 §3-3의 순정 이미지 해시·기기/세션별 부트 체인×슬롯 이력 검증을 대체하지 않는다. 검증 게이트가 구현되기 전에는 fastboot-write를 켜도 실행하지 않는다.
+6. 백업을 선택한 계획이면 fastboot만 실전인 경우도 실제 완결 summary 또는 기존 폴더 파일/해시 재검사가 필요하다. 백업 미선택은 기존 실행 전 이중 확인 경로를 따른다.
+7. 실전 fastboot를 켜면 수동 확인의 목업 건너뛰기를 숨기고 거부한다.
+
+## 결과 확인·재부팅
+
+- unlocked()는 명시적인 yes/no만 bool로 반환한다. 통신 실패·FAIL·빈 값·unknown을 false로 바꾸지 않는다.
+- 언락/리락 명령 후 원하는 잠금 상태를 확인하지 못하면 오류. 자동 재부팅/연결 해제는 확인 불가로 처리하며 성공으로 추측하지 않는다.
+- reboot는 OKAY만 성공. FAIL/DATA/타임아웃을 성공으로 처리하지 않는다.
+- wizard는 상태 확인 성공 후 재부팅을 await하고 성공해야 완료한다. 재부팅 실패 시 정지. 재시도에서 이미 unlocked=yes인 경우에도 재부팅 확인 후 진행한다.
+- 비동기 구독·프로브·명령·재부팅 뒤 실행 세대 확인. 이미 시작한 실전 단계를 tick의 시뮬레이션 완료 경로로 흘려보내지 않는다.
+- 중단은 이후 프론트 후속 호출을 막는다. 이미 전송한 파괴 명령을 취소/원복하지는 못한다.
+
+## 플래시·기록
+
+- 입력 partition은 슬롯 접미사 없는 기본명. _a/_b를 이미 붙인 입력, 잘못된 문자·길이는 거부.
+- 이미지 파일은 blocking 스레드에서 읽으며 빈 파일과 1 GiB 초과를 거부. 크기 제한은 파일이 읽는 동안 커져도 적용한다.
+- bootloader 모드, current-slot=a/b, has-slot:<partition>=yes, 기기 식별값을 확인하고 양쪽 슬롯을 기록한다.
+- max-download-size 조회의 통신 오류·잘못된 값은 다운로드 전에 실패. 변수 FAIL(미지원)만 호스트 1 GiB 상한으로 폴백.
+- flash-history.jsonl: deviceKey(일련번호 SHA-256), partition, image 경로, bytes, sha256, at, status(started/done/failed).
+- sha256은 실제 전송 버퍼에서 계산. 경로 파일을 다시 읽지 않는다.
+- 이력 파일 open과 started 기록·sync가 성공해야 flash를 시작한다. 슬롯별 done/failed도 기록·sync하고 저장 실패는 반환한다.
+- 이 기록은 순정 이미지 출처의 증명이 아니며 실전 리락을 허용하지 않는다. 완전한 세션 연결·부트 체인 검증은 M4에서 구현해야 한다.
+
+## 이벤트·마스킹
+
+- fastboot:log의 실제 payload는 string (객체가 아님).
+- 언락 명령 자체는 코드 대신 [마스킹] 표기. 기기가 INFO/FAIL에서 코드를 반복해도 대소문자 무관 마스킹 후 이벤트/반환 오류에 전달한다.
+- getvar:all의 IMEI/MEID/serialno 로그는 마스킹. 개별 식별값 getvar의 OKAY 응답도 로그에 원문을 남기지 않는다.
+- 원문 getvar 맵은 메모리 프로브 결과로만 반환하고 wizard/journal에 통째로 저장하지 않는다.
+
+## 코드 리뷰에서 고친 결함 (2026-10-04)
+
+| 문제 | 수정 |
+|---|---|
+| 리락 상태 조회 실패가 unlocked=false로 바뀌어 성공 처리 | yes/no만 허용, 확인 불가 오류 |
+| 재부팅 FAIL/DATA와 타임아웃이 성공 처리 | OKAY만 성공, wizard await |
+| 상태 확인 전에 재부팅 실행 | 상태 확인 성공 뒤 실행 |
+| fastboot만 켜면 선택한 백업의 완결 게이트 우회 | fastboot 활성 시에도 완결 강제 |
+| 목업 언루팅·skipped·미포함 단계로 리락 허용 | 순정/슬롯 검증 구현 전 실전 리락 차단 |
+| 프론트 플래그만으로 보호해 직접 invoke 가능 | 기본 꺼진 Cargo 쓰기 feature 추가 |
+| USB 부분 전송 길이 무시·엔드포인트 종류/alt 미검사 | 실제 전송 길이와 bulk 설정 검증 |
+| 슬롯 변수 이름의 ':'가 잘림 | 이름/값 구분 파싱 수정 |
+| 플래시 후 파일을 다시 해싱·기기 없는 이력·저장 오류 무시 | 버퍼 해시·deviceKey·슬롯별 상태·저장 오류 반환 |
+| 코드 대소문자 변형/반환 오류, 식별값 로그 유출 | 이벤트·오류 마스킹 및 식별값 응답 마스킹 |
+| 실전 step 재진입 시 시뮬레이션 진행률 상승 | 실전 분기에서 항상 return |
+
+## 검증
+
+- pnpm.cmd test:fastboot — 실제 wizard를 Vite/Svelte로 컴파일, API는 메모리 가짜로 교체. 백업 의존성·재진입·unknown/fastbootd·결과 확인·재부팅 대기/실패·중단·리락 게이트 검증.
+- pnpm.cmd check — Svelte/TypeScript 검사.
+- cargo test --lib — 실기기/네트워크 live 테스트는 ignore 유지.
+- cargo test --lib fastboot --features fastboot-write — feature가 켜진 코드의 가짜 테스트, 기기 호출 없음.
+- 코드 검증 결과: Rust 전체 83개 통과(3개 ignored), fastboot-write 활성 상태의 가짜 테스트 28개 통과, wizard 가짜 API 테스트 8개 통과. Svelte/TypeScript 검사·프론트 production 빌드·git diff --check 통과.
+
+## 실제 테스트하지 않은 부분
+
+| 항목 | 아직 확인하지 않은 내용 |
+|---|---|
+| USB 연결 | Windows 드라이버 바인딩, rusb open/claim, configuration/alternate setting, release 후 재연결 |
+| Sony getvar | getvar:all 응답 형식, is-userspace 지원 여부, 슬롯·다운로드 상한·일련번호 조회 |
+| 언락 | 실제 OEM 명령 수락, 초기화, unlocked 상태 조회 가능 시점, 자동 재부팅·USB 연결 해제 |
+| 재부팅 | OS/bootloader 재부팅 응답과 모드 전환, 초기화 후 wizard의 다음 단계 진행 |
+| 플래시 | 실제 이미지 DATA 전송·부분 전송, 양쪽 슬롯 기록, 연결 해제/타임아웃 시 기기 상태와 이력 |
+| 리락 | 실제 OEM 명령·초기화·잠금 결과·AVB 부팅. 순정 이미지/부트 체인×슬롯 검증 게이트 자체도 구현 대기 |
+
+실기기 테스트는 이번 작업에서 실행하지 않았다. 후속 작업에서도 미실측 항목은 이 목록에 기록하고, 실측 완료 시 결과와 함께 갱신한다.

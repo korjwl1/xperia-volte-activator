@@ -9,10 +9,13 @@ status: implemented (읽기 전용 실측 + 쓰기 작업 mock)
                        DeviceStatus · Warning · VolteConfig · PlanReview · RunProgress · Finish
 [src/lib/components/]  공통 위젯 — OptionCard / OptionCategory / AppClassList / Sidebar
 [src/lib/stores/]      wizard.svelte.ts — 위자드 상태 머신 (단계/선택/실측 결과/실행 러너)
-[src/lib/api/]         facade — 데스크톱은 Rust 명령(읽기 전용 실측), 브라우저 dev는 mock
-[src/lib/mock/]        plan.ts(실행 계획 단일 생성기) · apps.ts(백업 항목·앱 큐레이션) · device.ts(브라우저 dev용)
+[src/lib/domain/]      plan.ts(순수 실행 계획) · journal.ts(디스크 입력 검증) · asyncQueue.ts(저장 순서)
+[src/lib/api/]         index.ts(명령 facade) · transport.ts(IPC/이벤트/창 lifecycle, 주입 가능한 BackendPort)
+[src/lib/mock/]        apps.ts(백업 항목·앱 큐레이션) · device.ts(브라우저 dev용)
 [src/lib/data/]        omd.ts(OMD 안내, 임시값) · links.ts(외부 링크·마스킹) · devices.ts(기종별 파티션)
-[src-tauri/src]        adb.rs(기기 읽기 전용 질의) · host.rs(PC 읽기 전용 질의) · backup/(M3 백업·복구 엔진 — REAL_STEPS 전환 전까지 실행은 시뮬레이션) — 계약은 02-contracts
+[src-tauri/src]        adb.rs(연결 선택·질의) · device_io.rs(셸 결과 해석) · host.rs(PC 질의)
+                       app_paths.rs(앱 경로) · storage.rs(원자 저장) · tasks.rs(블로킹 I/O·제한된 질의 스레드)
+                       backup/(수집·검증·복원) · fastboot/(프로토콜·USB 전송·쓰기 게이트)
 ```
 
 ## 앱 셸 (routes/+page.svelte)
@@ -35,7 +38,7 @@ device(1페이지) → warning(OMD 확인·초기화 경고·책임 동의)
 
 ## 실행 계획 (단일 공급원)
 
-`mock/plan.ts buildPlan(device, volteConfig, opts, hasBackup)` 하나만 사용한다.
+`domain/plan.ts buildPlan(device, volteConfig, opts, hasBackup)` 하나만 사용한다.
 step2의 "실행 순서" 미리보기(`wizard.plan`)와 실제 실행(`wizard.launch()`)이 같은 결과를 쓴다.
 순서: 사전 준비(언락 조건 확인·언락 코드·펌웨어 준비 — 필요한 것만) → (업데이트) 펌웨어 다운로드 → 백업 → (업데이트) 펌웨어 업데이트·업데이트 확인
 → (잠김+패치) 언락 → 기본 설정 → (필요 시) 루팅 → (패치) 연결 안정성 검사 → VoLTE 적용
@@ -55,3 +58,15 @@ step2의 "실행 순서" 미리보기(`wizard.plan`)와 실제 실행(`wizard.la
 - 판별 불가 값은 "확인 불가"로 표기 — 추측 금지 (plan §3-2)
 - QPST: 미설치 = 정상 상태, 폴백 트리거는 EFS 실패 시점뿐 (§7.5)
 - persist 프롭: 리락 후 소실 → VoLTE 판정은 IMS 등록 상태 기준, 최종 확인 단계 존재 (§4)
+
+## 계층·코딩 규칙 (2026-10-04 리뷰)
+
+- 뷰/스토어는 API facade만 호출한다. `@tauri-apps/*` import는 `src/lib/api/` 안에 둔다.
+- domain은 공통 타입만 의존하고 Tauri·Svelte 상태·mock·파일 시스템에 의존하지 않는다.
+- Rust 명령은 입력과 이벤트를 처리하고, 장시간 I/O는 `tasks::blocking`/`guarded`로 위임한다. 백업 엔진은 주입한 `ADBDeviceExt`와 진행 콜백으로 실행한다.
+- 질의 실패는 `null`, 작업 실패는 공통 `ApiResult<T>`로 구분한다. 백업 진행 이벤트의 `file`은 `string | null`이다.
+- UTF-8·LF·공백 들여쓰기(`.editorconfig`, `.gitattributes`), Rust는 rustfmt, TS/Svelte는 2칸·이중 따옴표를 기본으로 한다.
+- `pnpm test`는 실제 store/domain과 가짜 IPC로 검증하며 뷰·domain의 IPC 경계 위반도 검사한다.
+- Wizard는 실행 상태를 조정하는 계층으로 유지한다. 추가 엔진을 연결할 때 순수 판단과 독립 서비스부터 추출한다.
+
+전체 리뷰의 수정 내역과 실기기 미검증 목록: [code-review.md](04-engine/code-review.md).

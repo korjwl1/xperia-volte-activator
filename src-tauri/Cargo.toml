@@ -42,6 +42,11 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 [dev-dependencies]
 tempfile = "3"
 
+[features]
+# 실기기 검증 전에는 직접 invoke도 쓰기/재부팅을 실행할 수 없다.
+default = []
+fastboot-write = []
+
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

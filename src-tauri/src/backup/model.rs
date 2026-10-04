@@ -107,10 +107,17 @@ impl Manifest {
     /// 전체 완결 여부 — "전수 열거 완료 + 오류 0"(§6-2). 파괴 단계 게이트의 입력.
     /// skipped 항목은 판정에서 제외(선택하지 않은 것은 완결에 포함하지 않는다).
     pub fn complete(&self) -> bool {
-        self.items
+        let selected: Vec<_> = self
+            .items
             .iter()
             .filter(|i| i.status != ItemStatus::Skipped)
-            .all(|i| i.status == ItemStatus::Done)
+            .collect();
+        !selected.is_empty()
+            && selected.iter().all(|i| {
+                i.status == ItemStatus::Done
+                    && i.errors.is_empty()
+                    && i.entries.iter().all(|e| e.error.is_none())
+            })
     }
 
     /// (선택 항목 중) 오류가 있는 항목id → 대표 사유 첫 줄
@@ -200,15 +207,10 @@ pub fn status_str(s: ItemStatus) -> String {
 
 /// manifest를 임시 파일에 쓴 뒤 원자 교체(journal.rs 패턴) — 중단 시 반쪽 파일이 남지 않게
 pub fn save_manifest_atomic(manifest: &Manifest, dir: &std::path::Path) -> Result<(), String> {
-    use std::io::Write;
     let path = dir.join("manifest.json");
-    let tmp = dir.join("manifest.json.tmp");
-    let json = serde_json::to_string_pretty(manifest).map_err(|e| format!("manifest 직렬화 실패: {e}"))?;
-    let mut f = std::fs::File::create(&tmp).map_err(|e| format!("manifest 임시 파일 생성 실패: {e}"))?;
-    f.write_all(json.as_bytes()).map_err(|e| format!("manifest 쓰기 실패: {e}"))?;
-    f.sync_all().ok();
-    drop(f);
-    std::fs::rename(&tmp, &path).map_err(|e| format!("manifest 교체 실패: {e}"))
+    let json =
+        serde_json::to_string_pretty(manifest).map_err(|e| format!("manifest 직렬화 실패: {e}"))?;
+    crate::storage::atomic_write(&path, json.as_bytes())
 }
 
 pub fn load_manifest(dir: &std::path::Path) -> Result<Manifest, String> {
@@ -241,10 +243,15 @@ mod tests {
     #[test]
     fn complete_requires_all_done_no_errors() {
         let mut m = Manifest::new("XQ-DQ44", "AB1234****", "67.2.A.3.178", "15");
-        assert!(m.complete()); // 항목 없음 = 완결(전부 선택 안 함)
+        assert!(!m.complete()); // 빈 manifest/취소 직후는 백업 완결의 증명이 아니다
         m.record(item("dcim", ItemKind::Files, ItemStatus::Done, vec![]));
         assert!(m.complete());
-        m.record(item("apk", ItemKind::Files, ItemStatus::Partial, vec!["3개 APK 실패".into()]));
+        m.record(item(
+            "apk",
+            ItemKind::Files,
+            ItemStatus::Partial,
+            vec!["3개 APK 실패".into()],
+        ));
         assert!(!m.complete());
         // 부분 상태의 오류는 요약에 보인다
         assert_eq!(m.error_summary().len(), 1);
@@ -256,7 +263,12 @@ mod tests {
     fn manifest_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let mut m = Manifest::new("XQ-DQ44", "AB1234****", "67.2.A.3.178", "15");
-        m.record(item("contacts", ItemKind::Contacts, ItemStatus::Done, vec![]));
+        m.record(item(
+            "contacts",
+            ItemKind::Contacts,
+            ItemStatus::Done,
+            vec![],
+        ));
         save_manifest_atomic(&m, dir.path()).unwrap();
         let loaded = load_manifest(dir.path()).unwrap();
         assert_eq!(loaded.items.len(), 1);

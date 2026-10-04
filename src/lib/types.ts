@@ -1,4 +1,6 @@
 // 도메인 타입 — .plans/03-data/mock-schema.md 참조
+export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string };
+export type Unsubscribe = () => void;
 export type DeviceMode = "android" | "bootloader-fastboot" | "fastbootd" | "flashmode";
 
 export type TriState = boolean | "unknown";
@@ -219,7 +221,7 @@ export interface BackupSummary {
 export interface BackupProgress {
   itemId: string;
   phase: string;
-  file?: string;
+  file?: string | null;
   filesDone: number;
   filesTotal: number;
   bytesDone: number;
@@ -238,6 +240,14 @@ export interface RestoreOutcome {
   failures: string[];
   /** 문자·통화 기록(smsie) 수동 복원이 남아 있음 — 수동 개입 단계로 진행 */
   smsiePending: boolean;
+}
+
+/** fastboot getvar 결과 — unlocked·current-slot·slot-successful:a/b·max-download-size … */
+export type FastbootVars = Record<string, string>;
+
+/** 언락/리락 실행 결과 — getvar로 이중 확인한 값 */
+export interface UnlockResult {
+  unlocked: boolean;
 }
 
 export type RunStatus =

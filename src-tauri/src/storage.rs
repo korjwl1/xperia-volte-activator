@@ -1,0 +1,75 @@
+//! 공통 파일 저장 — 호출마다 고유 임시 파일을 쓰고 sync 뒤 교체한다.
+use std::io::{Read, Write};
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+
+/// 크기 상한을 실제 읽기에 적용한다. 파일이 커지더라도 메모리 사용량을 제한한다.
+pub fn read_bounded(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, String> {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("파일 읽기 실패: {e}")),
+    };
+    let mut bytes = Vec::new();
+    file.take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("파일 읽기 실패: {e}"))?;
+    if bytes.len() > limit {
+        return Err("파일이 허용 크기를 초과했습니다".into());
+    }
+    Ok(Some(bytes))
+}
+
+pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
+    let parent = path.parent().ok_or("저장 경로에 부모 폴더가 없습니다")?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("저장 폴더 생성 실패: {e}"))?;
+    let temporary = parent.join(format!(
+        ".xvolte-{}-{}.tmp",
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|e| format!("임시 파일 생성 실패: {e}"))?;
+        file.write_all(data)
+            .and_then(|_| file.sync_all())
+            .map_err(|e| format!("파일 쓰기 실패: {e}"))?;
+        drop(file);
+        std::fs::rename(&temporary, path).map_err(|e| format!("파일 교체 실패: {e}"))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn bounded_read_distinguishes_missing_empty_and_oversized() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("record");
+        assert!(read_bounded(&file, 4).unwrap().is_none());
+        std::fs::write(&file, b"").unwrap();
+        assert_eq!(read_bounded(&file, 4).unwrap(), Some(vec![]));
+        std::fs::write(&file, b"1234").unwrap();
+        assert_eq!(read_bounded(&file, 4).unwrap(), Some(b"1234".to_vec()));
+        std::fs::write(&file, b"12345").unwrap();
+        assert!(read_bounded(&file, 4).is_err());
+    }
+    #[test]
+    fn replacing_an_existing_file_leaves_no_temporary_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("기록.json");
+        atomic_write(&path, b"old").unwrap();
+        atomic_write(&path, b"new").unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"new");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+}

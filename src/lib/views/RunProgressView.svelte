@@ -348,6 +348,12 @@
                 : "완료하면 다음 단계로 진행됩니다"}
           </span>
           <div class="flex shrink-0 gap-2">
+            {#if wizard.manualSetupState === "failed" && wizard.manualCurrent.id === "smsie-export"}
+              <Button variant="outline" onclick={() => wizard.smsiePrepare()}>준비 다시 시도</Button>
+            {/if}
+            {#if wizard.manualSetupState === "failed" && wizard.manualCurrent.id === "smsie-import"}
+              <Button variant="outline" onclick={() => wizard.smsieRestoreStage()}>준비 다시 시도</Button>
+            {/if}
             {#if wizard.manualSkippable}
               <Button variant="ghost" class="text-muted-foreground" onclick={() => wizard.skipManual()}>(목업) 건너뛰기</Button>
             {/if}

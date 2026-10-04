@@ -121,12 +121,23 @@ invoke('env_check') → EnvCheckItem[]            // WebView2/드라이버/adb�
 invoke('env_fix', { id }) → FixResult           // WebView2 부트스트래퍼, PNPUTIL 상승 등 자동 수리
 ```
 
-## plan (M2)
+## plan / fastboot (M2 — 설계 `.plans/04-engine/fastboot.md`, 사용자 승인 2026-10-03)
+
+**구현 상태**: 프로토콜 5 명령 구현(FakeTransport 검증, 실기기 미검증). 쓰기·재부팅은 Cargo `fastboot-write` 기본 비활성 + `REAL_STEPS.fastboot`로 보호. 실전 리락은 순정 이미지·부트 체인×슬롯 검증 구현 전 프론트/백엔드 모두 차단.
 
 ```ts
-invoke('plan_generate', { profile, toggles, deviceStatus }) → PlanStep[]   // §3-2 매트릭스 + §3-3 의존성
-invoke('fastboot_getvar', { serial }) → Record<string,string>              // read-only 프로브
-// 파괴적: fastboot_oem_unlock / fastboot_oem_lock — 실행 전 confirm 인자 필수
+invoke('fastboot_getvar') → Record<string,string>   // ✅ 읽기 전용 — rusb FF/42/03 open, getvar:all 파싱(unlocked·current-slot·slot-successful:_a/_b·max-download-size …)
+//   fastboot 모드 Sony 장치가 정확히 1대일 때만 open(다중 기기 거부 — §9-3)
+invoke('fastboot_unlock', { code, confirm }) → { unlocked: boolean }
+//   "oem unlock 0x{code}" — 16자리 hex 검증, 로그·이벤트에 코드 마스킹(§12.5). 실행 후 getvar로 이중 확인
+invoke('fastboot_lock', { confirm }) → { unlocked: boolean }       // 현재는 §3-3 게이트 미구현 오류로 차단
+invoke('fastboot_flash', { partition, path, confirm }) → void      // 슬롯 접미사 없는 기본명, 양쪽 슬롯 존재 확인 → download/flash → 기기별·슬롯별 이력
+invoke('fastboot_reboot', { target: 'os'|'bootloader' }) → void
+// 이벤트 'fastboot:log': string — INFO/TEXT 프레임·진행(코드·IMEI·식별정보 마스킹)
+//   파괴 명령은 confirm=true 필수. 쓰기/재부팅은 fastboot-write 없으면 USB open 전 오류.
+//   unlocked는 명시적 yes/no만 반환; 조회 실패는 오류. reboot는 OKAY만 성공(타임아웃도 오류).
+//   실전 unlock/flash는 is-userspace=no 필요; 미지원/fastbootd면 차단.
+invoke('plan_generate', { profile, toggles, deviceStatus }) → PlanStep[]   // §3-2 매트릭스 + §3-3 의존성 — 프론트 mock/plan.ts가 단일 공급원(유지)
 ```
 
 ## backup (M3 — 설계 `.plans/04-engine/backup-engine.md`, 사용자 승인 2026-10-03)
@@ -135,17 +146,24 @@ invoke('fastboot_getvar', { serial }) → Record<string,string>              // 
 완결 게이트(§3-3): wizard가 언락/리락 시작 전 이번 실행 summary 또는 `backup_manifest_check`(파일·해시 대조) 통과를 강제 — 백업 미선택 계획은 기존 이중 확인 모달로.
 
 ```ts
-invoke('backup_scan_items', { serial, items: string[] }) → { items: { id, files, bytes, ok }[] }
-// 사전 점검·재개 판정 — 항목별 파일 수·바이트 (완결 게이트 표시용)
-invoke('backup_run', { serial, items: string[], dest }) → BackupSummary
+// backup_scan_items는 설계 후보이며 현재 명령으로 등록되지 않았다.
+invoke('backup_prepare', { serial, dest }) → string  // 고유 백업 폴더 절대 경로
+invoke('backup_run', { serial, items: string[], dest, resumeDir?: string }) → BackupSummary
 // 실행: 항목별 열거 → pull(sha256 동시 계산) → manifest 원자 저장 → quarantine 격리 → 설정·연락처 덤프 → sms-ie 산출물 수령
 // 이벤트 'backup:progress': { itemId, phase: 'scan'|'copy'|'quarantine'|'settings'|'contacts'|'smsie',
-//   file?, filesDone, filesTotal, bytesDone, bytesTotal }
-// BackupSummary = { complete, files, bytes, errors: string[], dir, manifestPath }
+//   file: string|null, filesDone, filesTotal, bytesDone, bytesTotal }
+// BackupSummary = { complete, files, bytes, errors: string[], dir,
+//   items: { id, status: 'pending'|'done'|'partial'|'skipped', files, bytes }[] }
 //   complete = 전수 열거 완료 + 오류 0 (§6-2) — 파괴 단계 게이트의 입력
+// backup:progress에 항목 저장 후 'done'|'partial'|'pending'을 전송. 파일 카운터만으로 완료 판정하지 않음.
 invoke('backup_manifest_check', { dir }) → BackupSummary | null   // 기존 백업 폴더 완결 검사 (백업 스킵 시 게이트용)
-invoke('restore_run', { serial, dir, items: string[] }) → RestoreSummary
-// 순서(§6-5): APK 재설치 → tar 스트리밍 복원(mtime 보존, quarantine 포함) → 설정 화이트리스트 7키(adb_enabled 제외) →
+invoke('restore_run', { serial, dir, items: string[] }) → { logs: string[], failures: string[], smsiePending: boolean }
+invoke('smsie_prepare', { serial, download: boolean }) → string[]
+invoke('smsie_collect', { serial, backupDir }) → { ready: boolean, summary: BackupSummary|null }
+invoke('smsie_restore_stage', { serial, dir, items: string[] }) → string  // 선택한 문자/통화 파일만 검증·전송
+invoke('smsie_restore_finish', { serial }) → string[]  // 기기별 영속 기록으로 원복, 실제 역할 확인 전 실패는 reject/기록 유지
+invoke('contacts_restore_check', { serial, dir }) → { backedUp: number, onDevice: number }
+// 순서(§6-5): 선택 기록 무결성 검사 → APK 재설치 → tar 스트리밍 복원(원본 mtime 보존, 선택 quarantine만) → 설정 화이트리스트 6키(adb_enabled 제외) →
 //   deviceidle whitelist → 연락처·sms-ie 복원(수동 개입 포함)
 // 이벤트 'restore:progress': { itemId, phase: 'apk'|'files'|'quarantine'|'settings'|'contacts'|'smsie',
 //   file?, filesDone, filesTotal, bytesDone, bytesTotal }
@@ -153,8 +171,12 @@ invoke('restore_run', { serial, dir, items: string[] }) → RestoreSummary
 
 - 폐기: `backup_estimate`(용량은 storage_sizes 실측이 담당), 구안 `backup_scan_items → BackupGroup[]`(항목 정의는 프론트 mock이 단일 공급원)
 - 문자·통화 기록은 SMS Import/Export(tmo1/sms-ie) 세미수동 — 설치·pm grant·cmd role·파일 전송 자동, 앱 내 내보내기/가져오기는 수동 개입 단계(ManualPrompt)
-- 연락처는 adb 셸 vCard(as_vcard) 직접 수집 — 자동·완결 게이트 포함
+- 연락처는 contacts/raw_contact_entities 조회로 vCard 생성 — 자동·완결 게이트 포함
 - 항목 id는 mock/apps.ts의 id 그대로(settings-all, apk, app-data, dcim, download, pictures, movies, music, documents, recordings, fs-rest, calllog, sms, contacts)
+
+2026-10-04 리뷰: 백업/복원/SMS 변이 명령은 동시에 하나만 실행하며 중복은 reject한다. 알 수 없는/중복/빈 선택도 reject한다. 검사는 기록된 전체 파일과 선택 격리 파일의 SHA-256·크기 대조이며, 신규 설정 덤프도 해시를 기록한다. 예전 artifact-only 덤프는 존재 여부만 확인한다. 재개는 원본 모델·마스킹 시리얼을 대조하고 Done 파일도 재검증한다. restore failures가 비어 있지 않으면 프런트 단계가 실패한다. 상세 한계와 실기기 미검증 목록은 [전체 리뷰](../04-engine/code-review.md)를 따른다.
+
+후속 점검: SMS 역할 변경 전에 `<앱 데이터>/sms-role/<SHA-256(ro.serialno)>.json`을 원자 저장하고 재시작/재연결 시 재조회한다. 원본 시리얼은 기록하지 않는다. 기기 식별 실패·손상 기록·원복 기록 없음·사용자가 다른 기본 앱 선택·명령 뒤 역할 불일치는 reject한다. 원래 sms-ie 사용자는 그 기본 앱을 유지한다. 격리 tar는 미선택 본문을 seek로 건너뛰고 모든 헤더의 경로/유형을 검사한다. 설정 덤프 읽기 실패는 reject이며 파일별 한 번 해석 후 적용한다. 실기기 테스트 없음.
 
 ## EFS (M5)
 
@@ -207,6 +229,8 @@ invoke('journal_load', { key }) → string | null     // 끝나지 않은 작업
 invoke('journal_archive', { key, tag: 'done'|'discarded' }) → void  // <key>.<tag>.json으로 보관(마지막 1개, 디버깅용)
 // key = SHA-256(모델|시리얼) 앞 16바이트 hex — 파일 이름에 시리얼을 그대로 쓰지 않음, Rust에서 16~64자 hex만 허용
 // data = RunJournal (types.ts): 선택 옵션·계획·단계별 상태/로그(단계당 최근 300줄)·멈춘 사유. 언락 코드·IMEI 없음
+// 저장/보관은 프런트 직렬 큐, Rust 디스크 I/O는 blocking. JSON 저장 검사, 저장/로드 모두 8MiB 상한.
+// 로드한 디스크 JSON은 domain/journal.ts에서 옵션·SIM·계획/실행 목록·인덱스·상태 등을 검사한 후 재개.
 ```
 
 ## guard (작업 중 PC 보호 — 사용자 승인 2026-10-03)
@@ -217,6 +241,7 @@ invoke('run_guard', { active: boolean, reason?: string }) → void
 // 메인 창 서브클래스가 보호 중 WM_QUERYENDSESSION에 FALSE 응답 → Windows가 "종료를 막고 있습니다: <사유>" 표시
 // 이벤트 'run-guard': "query"(종료 보류 — 기록 저장) | "end"(사용자가 그래도 종료 — 사유 기록)
 // 프론트: begin() 시 켬, complete/중단·오류(markStop)/창 닫기/처음으로 시 끔. 폰 확인 대기 중에는 유지
+// 메인 창 스레드의 실제 적용/상태 확인 결과까지 기다리고 실패 시 보호 상태를 해제한다.
 ```
 
 ## 수동 확인용 (읽기 전용)
