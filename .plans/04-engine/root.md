@@ -84,7 +84,7 @@ invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb r
 
 ## 자체 리뷰 반영 (2026-10-04)
 
-- **셸 보간 제거**: 기기 측 부트 이미지명은 고정 `boot.img`. 결과는 내용 해시 기반 `magisk/patched-<sha256>.img`로 원자 저장한다.
+- **셸 보간 제거**: 기기 측 부트 이미지명은 고정 `boot.img`. 결과는 내용 해시 기반 `magisk/patched-<sha256>.img`로 원자 저장한다. 패치 명령은 출력 폴더(앱 데이터 magisk/)만 받는다. 입력 APK는 준비 단계가 다이제스트·서명 핀을 확인해 그 캐시에 저장한 파일만, 순정 이미지는 추출 때 기록한 출처(`<이미지>.json`: 파티션·지문·sha256)와 맞아야 한다.
 - **원자 다운로드**: magisk_prepare가 임시 파일→rename으로 저장 — 중단 시 반쪽 APK가 캐시로 오인되지 않게. 256 MiB 상한(디스크 채우기 방어)
 - **다운로드 무결성(2026-10-04)**: `apk_verify.rs` — GitHub 릴리스 API 자산의 `digest`(sha256)·`size`와 받은 바이트를 대조하고, APK Signing Block(v2/v3) 서명자 인증서 SHA-256을 topjohnwu 핀(`b4cb83b4…3ee6`, v30.7 공식 APK에서 파서·openssl v1 인증서로 교차 확인)과 대조한 뒤에만 캐시에 저장. 다이제스트가 없는 자산은 쓰지 않는다. 캐시는 기록된 다이제스트(`<apk>.sha256`)와 파일 해시가 같고, 온라인이면 현재 API 다이제스트와도 같을 때만 재사용. 릴리스 조회 실패(오프라인·요청 한도) 시 검증을 통과한 최신 캐시만 사용. patch/install은 APK를 한 번 읽어 해시·핀·구조를 확인한 바이트를 그대로 패치에 쓴다(경로 재열기 없음). 인증서 핀은 서명의 암호 검증이 아니다 — 기기에서 실행하는 추출 바이너리의 근거는 다이제스트이고, 앱 설치 서명은 Android가 검증한다.
 - **크기 하한**: 패치 결과 ≥ 원본/2 — 매직·해시 검증만으론 9바이트 가짜가 통과할 수 있었음
@@ -104,7 +104,7 @@ invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb r
 ## 구현 순서 (커밋 단위)
 
 1. ✅ `docs(plans)`: 이 문서 + AGENTS 예외 + 02-contracts root 절 정정
-2. ✅ `refactor(firmware)`: RangeRead 트레이트 제네릭화 + LocalZip + zip_extract_named(테스트 포함)
+2. ✅ `refactor(firmware)`: RangeRead 트레이트 제네릭화 + MemZip(메모리 ZIP, 이전 LocalZip 대체) + zip_extract_named(테스트 포함)
 3. ✅ `feat(magisk)`: 페이로드 추출·patch.rs 핵심(FakeADBDevice 테스트)·GitHub 다운로드
 4. ✅ `feat(magisk)`: Tauri 명령 4종(root-write feature 게이트) + facade + REAL_STEPS.root
 5. ✅ `feat(front)`: wizard 루팅 단계 실전 연결(모드 전환 2회·su-grant 마무리·waitFor 폴링)

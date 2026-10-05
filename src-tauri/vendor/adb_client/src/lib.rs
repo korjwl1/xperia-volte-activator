@@ -32,7 +32,7 @@ pub mod mdns;
 
 pub use adb_device_ext::ADBDeviceExt;
 use adb_transport::ADBTransport;
-pub use error::{Result, RustADBError};
+pub use error::{Result, RustADBError, UNAUTHORIZED_MARKER};
 pub use message_devices::*;
 pub use models::{
     ADBListItem, ADBListItemType, ADBStatExtendedResponse, ADBStatMapping, AdbStatResponse,

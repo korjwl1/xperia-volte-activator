@@ -10,6 +10,9 @@ use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter, Manager};
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+/// 메인 창에 종료 메시지 가로채기(subclass)가 설치됐는지 — 없으면 종료 방지를 켤 수 없다
+#[cfg_attr(not(windows), allow(dead_code))]
+static SUBCLASSED: AtomicBool = AtomicBool::new(false);
 static APP: OnceLock<AppHandle> = OnceLock::new();
 
 fn notify(kind: &str) {
@@ -50,6 +53,7 @@ mod win {
     pub fn power(on: bool, reason: &str) -> Result<(), String> {
         let mut guard = POWER.lock().map_err(|_| "절전 방지 상태 잠금 실패")?;
         if let Some(h) = guard.take() {
+            // SAFETY: h는 이 모듈이 PowerCreateRequest로 만들어 보관한 유효한 핸들이며, take()로 한 번만 정리한다
             unsafe {
                 PowerClearRequest(h as HANDLE, PowerRequestSystemRequired);
                 CloseHandle(h as HANDLE);
@@ -66,11 +70,14 @@ mod win {
                 SimpleReasonString: text.as_mut_ptr(),
             },
         };
+        // SAFETY: ctx와 그 안의 사유 문자열(text)은 이 호출 동안 살아 있다
         let h = unsafe { PowerCreateRequest(&ctx) };
         if h.is_null() || h == INVALID_HANDLE_VALUE {
             return Err("절전 방지 요청을 만들 수 없습니다".into());
         }
+        // SAFETY: h는 바로 위에서 만든 유효한 요청 핸들이다
         if unsafe { PowerSetRequest(h, PowerRequestSystemRequired) } == 0 {
+            // SAFETY: 설정에 실패한 핸들을 한 번만 닫는다
             unsafe { CloseHandle(h) };
             return Err("절전 방지 요청을 설정할 수 없습니다".into());
         }
@@ -81,6 +88,8 @@ mod win {
     /// 창을 만든 스레드(메인)에서 호출해야 한다
     pub fn shutdown_block(hwnd: usize, on: bool, reason: &str) -> Result<(), String> {
         let hwnd = hwnd as HWND;
+        // SAFETY: hwnd는 메인 창 핸들이고 이 함수는 그 창을 만든 메인 스레드에서만 호출된다.
+        // 사유 문자열(text)은 NUL로 끝나며 호출 동안 살아 있고, 길이 조회는 NULL 버퍼 규약을 따른다
         unsafe {
             if on {
                 let text = wide(reason);
@@ -105,6 +114,7 @@ mod win {
         Ok(())
     }
 
+    /// SAFETY: Windows가 메인 창 메시지 처리 중 호출한다. 받은 인자를 그대로 DefSubclassProc에 넘긴다
     unsafe extern "system" fn subclass(
         hwnd: HWND,
         msg: u32,
@@ -125,11 +135,10 @@ mod win {
         DefSubclassProc(hwnd, msg, wp, lp)
     }
 
-    /// 메인 창에 종료 메시지 가로채기 설치 (메인 스레드, 앱 시작 시 1회)
-    pub fn install(hwnd: usize) {
-        unsafe {
-            SetWindowSubclass(hwnd as HWND, Some(subclass), 0x5856, 0);
-        }
+    /// 메인 창에 종료 메시지 가로채기 설치 (메인 스레드, 앱 시작 시 1회). 설치되면 true
+    pub fn install(hwnd: usize) -> bool {
+        // SAFETY: hwnd는 메인 창 핸들이고 setup(메인 스레드)에서 호출된다. subclass는 정적 함수다
+        unsafe { SetWindowSubclass(hwnd as HWND, Some(subclass), 0x5856, 0) != 0 }
     }
 }
 
@@ -152,8 +161,12 @@ fn main_hwnd(app: &AppHandle) -> Option<usize> {
 pub fn init(app: &AppHandle) {
     let _ = APP.set(app.clone());
     #[cfg(windows)]
-    if let Some(h) = main_hwnd(app) {
-        win::install(h);
+    {
+        let installed = main_hwnd(app).is_some_and(win::install);
+        SUBCLASSED.store(installed, Ordering::SeqCst);
+        if !installed {
+            eprintln!("[rust] Windows 종료 가로채기를 설치하지 못했습니다 — 작업 중 종료 방지를 켤 수 없습니다");
+        }
     }
 }
 
@@ -165,6 +178,14 @@ pub async fn run_guard(app: AppHandle, active: bool, reason: Option<String>) -> 
         .unwrap_or_else(|| "VoLTE 작업 진행 중".into());
     #[cfg(windows)]
     {
+        // 가로채기가 없으면 종료 사유만 등록되고 실제로는 막히지 않는다 — 켰다고 보고하지 않는다
+        if active && !SUBCLASSED.load(Ordering::SeqCst) {
+            let _ = win::power(false, "");
+            ACTIVE.store(false, Ordering::SeqCst);
+            return Err(
+                "Windows 종료 가로채기가 설치되지 않아 작업 중 종료 방지를 켤 수 없습니다".into(),
+            );
+        }
         if let Err(e) = win::power(active, &reason) {
             // 부분 적용 방지 — 켜기에 실패하면 전부 끈 상태로
             let _ = win::power(false, "");
@@ -230,6 +251,7 @@ mod tests {
         use windows_sys::Win32::System::Power::{CallNtPowerInformation, SystemExecutionState};
         let state = || {
             let mut v: u32 = 0;
+            // SAFETY: 입력 없음(NULL·0), 출력은 u32 하나를 가리키는 유효한 포인터와 그 크기
             let st = unsafe {
                 CallNtPowerInformation(
                     SystemExecutionState,

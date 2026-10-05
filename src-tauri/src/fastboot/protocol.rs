@@ -2,7 +2,9 @@
 //! 원본 CLI 계승: `oem unlock 0x{code}` · `oem lock` · `flash <part>_a/_b` · `reboot` (src/adb.py)
 //! INFO 프레임은 로그 콜백으로 흘리고 종결 응답(OKAY/FAIL/DATA)만 반환 — 무한 루프 방지 상한.
 
-use crate::fastboot::transport::{FastbootTransport, LONG_RESPONSE_TIMEOUT, RESPONSE_TIMEOUT};
+use crate::fastboot::transport::{
+    FastbootTransport, GETVAR_ALL_TIMEOUT, LONG_RESPONSE_TIMEOUT, RESPONSE_TIMEOUT,
+};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -138,7 +140,7 @@ impl<T: FastbootTransport> FastbootDevice<T> {
         (self.on_log)("> getvar:all".into());
         self.transport.write_command("getvar:all")?;
         let mut vars = HashMap::new();
-        let terminal = self.read_terminal_with(RESPONSE_TIMEOUT, &mut |payload| {
+        let terminal = self.read_terminal_with(GETVAR_ALL_TIMEOUT, &mut |payload| {
             // "(bootloader)  key: value" / "key: value" 모두 허용
             let line = payload.trim_start_matches("(bootloader)").trim();
             // 슬롯 변수의 이름에도 ':'가 있다: slot-successful:a: yes.
@@ -218,7 +220,8 @@ impl<T: FastbootTransport> FastbootDevice<T> {
                 "이미지가 너무 큽니다({len}바이트 > {MAX_DOWNLOAD})"
             ));
         }
-        (self.on_log)(format!("> download:{len:#010x}"));
+        // 실제로 보내는 명령 그대로 기록한다
+        (self.on_log)(format!("> download:{len:08x}"));
         self.transport
             .write_command(&format!("download:{len:08x}"))?;
         match self.read_terminal(RESPONSE_TIMEOUT)? {
