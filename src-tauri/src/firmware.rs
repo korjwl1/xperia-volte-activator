@@ -613,9 +613,7 @@ fn fetch_work(
     target: Option<String>,
     dest: Option<String>,
 ) -> Result<FirmwareOut, String> {
-    if partition != "init_boot" && partition != "boot" {
-        return Err("지원하지 않는 파티션입니다".into());
-    }
+    crate::boot_image::validate_partition(&partition)?;
     let raw = with_first_device(&serial, |dev| shell(dev, "getprop"))?;
     let p = parse_getprop(&raw);
     let get = |k: &str| p.get(k).cloned().unwrap_or_default();
@@ -694,10 +692,11 @@ fn fetch_work(
     ensure_space(&dir, sin.uncomp_size)?;
 
     let img = extract_sin_image(&read_entry(&mut f, &sin)?)?;
-    // 폴더 지정 경로와 같은 이미지 검사(최소 크기 포함)
-    crate::boot_image::validate(&img)?;
+    // 형식(extract_sin_image가 확인)에 더해 대상 파티션 종류(init_boot·boot)와 맞는지
+    crate::boot_image::check_fits_partition(&img, &partition)?;
     let path: PathBuf = dir.join(format!("{partition}.img"));
-    crate::storage::atomic_write(&path, &img).map_err(|e| format!("부트 이미지 저장 실패: {e}"))?;
+    // 추출에 쓴 update.xml 지문을 이미지 옆에 함께 기록 — 이후 기기 대조·패치는 이 기록을 기준으로 한다
+    crate::boot_image::save_with_origin(&path, &img, &partition, &fw_fp)?;
     eprintln!(
         "[rust] firmware {partition} {version}: {} bytes 저장 (다운로드 {} bytes)",
         img.len(),
@@ -722,9 +721,13 @@ pub async fn firmware_fetch(
     version: Option<String>,
     dest: Option<String>,
 ) -> Result<FirmwareOut, String> {
-    guarded(Duration::from_secs(300), move || {
-        fetch_work(serial, partition, version, dest)
-    })
+    // 네트워크 작업 — 기기 질의 상한(동시 4개)을 쓰지 않고 펌웨어 전용 시간 제한을 둔다
+    crate::tasks::timed(
+        "펌웨어 받기",
+        "펌웨어 받기 시간 초과 — 네트워크 연결을 확인한 뒤 다시 시도해 주세요",
+        Duration::from_secs(300),
+        move || fetch_work(serial, partition, version, dest),
+    )
     .await
 }
 
@@ -779,9 +782,7 @@ pub struct FirmwareDirOut {
 
 /// 수동 SIN과 update.xml을 검사하고 패치·기록에 사용할 raw IMG를 PC 캐시에 추출한다.
 fn dir_check_work(dir: &str, partition: &str, cache: &Path) -> Result<FirmwareDirOut, String> {
-    if partition != "init_boot" && partition != "boot" {
-        return Err("지원하지 않는 파티션입니다".into());
-    }
+    crate::boot_image::validate_partition(partition)?;
     let root = Path::new(dir);
     if !root.is_dir() {
         return Err("폴더를 찾을 수 없습니다".into());
@@ -830,12 +831,12 @@ fn dir_check_work(dir: &str, partition: &str, cache: &Path) -> Result<FirmwareDi
     let data =
         crate::storage::read_bounded(sin, MAX_ENTRY as usize)?.ok_or("SIN 파일이 없습니다")?;
     let img = extract_sin_image(&data)?;
-    crate::boot_image::validate(&img)?;
+    crate::boot_image::check_fits_partition(&img, partition)?;
     let path = cache.join(format!(
         "{partition}-{}.img",
         crate::boot_image::sha256(&img)
     ));
-    crate::storage::atomic_write(&path, &img)?;
+    crate::boot_image::save_with_origin(&path, &img, partition, &fingerprint)?;
     Ok(FirmwareDirOut {
         file: sin
             .file_name()
