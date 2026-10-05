@@ -298,26 +298,42 @@ pub(crate) async fn magisk_patch_with_events(
         let stock = crate::boot_image::read(&image)?;
         crate::boot_image::check_fits_partition(&stock, &partition)?;
         let origin = crate::boot_image::load_origin(&image, &stock, &fingerprint)?;
+        if origin.source_sha256.is_some() || !origin.sha256.eq_ignore_ascii_case(&image_sha256) {
+            return Err("패치할 순정 이미지의 출처·해시가 요청과 다릅니다".into());
+        }
         if origin.partition != partition {
             return Err("순정 이미지의 파티션이 요청과 다릅니다".into());
         }
         adb::with_first_device(&serial, move |dev| {
             crate::boot_image::verify_fingerprint(dev, &origin.fingerprint)?;
+            let key = crate::device_io::identity_key(dev)?;
             let mut outcome_logs: Vec<String> = vec![];
             let r = patch::run_patch(
                 dev,
                 &apk_bytes,
                 &image,
                 &out_dir,
-                Some(&image_sha256),
+                Some(&origin.sha256),
                 &mut |line| {
                     outcome_logs.push(line.clone());
                     let _ = app.emit("magisk:log", line);
                 },
             );
-            r.map(|mut o| {
+            r.and_then(|mut o| {
+                let path = std::path::Path::new(&o.path);
+                let patched = crate::boot_image::read(path)?;
+                if crate::boot_image::sha256(&patched) != o.patched_sha256 {
+                    return Err("패치 결과가 저장 후 변경됐습니다".into());
+                }
+                let patched_origin =
+                    crate::boot_image::save_patched_origin(path, &patched, &origin)?;
+                crate::boot_image::save_device_check(
+                    out_dir.parent().ok_or("앱 데이터 폴더 없음")?,
+                    &key,
+                    &patched_origin,
+                )?;
                 o.log = outcome_logs;
-                o
+                Ok(o)
             })
         })
     };

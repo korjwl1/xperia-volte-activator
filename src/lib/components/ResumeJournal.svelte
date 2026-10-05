@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Modal from "$lib/components/Modal.svelte";
   // 같은 폰의 끝나지 않은 작업 — 경고 페이지 [다음] 뒤에 표시, 이어서 진행 / 새로 시작 선택
   import { Button } from "$lib/components/ui/button";
   import { History, CircleCheck, TriangleAlert, Circle } from "@lucide/svelte/icons";
@@ -46,7 +47,7 @@
   });
 </script>
 
-<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6" role="dialog">
+<Modal title="이전 작업 이어서 진행" onClose={() => { wizard.pendingJournal = null; }} class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6">
   <div class="w-full max-w-xl max-h-full flex flex-col rounded-2xl border bg-background elev-3">
     <div class="flex items-center gap-3 p-6 pb-4 shrink-0">
       <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
@@ -132,9 +133,10 @@
       </p>
     </div>
 
+    {#if wizard.journalError}<p role="alert" class="px-6 text-xs text-destructive">{wizard.journalError}</p>{/if}
     <div class="flex justify-end gap-2 p-6 pt-4 shrink-0">
       <Button variant="outline" size="sm" onclick={() => wizard.discardJournal()}>새로 시작</Button>
       <Button size="sm" onclick={() => wizard.resumeJournal()}>이어서 진행</Button>
     </div>
   </div>
-</div>
+</Modal>

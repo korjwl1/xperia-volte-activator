@@ -270,23 +270,6 @@ pub fn prepare_backup_root(dev: &mut dyn ADBDeviceExt, dest: &Path) -> Result<Pa
     Ok(root)
 }
 
-/// 이어서 백업 — 끝나지 않은 항목이 남긴 이전 파일을 지운다(그 항목은 처음부터 다시 받아 덮어씀).
-/// 백업 폴더 밖 경로는 건드리지 않는다
-fn clear_unfinished_item(root: &Path, prev: &ItemRecord) -> Result<(), String> {
-    for e in &prev.entries {
-        if e.local.is_empty() || e.quarantined {
-            continue;
-        }
-        let path = crate::backup::paths::write_target(root, &e.local)?;
-        match std::fs::remove_file(path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("미완료 파일 정리 실패: {e}")),
-        }
-    }
-    Ok(())
-}
-
 /// 열거 결과를 풀 결과에 병합 — 열거 오류·스킵 기록도 항목 완결 판정에 들어간다(§6-2 전수 열거)
 fn merge_walk(rec: &mut ItemRecord, errors: Vec<String>, skipped: &[walker::Skip]) {
     rec.errors.extend(errors);
@@ -350,10 +333,19 @@ pub fn run_backup_items(
         if manifest.device_key.is_none() {
             manifest.device_key = meta.device_key;
         }
-        // Done 기록도 파일이 손상됐으면 다시 수집한다(선택 항목만, 사유는 항목 오류로 남긴다).
-        crate::backup::verify::verify_selected(&root, &mut manifest, items);
     }
     // 첫 항목 전에 취소돼도 선택한 모든 항목이 Pending으로 남아야 한다.
+    for item in &mut manifest.items {
+        if !items.contains(&item.id) {
+            item.status = ItemStatus::Skipped;
+        } else if item.status == ItemStatus::Skipped {
+            // Re-enumerate reselected items; a previously skipped Pending item is not Done.
+            item.status = ItemStatus::Pending;
+        }
+    }
+    if resume_dir.is_some() {
+        crate::backup::verify::verify_selected(&root, &mut manifest, items);
+    }
     for id in items {
         if !manifest.items.iter().any(|item| item.id == *id) {
             manifest.record(ItemRecord::new(id, item_kind(id)));
@@ -372,9 +364,14 @@ pub fn run_backup_items(
             if prev.status == ItemStatus::Done {
                 continue;
             }
-            // 중간에 멈췄던 항목 — 이전 파일을 지우고 처음부터 다시 받는다
-            clear_unfinished_item(&root, prev)?;
         }
+        let retained = manifest
+            .items
+            .iter()
+            .find(|i| i.id == *id)
+            .filter(|i| i.kind == ItemKind::Files || i.kind == ItemKind::SmsIe)
+            .map(|i| super::verify::retained_entries(&root, i))
+            .unwrap_or_default();
         let mut ctx = TreeCtx {
             dev: &mut *dev,
             root: &root,
@@ -383,7 +380,7 @@ pub fn run_backup_items(
             cancel,
             on_progress: &mut *on_progress,
         };
-        let rec: ItemRecord = match id.as_str() {
+        let mut rec: ItemRecord = match id.as_str() {
             "settings-all" => {
                 (ctx.on_progress)(StepProgress::start(id, "settings", 5));
                 settings::collect_settings(ctx.dev, &root)
@@ -421,6 +418,23 @@ pub fn run_backup_items(
                 })
             }
         };
+        for entry in retained {
+            if let Some(index) = rec.entries.iter().position(|e| e.remote == entry.remote) {
+                if rec.entries[index].error.is_some() {
+                    // Keep the good snapshot's hash/provenance while recording the failed retry in errors.
+                    rec.bytes += entry.size;
+                    rec.entries[index] = entry;
+                }
+            } else {
+                rec.bytes += entry.size;
+                rec.entries.push(entry);
+            }
+        }
+        rec.files = rec.entries.len() as u32;
+        // A pending SMS export still needs the export collector's content validation.
+        if rec.kind == ItemKind::Files {
+            rec.finalize();
+        }
         let progress = StepProgress {
             item_id: id.clone(),
             phase: match rec.status {
@@ -577,6 +591,90 @@ mod tests {
         assert!(Path::new(&second.dir)
             .join("android-data/com.kakao.talk/db")
             .exists());
+    }
+
+    #[test]
+    fn adversarial_resume_retains_copied_files_deleted_from_phone_and_updates_selection() {
+        let mut d = dev_full();
+        d.add_file("/sdcard/DCIM/b.jpg", b"second", 1700000001, 0o644);
+        d.fail_pull("/sdcard/DCIM/b.jpg");
+        let dest = tempfile::tempdir().unwrap();
+        let mut sink: ProgressSink = Box::new(|_| {});
+        let first = run_backup_items(
+            &mut d,
+            &["dcim".into(), "sms".into()],
+            dest.path(),
+            None,
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        let root = Path::new(&first.dir);
+        assert!(!first.complete);
+        // A second interrupted attempt must not lose the first copy's manifest entry.
+        d.fail_pull("/sdcard/DCIM/a.jpg");
+        let interrupted = run_backup_items(
+            &mut d,
+            &["dcim".into(), "sms".into()],
+            dest.path(),
+            Some(root),
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(!interrupted.complete);
+        let saved = load_manifest(root).unwrap();
+        let photo = saved
+            .items
+            .iter()
+            .find(|i| i.id == "dcim")
+            .unwrap()
+            .entries
+            .iter()
+            .find(|e| e.remote.ends_with("a.jpg"))
+            .unwrap();
+        assert!(photo.error.is_none() && photo.sha256.is_some());
+        // New connection sees only the previously failed file; successful source is gone.
+        let mut reconnected = dev_full();
+        reconnected.remove_file("/sdcard/DCIM/a.jpg");
+        reconnected.add_file("/sdcard/DCIM/b.jpg", b"second", 1700000001, 0o644);
+        let second = run_backup_items(
+            &mut reconnected,
+            &["dcim".into()],
+            dest.path(),
+            Some(root),
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(second.complete, "{:?}", second.errors);
+        assert_eq!(
+            std::fs::read(root.join("sdcard/DCIM/a.jpg")).unwrap(),
+            b"photo"
+        );
+        let manifest = load_manifest(root).unwrap();
+        let dcim = manifest.items.iter().find(|i| i.id == "dcim").unwrap();
+        assert_eq!(dcim.entries.len(), 2);
+        assert_eq!(
+            manifest
+                .items
+                .iter()
+                .find(|i| i.id == "sms")
+                .unwrap()
+                .status,
+            ItemStatus::Skipped
+        );
+        // Reselecting a previously Pending SMS item cannot mark it Done without an export.
+        let third = run_backup_items(
+            &mut reconnected,
+            &["dcim".into(), "sms".into()],
+            dest.path(),
+            Some(root),
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(!third.complete);
     }
 
     /// 실기기 백업 확인용 — 폰에서 읽어 PC로 복사만 한다(기기 변경 없음).

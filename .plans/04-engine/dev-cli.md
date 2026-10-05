@@ -87,6 +87,14 @@ fastboot 명령의 `expectedSerial`은 `device_list`의 `serialKey`(ADB serial)�
 
 실패하면 결과와 기기 상태를 확인하고 **공유 엔진 코드를 수정 → cargo run으로 재빌드 → 필요한 명령만 재실행**한다. 이전 성공한 언락/리락/플래시/업로드를 자동 반복하지 않는다. 부트 이미지나 펌웨어를 변경했다면 사전 검사도 다시 수행한다. EFS 복원이 필요하면 저장된 complete snapshot을 `efs_rollback`에 직접 지정하며, 복수 슬롯은 생성 역순으로 복원한다.
 
+## 추가 검증 조건 (2026-10-05)
+
+- 초기화 백업은 완결/파일 해시뿐 아니라 `deviceKey`가 대상 기기의 serialKey와 같아야 한다. 기기 키 없는 오래된 백업은 자동 초기화 증명으로 쓰지 않는다.
+- OS에서 `boot_image_check`를 먼저 실행하거나 `magisk_patch`로 생성한 결과를 사용한다. 공통 엔진이 기기·해시·파티션·현재 관찰 펌웨어 대조 기록을 확인하므로 운영자가 임의 SHA256을 넣어도 플래시를 허용하지 않는다.
+- fastboot 모드에서 `device_list`가 비어도 이전 ADB 기준 키를 유지한다. 새 ADB 기기가 보이면 현재 목록으로 갱신한다.
+- `smsie_collect`의 `confirmComplete` 기본값은 false다. 폰 앱에서 선택 항목 모두의 내보내기 성공을 확인한 뒤 true로 실행해야 완결 백업이 된다. 수집/검증 실패 시 폰 사본은 보존한다.
+- `flash_history_archive`는 `confirm=true`로 손상 이력을 보관하는 PC 전용 명령이다. 이후 순정 양 슬롯 기록을 다시 해야 한다.
+
 ## 기록과 종료
 
 `<data-dir>/dev-runs/<시각>-<PID>/record.json`에는 command/step/빌드 feature/시작·종료 시각/status/마스킹된 결과가 저장된다. `events.jsonl`에는 진행 로그가 있고 stdout도 JSON Lines이다. 매 시도는 새 폴더를 만들어 이전 실패 기록을 덮어쓰지 않는다. started 기록 저장에 실패하면 기기 명령을 시작하지 않는다. 기록/로그 저장 실패는 성공 종료로 숨기지 않는다.
@@ -97,11 +105,10 @@ fastboot 명령의 `expectedSerial`은 `device_list`의 `serialKey`(ADB serial)�
 
 ## 오프라인 검증
 
-2026-10-05 보강 후: Rust 기본 빌드 216 passed / 8 ignored, `dev-cli`·`dev-cli,fastboot-write`·모든 feature 빌드 각 226 passed / 8 ignored, CLI 바이너리 통합 테스트 각 3 passed(초기화 단계 백업 증명 거부 포함). 백업 게이트·앱 기준 serial 대조·GUI 실행 감지 단위 테스트 추가. `cargo clippy --all-targets --all-features -- -D warnings`, `cargo fmt --check`, `git diff --check` 통과. 프론트 101 passed, Svelte check 0 errors / 0 warnings, 정적 프로덕션 빌드 통과. 기기 질의/USB/COM/DIAG/쓰기는 실행하지 않았다.
+2026-10-05 적대적 보강 후: Rust 기본 빌드 230 passed / 8 ignored, `dev-cli` 242 passed / 8 ignored, 모든 feature 빌드 241 passed / 8 ignored(기본 게이트 전용 테스트는 쓰기 feature 빌드에서 제외). CLI 바이너리 통합 테스트 각 3 passed. `cargo clippy --all-targets --all-features -- -D warnings`, `cargo fmt --check`, `git diff --check` 통과. 프론트 111 passed, Svelte check 0 errors / 0 warnings, 정적 프로덕션 빌드 통과. 상세 수정/기존 코드 재현은 [적대적 리뷰](adversarial-review-20261005.md)를 참조한다. 기기 질의/USB/COM/DIAG/쓰기는 실행하지 않았다.
 
 처음 검토에 쓸 debug CLI 사본을 `src-tauri/target/dev-cli/xva-dev.exe`(쓰기 feature 포함)와 `xva-dev-readonly.exe`(dev-cli만)에 준비했다. 사본은 현재 코드의 스냅샷이므로 **코드를 수정한 뒤에는 위의 cargo run/build로 새로 컴파일한 실행 파일을 사용한다.** 일반 GUI 설치 파일의 갱신과 CLI 빌드는 별도다.
 
-쓰기 포함 사본 SHA-256: `828a858c82b31c411018b41d2a06e004959cb41541b0dfea0076d5fdb9c76ae8`.
-읽기용 사본 SHA-256: `7935d2bb3f89bdd8121c37563a2eccdaefb97f4e89f1a27211bdddd051fb72dd6`.
+사본 해시는 현재 파일에서 `Get-FileHash src-tauri/target/dev-cli/xva-dev*.exe -Algorithm SHA256`로 확인한다. 이전 코드의 해시를 현재 빌드의 것으로 사용하지 않는다.
 
 입력 스키마/feature·실행 옵션/비밀값 마스킹/검증 실패 판정/재시도 이력/공통 이벤트/프로세스 잠금 단위 테스트와, 실제 CLI 실행 파일의 기기 무관 명령·입력 거부·프로세스 재시작 후 기록 조회 통합 테스트를 수행한다. 실제 기기 동작은 `device-test-checklist.md`에서만 체크한다.

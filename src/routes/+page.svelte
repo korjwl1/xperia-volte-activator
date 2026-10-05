@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Modal from "$lib/components/Modal.svelte";
   import { Button } from "$lib/components/ui/button";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import { wizard } from "$lib/stores/wizard.svelte";
@@ -108,6 +109,9 @@
       <span class="text-sm font-semibold tracking-tight">Xperia VoLTE Activator</span>
       <span class="ml-auto text-[11px] text-muted-foreground">v0.1.0</span>
     </header>
+    {#if wizard.journalError}
+      <div role="alert" class="shrink-0 flex items-center gap-2 bg-warning-container text-warning px-6 py-2 text-xs"><TriangleAlert size={14} />{wizard.journalError}</div>
+    {/if}
     <!-- 사이드바 + 콘텐츠 (경고 페이지는 1~4단계 시작 전이라 사이드바 없음) -->
     <div class="flex-1 min-h-0 flex">
       {#if wizard.view !== "warning"}
@@ -140,7 +144,7 @@
       <ResumeJournal journal={wizard.pendingJournal} />
     {/if}
     {#if closeAsk}
-      <div class="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-6" role="dialog">
+      <Modal title="작업 종료 확인" onClose={() => { if (!closing) { closeAsk = false; saveFailed = false; closeError = ""; } }} class="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-6">
         <div class="w-full max-w-md rounded-2xl border-2 {wizard.runInDanger ? 'border-destructive/40' : 'border-border'} bg-background elev-3 p-6 space-y-4">
           <div class="flex items-center gap-3">
             <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl {wizard.runInDanger ? 'bg-danger-container text-destructive' : 'bg-warning-container text-warning'}">
@@ -177,7 +181,7 @@
             {/if}
           </div>
         </div>
-      </div>
+      </Modal>
     {/if}
   {/if}
 </div>

@@ -7,6 +7,7 @@ import type { MagiskPatchRequest, FirmwareDirInfo, AdbStatus, AppItem, BackupPro
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
 import type { ApiResult } from "$lib/types";
 import { REAL_STEPS } from "$lib/data/runMode";
+import { canReboot } from "$lib/domain/execution";
 import { classifyApp, SAMPLE_FLAGS, type AppFlag } from "$lib/data/appRules";
 import { efsApi, type EfsApi } from "./efs";
 import { inDesktop as inTauri, transport } from "./transport";
@@ -49,10 +50,11 @@ export interface Api extends EfsApi {
   envCheck(): Promise<EnvCheckItem[] | null>;
   /** 작업 진행 기록 저장 (기기별, 앱 데이터 폴더) */
   journalSave(key: string, data: string): Promise<boolean>;
-  /** 끝나지 않은 진행 기록 (없거나 실패 시 null) */
-  journalLoad(key: string): Promise<string | null>;
+  /** 기록 없음은 ok(null), 읽기 실패는 error — 실패를 덮어쓰지 않는다. */
+  journalLoad(key: string): Promise<ApiResult<string | null>>;
   /** 진행 기록 보관 — done(끝남) / discarded(새로 시작) */
   journalArchive(key: string, tag: "done" | "discarded"): Promise<boolean>;
+  flashHistoryArchive(confirm: boolean): Promise<ApiResult<string>>;
   /** 루트 권한 승인 여부 (su -c id = uid=0), 조회 실패 시 null */
   rootCheck(serial?: string): Promise<boolean | null>;
   /** 직접 지정한 펌웨어 폴더 검사 — <partition>_*.sin 존재 + 부트 이미지 추출 가능 */
@@ -74,7 +76,7 @@ export interface Api extends EfsApi {
   /** SMS Import/Export 설치·권한·임시 폴더 준비 — 로그 문구 목록 반환 */
   smsiePrepare(serial: string | undefined, download: boolean): Promise<ApiResult<string[]>>;
   /** SMS Import/Export 산출물 수집 — ready=false면 앱에서 아직 내보내지 않음 */
-  smsieCollect(serial: string | undefined, backupDir: string): Promise<SmsIeOutcome | null>;
+  smsieCollect(serial: string | undefined, backupDir: string, confirmComplete?: boolean): Promise<SmsIeOutcome | null>;
   /** 복구 실행(APK·파일 tar 스트리밍·설정·연락처 전송) — 진행은 onRestoreProgress */
   restoreRun(serial: string | undefined, dir: string, items: string[]): Promise<ApiResult<RestoreOutcome>>;
   /** 문자·통화 기록 수동 복원 준비 — 파일 전송 + 기본 문자 앱 역할 (안내 문구 반환) */
@@ -204,11 +206,16 @@ const hybridApi: Api = {
   },
 
   async journalLoad(key) {
-    return await invokeBackend<string>("journal_load", { key });
+    if (!inTauri()) return { ok: true, value: null };
+    return await invokeResult<string | null>("journal_load", { key });
   },
 
   async journalArchive(key, tag) {
     return (await invokeResult<null>("journal_archive", { key, tag })).ok;
+  },
+
+  async flashHistoryArchive(confirm) {
+    return invokeResult<string>("flash_history_archive", { confirm });
   },
 
   async rootCheck(serial) {
@@ -255,9 +262,9 @@ const hybridApi: Api = {
     return await invokeResult<string[]>("smsie_prepare", { serial: serial ?? null, download });
   },
 
-  async smsieCollect(serial, backupDir) {
+  async smsieCollect(serial, backupDir, confirmComplete = false) {
     if (!REAL_STEPS.backup) return null;
-    return await invokeBackend<SmsIeOutcome>("smsie_collect", { serial: serial ?? null, backupDir });
+    return await invokeBackend<SmsIeOutcome>("smsie_collect", { serial: serial ?? null, backupDir, confirmComplete });
   },
 
   async onBackupProgress(cb) {
@@ -335,7 +342,7 @@ const hybridApi: Api = {
 
   async rootReboot(serial, target) {
     // 언락·리락(fastboot)·루팅 흐름의 부트로더 진입·복귀는 root/fastboot, 최종 확인(verify)은 OS 재부팅만 허용
-    if (!REAL_STEPS.root && !REAL_STEPS.fastboot && !(REAL_STEPS.verify && target === "os")) {
+    if (!canReboot(REAL_STEPS, target)) {
       return { ok: false, error: "기기 재부팅 실전 실행이 비활성화되어 있습니다" };
     }
     return await invokeResult<null>("root_reboot", { serial: serial ?? null, target });

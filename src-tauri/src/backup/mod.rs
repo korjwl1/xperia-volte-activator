@@ -12,6 +12,7 @@ pub mod runner;
 pub mod settings;
 pub mod sms_role;
 pub mod smsie;
+mod smsie_export;
 pub mod verify;
 pub mod walker;
 pub mod winname;
@@ -351,6 +352,7 @@ pub struct SmsIeOutcome {
     /// false = 앱에서 아직 내보내지 않음(수동 개입 유지)
     pub ready: bool,
     pub summary: Option<BackupSummary>,
+    pub cleanup_warning: Option<String>,
 }
 
 /// SMS Import/Export 준비 — 설치·권한·임시 폴더 (download=false면 미설치 오류)
@@ -379,6 +381,7 @@ pub async fn smsie_prepare(serial: Option<String>, download: bool) -> Result<Vec
 pub async fn smsie_collect(
     serial: Option<String>,
     backup_dir: String,
+    confirm_complete: Option<bool>,
 ) -> Result<SmsIeOutcome, String> {
     let dir = PathBuf::from(&backup_dir);
     if !dir.is_dir() {
@@ -387,41 +390,66 @@ pub async fn smsie_collect(
     let operation = Operation::acquire()?;
     let work = move || {
         let _operation = operation;
-        crate::adb::with_first_device(&serial, |dev| -> Result<SmsIeOutcome, String> {
-            // 백업에 고른 문자·통화 기록 항목만 병합한다(정리 판단도 이 기준)
-            let mut manifest = model::load_manifest(&dir)?;
-            let selected: Vec<String> = manifest
-                .items
-                .iter()
-                .filter(|item| {
-                    item.kind == model::ItemKind::SmsIe && item.status != model::ItemStatus::Skipped
-                })
-                .map(|item| item.id.clone())
-                .collect();
-            let selected_ids: Vec<&str> = selected.iter().map(String::as_str).collect();
-            match smsie::collect(dev, &dir, &selected_ids)? {
-                smsie::CollectState::NotReady => Ok(SmsIeOutcome {
-                    ready: false,
-                    summary: None,
-                }),
-                smsie::CollectState::Records(records) => {
-                    for (_, rec) in records {
-                        if selected.contains(&rec.id) {
-                            manifest.record(rec);
-                        }
-                    }
-                    model::save_manifest_atomic(&manifest, &dir)?;
-                    let mut summary = BackupSummary::from(&manifest);
-                    summary.dir = dir.to_string_lossy().to_string();
-                    Ok(SmsIeOutcome {
-                        ready: true,
-                        summary: Some(summary),
-                    })
-                }
-            }
+        crate::adb::with_first_device(&serial, |dev| {
+            collect_smsie_backup(dev, &dir, confirm_complete == Some(true))
         })
     };
     crate::tasks::blocking("수집", work).await
+}
+
+fn collect_smsie_backup(
+    dev: &mut dyn adb_client::ADBDeviceExt,
+    dir: &Path,
+    confirm_complete: bool,
+) -> Result<SmsIeOutcome, String> {
+    // 백업에 고른 문자·통화 기록 항목만 병합한다(정리 판단도 이 기준)
+    let mut manifest = model::load_manifest(dir)?;
+    let key = crate::device_io::identity_key(dev)?;
+    if manifest.device_key.as_deref() != Some(&key) {
+        return Err("문자 백업의 원본 기기와 현재 기기가 일치하지 않습니다".into());
+    }
+    let selected: Vec<String> = manifest
+        .items
+        .iter()
+        .filter(|item| {
+            item.kind == model::ItemKind::SmsIe && item.status != model::ItemStatus::Skipped
+        })
+        .map(|item| item.id.clone())
+        .collect();
+    let selected_ids: Vec<&str> = selected.iter().map(String::as_str).collect();
+    match smsie::collect(dev, dir, &selected_ids)? {
+        smsie::CollectState::NotReady => Ok(SmsIeOutcome {
+            ready: false,
+            summary: None,
+            cleanup_warning: None,
+        }),
+        smsie::CollectState::Records(records) => {
+            let ready = smsie::selected_done(&records, &selected_ids);
+            for (_, mut rec) in records {
+                if selected.contains(&rec.id) {
+                    if rec.status == model::ItemStatus::Done && (!ready || !confirm_complete) {
+                        rec.status = model::ItemStatus::Partial;
+                        rec.errors.push("폰 앱의 내보내기 성공 확인 대기".into());
+                    }
+                    manifest.record(rec);
+                }
+            }
+            model::save_manifest_atomic(&manifest, dir)?;
+            // The phone copy survives until the receipt is durable.
+            let cleanup_warning = if ready && confirm_complete {
+                smsie::cleanup_exports(dev).err()
+            } else {
+                None
+            };
+            let mut summary = BackupSummary::from(&manifest);
+            summary.dir = dir.to_string_lossy().to_string();
+            Ok(SmsIeOutcome {
+                ready,
+                summary: Some(summary),
+                cleanup_warning,
+            })
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -491,8 +519,18 @@ pub async fn smsie_restore_stage(
     let operation = Operation::acquire()?;
     let work = move || {
         let _operation = operation;
+        let installed = crate::adb::with_first_device(&serial, |dev| smsie::installed(dev))?;
+        let apk = if installed {
+            None
+        } else {
+            let cache = state_dir
+                .parent()
+                .ok_or("앱 데이터 폴더 없음")?
+                .join("cache/smsie");
+            Some(smsie::download_apk(&cache)?)
+        };
         crate::adb::with_first_device(&serial, |dev| {
-            smsie::restore_stage(dev, &backup_dir, &items, &state_dir)
+            smsie::restore_stage(dev, &backup_dir, &items, &state_dir, apk.as_ref())
         })
     };
     crate::tasks::blocking("준비", work).await
@@ -520,6 +558,50 @@ pub(crate) fn scrub(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adversarial_polling_cannot_complete_backup_or_delete_phone_copy_without_confirmation() {
+        let root = tempfile::tempdir().unwrap();
+        let mut dev = fake_device::FakeADBDevice::new();
+        dev.answer_shell("getprop ro.serialno", "phone-A");
+        dev.answer_shell("rm -rf", "");
+        dev.add_dir(smsie::DEVICE_TMP_DIR);
+        let zip = smsie_export::tests::export_zip(b"{}\n");
+        dev.add_file(
+            &format!("{}/messages.zip", smsie::DEVICE_TMP_DIR),
+            &zip,
+            0,
+            0o644,
+        );
+        let mut manifest = model::Manifest::new("XQ", "masked", "v", "15");
+        manifest.device_key = Some(crate::boot_image::sha256(b"phone-A"));
+        manifest.record(model::ItemRecord::new("sms", model::ItemKind::SmsIe));
+        manifest.record(model::ItemRecord::new("calllog", model::ItemKind::SmsIe));
+        model::save_manifest_atomic(&manifest, root.path()).unwrap();
+        assert!(
+            !collect_smsie_backup(&mut dev, root.path(), false)
+                .unwrap()
+                .ready
+        );
+        assert!(!model::load_manifest(root.path()).unwrap().complete());
+        dev.add_file(
+            &format!("{}/calls.json", smsie::DEVICE_TMP_DIR),
+            b"[]",
+            0,
+            0o644,
+        );
+        let outcome = collect_smsie_backup(&mut dev, root.path(), false).unwrap();
+        assert!(outcome.ready);
+        assert!(!outcome.summary.unwrap().complete);
+        assert!(!dev.shell_calls.iter().any(|c| c.starts_with("rm -rf")));
+        assert!(!model::load_manifest(root.path()).unwrap().complete());
+        // Cleanup failure is a warning after the durable backup, not data loss or failed backup.
+        dev.fail_shell.insert("rm -rf".into());
+        let outcome = collect_smsie_backup(&mut dev, root.path(), true).unwrap();
+        assert!(outcome.ready && outcome.summary.unwrap().complete);
+        assert!(outcome.cleanup_warning.is_some());
+        assert!(model::load_manifest(root.path()).unwrap().complete());
+    }
 
     #[test]
     fn cancel_before_start_applies_only_to_that_run() {

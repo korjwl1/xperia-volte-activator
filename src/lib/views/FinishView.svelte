@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Modal from "$lib/components/Modal.svelte";
   import CommunicationPanel from "$lib/components/CommunicationPanel.svelte";
   import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "$lib/components/ui/card";
   import { Button } from "$lib/components/ui/button";
@@ -145,7 +146,7 @@
 
 <!-- 백업 삭제 확인 — 되돌릴 수 없음 -->
 {#if deleteConfirmOpen}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6" role="dialog">
+  <Modal title="백업 삭제 확인" onClose={() => { deleteConfirmOpen = false; }} class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6">
     <div class="w-full max-w-md rounded-2xl border-2 border-destructive/40 bg-background elev-3 p-6 space-y-4">
       <div class="flex items-center gap-3">
         <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-danger-container text-destructive">
@@ -174,5 +175,5 @@
         <Button variant="destructive" size="sm" disabled={wizard.backupStillNeeded && !keepAck} onclick={confirmDelete}>삭제</Button>
       </div>
     </div>
-  </div>
+  </Modal>
 {/if}

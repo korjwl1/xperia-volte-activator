@@ -250,6 +250,7 @@ export interface SettingsOverview {
 
 /** 백업 실행 결과 — 백엔드 backup_run (계약 .plans/02-contracts) */
 export interface BackupSummary {
+  deviceKey?: string | null;
   complete: boolean;
   files: number;
   bytes: number;
@@ -271,6 +272,7 @@ export interface BackupProgress {
 
 /** SMS Import/Export 수집 결과 — ready=false면 앱에서 아직 내보내지 않음 */
 export interface SmsIeOutcome {
+  cleanupWarning?: string | null;
   ready: boolean;
   summary: BackupSummary | null;
 }

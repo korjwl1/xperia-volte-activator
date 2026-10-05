@@ -191,6 +191,8 @@ test("SMS preparation blocks confirmation until it succeeds and permits retry", 
   assert.equal(w.manualCheckError, "permission denied");
   api.smsiePrepare = async () => ({ ok: true, value: [] });
   await w.smsiePrepare();
+  assert.equal(w.manualInputReady, false);
+  w.smsieExportAck = true;
   assert.equal(w.manualInputReady, true);
 });
 
@@ -254,6 +256,104 @@ test("failed exit save leaves a resumable pending step and invalidates late work
   assert.equal(w.manualCurrent, null);
   assert.equal(w.running, false);
   assert.ok(w.stopInfo);
+});
+
+test("adversarial journal read and archive failures never authorize overwriting", async () => {
+  const w = wizard();
+  w.journalKeyReady = async () => "a".repeat(64);
+  w.journalKey = "a".repeat(64);
+  let writes = 0;
+  api.journalSave = async () => { writes++; return true; };
+  api.journalLoad = async () => ({ ok: false, error: "permission denied" });
+  assert.equal(await w.checkJournal(), true);
+  assert.match(w.journalError, /읽지/);
+  assert.equal(await w.persist(true), false);
+  assert.equal(writes, 0);
+  api.journalLoad = async () => ({ ok: true, value: "{broken" });
+  api.journalArchive = async () => false;
+  assert.equal(await w.checkJournal(), true);
+  assert.equal(await w.persist(true), false);
+  api.journalArchive = async () => true;
+  assert.equal(await w.checkJournal(), false);
+  assert.equal(w.journalError, "");
+  assert.equal(await w.persist(true), true);
+  assert.equal(writes, 1);
+});
+
+test("a late journal archive cannot change a new device session", async () => {
+  const w = wizard(), pending = deferred();
+  w.journalKey = "a".repeat(64);
+  w.view = "warning";
+  api.journalArchive = () => pending.promise;
+  const discard = w.discardJournal();
+  await Promise.resolve();
+  w.runGen++;
+  w.journalKey = "b".repeat(64);
+  w.view = "device";
+  w.journalError = "new session";
+  pending.resolve(false);
+  await discard;
+  assert.equal(w.view, "device");
+  assert.equal(w.journalError, "new session");
+  assert.equal(w.journalReadBlocked, false);
+});
+
+test("adversarial save rejection is visible and a successful retry clears the warning", async () => {
+  const w = wizard();
+  w.journalKey = "a".repeat(64);
+  api.journalSave = async () => { throw new Error("disk full"); };
+  assert.equal(await w.persist(true), false);
+  assert.match(w.journalError, /저장하지/);
+  api.journalSave = async () => true;
+  assert.equal(await w.persist(true), true);
+  assert.equal(w.journalError, "");
+});
+
+test("adversarial duplicate USB prompt checks run once and cannot advance twice", async () => {
+  const w = wizard(), pending = deferred();
+  let checks = 0;
+  api.deviceList = () => { checks++; return pending.promise; };
+  const first = w.openManual(w.runSteps[0], "usb-debug");
+  const second = w.openManual(w.runSteps[0], "usb-debug");
+  pending.resolve([w.device]);
+  await Promise.all([first, second]);
+  assert.equal(checks, 1);
+  assert.equal(w.runSteps[0].manualDone, 1);
+  assert.equal(w.manualCurrent, null);
+});
+
+test("adversarial complete backup from another phone or changed disk never passes wipe gate", async () => {
+  const w = wizard();
+  w.runSteps = [{ id: "unlock", title: "언락", status: "running", progress: 0, manualDone: 0, logs: [] },
+    { id: "backup", status: "done", progress: 1, manualDone: 0, logs: [] }];
+  w.backupDir = "backup";
+  w.backupSummary = { complete: true };
+  const ownKey = await w.deviceKeyHex();
+  for (const [complete, deviceKey, accepted] of [[true, "b".repeat(64), false], [false, ownKey, false], [true, ownKey, true]]) {
+    w.stepError = ""; w.runSteps[0].status = "running";
+    let proceeded = false; w.begin = () => { proceeded = true; };
+    api.backupManifestCheck = async () => ({ complete, deviceKey, errors: [] });
+    await w.enforceBackupGate(w.runSteps[0]);
+    assert.equal(proceeded, accepted);
+  }
+});
+
+test("valid SMS files still need the user's export-success confirmation", async () => {
+  const w = wizard();
+  w.manualCurrent = { id: "smsie-export" };
+  w.manualSetupState = "done";
+  let confirmations = [];
+  api.smsieCollect = async (_serial, _dir, confirmed) => {
+    confirmations.push(confirmed);
+    return { ready: true, summary: { complete: true } };
+  };
+  assert.equal(w.manualInputReady, false);
+  assert.ok(await w.verifyManual("smsie-export"));
+  assert.deepEqual(confirmations, []);
+  w.smsieExportAck = true;
+  assert.equal(w.manualInputReady, true);
+  assert.equal(await w.verifyManual("smsie-export"), null);
+  assert.deepEqual(confirmations, [true]);
 });
 
 test("exit rejects a running destructive step before cancelling or saving", async () => {

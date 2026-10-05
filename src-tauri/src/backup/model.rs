@@ -198,6 +198,7 @@ impl Manifest {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupSummary {
+    pub device_key: Option<String>,
     pub complete: bool,
     pub files: u64,
     pub bytes: u64,
@@ -219,6 +220,7 @@ pub struct ItemBrief {
 impl From<&Manifest> for BackupSummary {
     fn from(m: &Manifest) -> Self {
         Self {
+            device_key: m.device_key.clone(),
             complete: m.complete(),
             files: m.total_files(),
             bytes: m.total_bytes(),

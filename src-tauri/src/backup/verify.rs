@@ -208,6 +208,28 @@ pub fn verify_manifest(root: &Path, manifest: &mut Manifest) -> Vec<String> {
     problems
 }
 
+/// Successful entries survive an interrupted item's retry, even if the phone no longer has them.
+pub(super) fn retained_entries(root: &Path, item: &ItemRecord) -> Vec<super::model::FileEntry> {
+    let mut manifest = Manifest::new("", "", "", "");
+    for entry in item.entries.iter().filter(|e| e.error.is_none()) {
+        let mut record = ItemRecord::new(&entry.remote, item.kind);
+        record.status = ItemStatus::Done;
+        record.entries.push(entry.clone());
+        manifest.items.push(record);
+    }
+    let bad: HashSet<usize> = verify_items(root, &mut manifest, &|_| true)
+        .into_iter()
+        .map(|(index, _)| index)
+        .collect();
+    manifest
+        .items
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| !bad.contains(index))
+        .flat_map(|(_, item)| item.entries)
+        .collect()
+}
+
 /// 이어서 백업용 — 선택 항목만 다시 검사하고, 문제는 그 항목의 오류로 남긴다
 /// (상태만 낮추고 사유를 버리면 요약에 이유 없이 미완결로 보인다).
 pub fn verify_selected(root: &Path, manifest: &mut Manifest, selected: &[String]) {

@@ -5,9 +5,9 @@ Xperia VoLTE 활성화 통합 도구. Tauri 2 + SvelteKit 2 + Svelte 5 + TypeScr
 
 ## 현재 단계 (매우 중요)
 
-- **프론트엔드 작업 위주 단계. 기기·PC에 영향을 줄 수 있는 백엔드(쓰기·설치·삭제·플래시·EFS·백업 실행 등)는 작성 금지** — 실기기 작동 시나리오는 짜지 않는다.
-- **읽기 전용·무해한 명령**(기기 감지, 용량 조회 등)은 프론트와 연동해 실제로 동작하는 것을 눈으로 확인하며 작성해도 된다. 이때 `.plans/02-contracts/tauri-commands.md`에 계약을 추가한다.
-- mock은 백엔드가 없어도 프론트가 동작하도록 유지한다 (연동 실패 시 mock 폴백).
+- **공유 Rust 엔진·개발 CLI·화면 구현 및 오프라인 검증 단계**. 아래 사용자 승인에 따라 백엔드 수정·빌드·병합을 진행한다. 이번 작업에서 실제 폰의 ADB·USB·COM·DIAG 질의나 쓰기를 실행하지 않는다.
+- 쓰기 Cargo feature의 기본값 `[]` 및 모든 `REAL_STEPS=false`를 유지한다. 실기기 검증은 별도 사용자 세션에서 진행한다.
+- mock은 브라우저 개발에만 사용한다. 데스크톱 연결/기록 오류는 실패로 표시하고 mock 성공이나 기록 없음으로 바꾸지 않는다.
 - Rust 설치 완료 — `pnpm.cmd tauri dev`로 데스크톱 윈도우 테스트 가능하다.
 - 예외(사용자 승인 2026-10-02): USB 직접 연결용 ADB 인증 키를 앱 데이터 폴더에 1회 생성·저장한다 (표준 ~/.android/adbkey가 있으면 그것을 사용).
 - 예외(사용자 승인 2026-10-03): 폰에 설정 화면(개발자 옵션/휴대전화 정보)을 띄우는 것 — 설정 값은 바꾸지 않음.
@@ -32,7 +32,7 @@ Xperia VoLTE 활성화 통합 도구. Tauri 2 + SvelteKit 2 + Svelte 5 + TypeScr
 
 1. **.plans 문서 의무**: 뷰를 작성·변경하면 대응하는 `.plans/01-views/<view>.md`를 같은 커밋에서 갱신한다.
    - 새 뷰 → 목적/상태 필드/버튼→백엔드 계약 매핑을 문서에 기록
-   - 새 백엔드 계약 → `.plans/02-contracts/tauri-commands.md`에 시그니처 추가 (프론트엔드 코드엔 mock만)
+   - 새 백엔드 계약 → `.plans/02-contracts/tauri-commands.md`에 시그니처 추가하고 facade와 타입을 함께 갱신
    - mock 스키마 변경 → `.plans/03-data/mock-schema.md` 갱신
 2. **모든 백엔드 호출은 `src/lib/api/` facade 경유** — mock/실전 전환이 한 곳에서 되도록. 컴포넌트에서 `@tauri-apps/api`를 직접 import 금지.
 3. UI는 shadcn-svelte(`$lib/components/ui`) 우선. 새 컴포넌트는 `$lib/components/`에.

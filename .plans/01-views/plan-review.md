@@ -1,5 +1,8 @@
 # view: PlanReview (② 작업 계획 확인)
 
+2026-10-05 최종 리뷰: 실행 확인 모달은 Modal.svelte의 Dialog를 사용한다. 포커스 제한/복귀를 제공하고 Esc는 실행하지 않고 취소한다. 비주얼: 기존 pane 스크롤·MD3 토큰을 유지하고 공통 모달 접근성을 적용한다.
+
+
 status: implemented (mock)
 
 2026-10-05: VoLTE 대상이 있으면 옵션 pane에 공통 `CommunicationPanel`과 [통신 상태 다시 확인]을 표시한다. `wizard.refreshCommunication("before")`는 기존 `api.deviceList`로 같은 기기만 읽어 작업 전 스냅샷을 남긴다. SIM·IMS 결과는 실행 게이트나 대상 선택에 사용하지 않는다. 자동 발신·APN/네트워크 설정 변경 없음. 시각·기종·펌웨어·Android·베이스밴드·선택 프리셋 버전을 표시하며 전체 해시는 진행 기록에 저장한다. 비주얼: 기존 pane 스크롤과 MD3 의미색·lucide 아이콘 유지.

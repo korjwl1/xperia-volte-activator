@@ -39,8 +39,9 @@ fn verify_from_dir(
 ) -> Result<relock::GateResult, String> {
     let raw = crate::storage::read_bounded(&dir.join("flash-history.jsonl"), 16 * 1024 * 1024)?
         .ok_or("플래시 이력 파일이 없습니다 — 슬롯 상태를 확인할 수 없습니다")?;
-    let raw = String::from_utf8(raw).map_err(|e| format!("플래시 이력 UTF-8 오류: {e}"))?;
-    let history = relock::parse_history(&raw)?;
+    let raw = String::from_utf8(raw)
+        .map_err(|e| format!("FLASH_HISTORY_CORRUPT|플래시 이력 UTF-8 오류: {e}"))?;
+    let history = relock::parse_history(&raw).map_err(|e| format!("FLASH_HISTORY_CORRUPT|{e}"))?;
     Ok(relock::verify(&history, partition, stock_sha, device_key))
 }
 
@@ -206,6 +207,18 @@ pub(crate) async fn fastboot_lock_with_events(
     crate::tasks::blocking("부트로더 리락", move || {
         let stock_sha = verified_stock_sha(&partition, &stock_path)?;
         let dir = crate::app_paths::data_dir().ok_or("앱 데이터 폴더를 찾지 못했습니다")?;
+        let stock = crate::boot_image::read(std::path::Path::new(&stock_path))?;
+        if crate::boot_image::sha256(&stock) != stock_sha {
+            return Err("리락 검사 중 순정 이미지가 변경됐습니다".into());
+        }
+        crate::boot_image::require_device_check(
+            &dir,
+            &device_key(&expected_serial),
+            std::path::Path::new(&stock_path),
+            &stock,
+            &partition,
+            true,
+        )?;
         // 로컬 선행 조건 실패는 USB를 열기 전에 거부한다. 실제 기기 기준으로도 재검사한다.
         require_relock_gate(verify_from_dir(
             &dir,
@@ -245,10 +258,45 @@ fn verified_stock_sha(partition: &str, stock_path: &str) -> Result<String, Strin
     let image = crate::boot_image::read(path)?;
     crate::boot_image::check_fits_partition(&image, partition)?;
     let origin = crate::boot_image::load_origin(path, &image, "")?;
-    if origin.partition != partition || origin.fingerprint.trim().is_empty() {
+    if origin.partition != partition
+        || origin.fingerprint.trim().is_empty()
+        || origin.source_sha256.is_some()
+    {
         return Err("순정 이미지의 추출 파티션·펌웨어 출처가 일치하지 않습니다".into());
     }
     Ok(crate::boot_image::sha256(&image))
+}
+
+/// PC-only recovery preserves corrupt evidence and infers no previous success.
+#[tauri::command]
+pub async fn flash_history_archive(confirm: bool) -> Result<String, String> {
+    if !confirm {
+        return Err("손상된 이력을 보관하려면 확인이 필요합니다".into());
+    }
+    let operation = crate::device_io::WriteOperation::acquire()?;
+    crate::tasks::blocking("손상 이력 보관", move || {
+        let _operation = operation;
+        let dir = crate::app_paths::data_dir().ok_or("앱 데이터 폴더 없음")?;
+        archive_corrupt_history(&dir).map(|path| path.to_string_lossy().into_owned())
+    })
+    .await
+}
+
+fn archive_corrupt_history(dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let source = dir.join("flash-history.jsonl");
+    let bytes =
+        crate::storage::read_bounded(&source, 16 * 1024 * 1024)?.ok_or("이력 파일이 없습니다")?;
+    if std::str::from_utf8(&bytes).is_ok_and(|s| relock::parse_history(s).is_ok()) {
+        return Err("정상 이력은 삭제하지 않습니다 — 손상 이력 보관이 필요하지 않습니다".into());
+    }
+    let archive = dir.join(format!(
+        "flash-history-corrupt-{}-{}.jsonl",
+        chrono::Utc::now().format("%Y%m%dT%H%M%S%.9fZ"),
+        std::process::id()
+    ));
+    std::fs::hard_link(&source, &archive).map_err(|e| format!("이력 보관 실패: {e}"))?;
+    std::fs::remove_file(&source).map_err(|e| format!("손상 이력 분리 실패: {e}"))?;
+    Ok(archive)
 }
 
 fn require_relock_gate(gate: relock::GateResult) -> Result<(), String> {
@@ -341,6 +389,15 @@ pub(crate) async fn fastboot_flash_with_events(
         if !expected_sha256.eq_ignore_ascii_case(&sha256) {
             return Err("이미지가 사전 검사 후 변경됐습니다 — 기록하지 않습니다".into());
         }
+        let dir = crate::app_paths::data_dir().ok_or("앱 데이터 폴더를 찾지 못했습니다")?;
+        crate::boot_image::require_device_check(
+            &dir,
+            &device_key(&expected_serial),
+            std::path::Path::new(&path),
+            &image,
+            &partition,
+            false,
+        )?;
         with_device(operation, app, None, move |mut d| {
             let serial = ensure_target(&mut d, &expected_serial)?;
             d.ensure_bootloader()?;
@@ -525,6 +582,35 @@ mod tests {
         assert!(gate.ok);
         std::fs::write(dir.path().join("flash-history.jsonl"), "{broken").unwrap();
         assert!(verify_from_dir(dir.path(), "init_boot", &stock, Some(&key)).is_err());
+    }
+
+    #[test]
+    fn corrupt_history_recovery_preserves_evidence_and_requires_new_slot_receipts() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = dir.path().join("flash-history.jsonl");
+        std::fs::write(&history, b"{broken\xff").unwrap();
+        let archive = archive_corrupt_history(dir.path()).unwrap();
+        assert_eq!(std::fs::read(archive).unwrap(), b"{broken\xff");
+        assert!(!history.exists());
+        assert!(verify_from_dir(
+            dir.path(),
+            "init_boot",
+            &"a".repeat(64),
+            Some(&device_key("A"))
+        )
+        .is_err());
+        write_stock_history(dir.path(), "A", &"a".repeat(64));
+        assert!(archive_corrupt_history(dir.path()).is_err());
+        assert!(
+            verify_from_dir(
+                dir.path(),
+                "init_boot",
+                &"a".repeat(64),
+                Some(&device_key("A"))
+            )
+            .unwrap()
+            .ok
+        );
     }
 
     fn write_stock_history(dir: &std::path::Path, serial: &str, sha: &str) {

@@ -1,5 +1,8 @@
 # 03 — mock 데이터 스키마 및 실측 시드
 
+2026-10-05 최종 리뷰: BackupSummary.deviceKey는 nullable SHA-256 기기 키이며 초기화 게이트에서 선택 기기와 대조한다. SmsIeOutcome.cleanupWarning은 nullable 문자열이다. journalLoad facade는 ApiResult<string|null>로 없음과 오류를 구분한다.
+
+
 status: implemented
 
 2026-10-05: `DeviceStatus`에 optional `baseband/observedAtMs`, `SimInfo`에 optional `ims: ImsDiagnostic`을 추가한다. 진단은 등록·음성/SMS·접속 방식·기술 및 사유를 분리한다. mock은 slot1 no-sim, slot2 not-registered이며 실측처럼 정상 통화를 주장하지 않는다. `RunJournal.communication`은 before/latest 스냅샷과 슬롯별 `CallCheck`(outgoing/incoming/audio/afterReboot/afterIdle)를 저장한다. 스냅샷에는 시각·기종·펌웨어 지문·Android·베이스밴드·SIM 요약·선택 프리셋 버전/전체 SHA256만 넣고 시리얼·IMEI·전화번호·구독 식별자·원시 덤프는 넣지 않는다. 실제 발신·수신·음성 확인은 사용자 체크이며 자동 통화가 아니다.

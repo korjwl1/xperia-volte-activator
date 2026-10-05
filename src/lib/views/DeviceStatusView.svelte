@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Modal from "$lib/components/Modal.svelte";
   import { onMount } from "svelte";
   import { CircleCheck, TriangleAlert, Usb, Smartphone, ArrowRight, Lock, LockOpen } from "@lucide/svelte/icons";
   import { api } from "$lib/api";
@@ -240,7 +241,7 @@
 
   <!-- 연결 수단 점검 실패 팝업 -->
   {#if showLinkPopup}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6">
+    <Modal title="기기 연결 오류" onClose={() => { linkDismissed = true; }} class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6">
       <div class="w-full max-w-md rounded-2xl border-2 border-warning/40 bg-background elev-3 p-6 space-y-4">
         <div class="flex items-center gap-3">
           <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-warning-container text-warning">
@@ -270,6 +271,6 @@
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   {/if}
 </div>

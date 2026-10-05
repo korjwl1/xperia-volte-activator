@@ -1,5 +1,7 @@
 # 02 — Tauri command 계약 (프론트 ↔ 백엔드)
 
+2026-10-05 추가: `flash_history_archive({ confirm: boolean }) -> string`은 PC의 손상 flash-history.jsonl을 별도 파일로 보관한다. 확인 없으면 실패하며 정상 이력은 삭제하지 않는다. 공유 쓰기 잠금으로 기기 변경과 동시 실행하지 않고 USB를 열지 않는다. 보관 후에는 새 순정 양 슬롯 기록이 필요하다.
+
 2026-10-05 개발 CLI: 기존 Tauri 명령 시그니처·반환·이벤트 이름은 유지한다. AppHandle이 필요한 엔진은 `events::Events`를 받는 공통 실행 함수에 위임하고 `dev-cli` 실행 파일도 같은 함수를 호출한다. CLI 입력/출력·명령 카탈로그는 별도 개발 계약이며 일반 앱에 CLI 명령을 추가하지 않는다. 세부 사항은 `../04-engine/dev-cli.md`.
 
 2026-10-05 `device_list` 읽기 전용 결과 확장: DeviceOut는 `baseband: string`, `observedAtMs: number`를 제공한다. 각 SIM의 `ims`는 `status`, `registration`, nullable boolean `voice/sms`, `transport`, `technology`를 제공한다(`src/lib/types.ts`). `status`는 no-sim/sim-not-ready/query-failed/unsupported-format/conflicting-evidence/not-registered/registering/voice-unavailable/registered/wifi-only/cross-sim/other-network/transport-unknown 중 하나다. 구형 `imsRadioTech`와 신형 `imsTransportType` 로그를 지원하며 현재 미등록 상태·최근 해제/등록 중 이벤트·모순된 근거를 정상 판정에 사용하지 않는다. 조회 명령은 원시 출력에서 종료 상태/권한 오류를 판별하고 필요한 줄만 반환한다. 기존 `volte=on`은 셀룰러 IMS 음성 준비 요약으로 유지하며 LTE/NR 및 실제 통화 성공은 별도 결과다. 새 쓰기 명령 없음. 작업 전/완료 후 진단은 기존 `api.deviceList()` facade를 재사용한다.
@@ -114,7 +116,7 @@ Magisk 자동 패치 (사용자 조작 없음) — 2026-10-03 XQ-DQ44 / Android 
 invoke('magisk_prepare') → { version, apkPath, sha256 }
 //   GitHub releases(topjohnwu/Magisk latest)에서 Magisk-v<ver>.apk 다운로드 → 앱 데이터 캐시(재사용)
 //   기기 무관·준비 단계 — 게이트 밖(firmware_fetch와 같은 성격)
-invoke('boot_image_check', { serial, path, fingerprint }) → string // 이미지 SHA-256
+invoke('boot_image_check', { serial, path, fingerprint }) → string // 이미지 SHA-256 + 기기별 지문 대조 기록 저장
 //   이미지 옆 출처 기록(<이미지>.json)이 필요 — 없거나 sha가 다르면 "펌웨어를 다시 받아 주세요"로 거부.
 //   기기와 대조하는 지문은 기록의 값. 넘겨받은 fingerprint는 비어 있거나 기록과 같아야 한다. 이미지 종류·파티션도 검사
 invoke('magisk_patch', { request: { serial, apkPath, imagePath, partition, imageSha256, fingerprint, apkSha256 } }) → { path, origSha256, patchedSha256, bytes, log: string[] }
@@ -200,14 +202,18 @@ invoke('backup_run', { serial, items: string[], dest, resumeDir?: string, runId:
 // 실행: 항목별 열거 → pull(sha256 동시 계산) → manifest 원자 저장 → quarantine 격리 → 설정·연락처 덤프 → sms-ie 산출물 수령
 // 이벤트 'backup:progress': { itemId, phase: 'scan'|'copy'|'quarantine'|'settings'|'contacts'|'smsie',
 //   file: string|null, filesDone, filesTotal, bytesDone, bytesTotal }
-// BackupSummary = { complete, files, bytes, errors: string[], dir,
+// BackupSummary = { deviceKey: string|null, complete, files, bytes, errors: string[], dir,
 //   items: { id, status: 'pending'|'done'|'partial'|'skipped', files, bytes }[] }
 //   complete = 전수 열거 완료 + 오류 0 (§6-2) — 파괴 단계 게이트의 입력
 // backup:progress에 항목 저장 후 'done'|'partial'|'pending'을 전송. 파일 카운터만으로 완료 판정하지 않음.
 invoke('backup_manifest_check', { dir }) → BackupSummary | null   // 기존 백업 폴더 완결 검사 (백업 스킵 시 게이트용)
 invoke('restore_run', { serial, dir, items: string[] }) → { logs: string[], failures: string[], smsiePending: boolean }
 invoke('smsie_prepare', { serial, download: boolean }) → string[]
-invoke('smsie_collect', { serial, backupDir }) → { ready: boolean, summary: BackupSummary|null }
+invoke('smsie_collect', { serial, backupDir, confirmComplete?: boolean }) → { ready: boolean, summary: BackupSummary|null, cleanupWarning: string|null }
+// 기본 false: ZIP/JSON 검사·PC 수집만. ready는 선택한 산출물 모두의 파일 검사 통과이며,
+// 폰 앱 내보내기 성공을 확인한 confirmComplete=true 전에는 manifest가 완결되지 않는다.
+// 확인 + 선택 항목 전체 검사 + manifest 원자 저장 뒤에만 기기 임시 사본 정리.
+// 정리 실패는 cleanupWarning이며 이미 저장한 정상 PC 백업을 실패로 바꾸지 않는다.
 invoke('smsie_restore_stage', { serial, dir, items: string[] }) → string  // 선택한 문자/통화 파일만 검증·전송
 invoke('smsie_restore_finish', { serial }) → string[]  // 기기별 영속 기록으로 원복, 실제 역할 확인 전 실패는 reject/기록 유지
 invoke('contacts_restore_check', { serial, dir }) → { backedUp: number, onDevice: number }
@@ -307,6 +313,7 @@ type StepEvent = { stepId: string; phase: 'start'|'progress'|'done'|'fail'|'manu
 ```ts
 invoke('journal_save', { key, data }) → void        // <앱 데이터>/journal/<key>.json (임시 파일에 쓴 뒤 교체)
 invoke('journal_load', { key }) → string | null     // 끝나지 않은 작업 기록 JSON
+// facade 반환: ApiResult<string|null>. 실제 파일 없음은 ok(null), 읽기 오류는 error.
 invoke('journal_archive', { key, tag: 'done'|'discarded' }) → void  // <key>.<tag>.json으로 보관(마지막 1개, 디버깅용)
 // key = SHA-256(모델|시리얼) 앞 16바이트 hex — 파일 이름에 시리얼을 그대로 쓰지 않음, Rust에서 16~64자 hex만 허용
 // data = RunJournal (types.ts): 선택 옵션·계획·단계별 상태/로그(단계당 최근 300줄)·멈춘 사유. optional imsUnverified/imsVerified/callVerified boolean으로 등록·사용자 통화 확인 구분. 언락 코드·IMEI 없음

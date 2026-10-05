@@ -136,6 +136,8 @@ pub struct ImageOrigin {
     pub partition: String,
     pub fingerprint: String,
     pub sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_sha256: Option<String>,
 }
 
 fn origin_path(image: &Path) -> PathBuf {
@@ -160,6 +162,7 @@ pub fn save_with_origin(
         partition: partition.into(),
         fingerprint: fingerprint.trim().into(),
         sha256: sha256(image),
+        source_sha256: None,
     };
     let json = serde_json::to_vec(&origin).map_err(|e| format!("이미지 출처 기록 실패: {e}"))?;
     crate::storage::atomic_write(&origin_path(path), &json)
@@ -177,6 +180,17 @@ pub fn load_origin(
         .ok_or_else(|| format!("부트 이미지의 펌웨어 출처 기록이 없습니다 — {REFETCH}"))?;
     let origin: ImageOrigin = serde_json::from_slice(&raw)
         .map_err(|_| format!("부트 이미지의 펌웨어 출처 기록이 손상됐습니다 — {REFETCH}"))?;
+    validate_partition(&origin.partition)?;
+    if origin.fingerprint.trim().is_empty() {
+        return Err("이미지 출처의 펌웨어 지문이 없습니다".into());
+    }
+    if origin.source_sha256.as_ref().is_some_and(|h| {
+        h.len() != 64
+            || !h.bytes().all(|c| c.is_ascii_hexdigit())
+            || h.eq_ignore_ascii_case(&origin.sha256)
+    }) {
+        return Err("패치 이미지의 순정 출처 해시가 올바르지 않습니다".into());
+    }
     if !origin.sha256.eq_ignore_ascii_case(&sha256(image)) {
         return Err(format!(
             "부트 이미지가 펌웨어에서 추출한 뒤 바뀌었습니다 — {REFETCH}"
@@ -186,6 +200,120 @@ pub fn load_origin(
     if !claimed.is_empty() && claimed != origin.fingerprint {
         return Err("지정한 지문이 이 부트 이미지의 펌웨어 지문과 다릅니다".into());
     }
+    Ok(origin)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceImageCheck {
+    origin: ImageOrigin,
+    device_key: String,
+    checked_at: String,
+}
+
+fn check_path(dir: &Path, device_key: &str, hash: &str) -> Result<PathBuf, String> {
+    if [device_key, hash]
+        .iter()
+        .any(|v| v.len() != 64 || !v.bytes().all(|c| c.is_ascii_hexdigit()))
+    {
+        return Err("이미지 검사 기록의 기기 키/해시가 올바르지 않습니다".into());
+    }
+    Ok(dir.join("image-checks").join(format!(
+        "{}-{}.json",
+        device_key.to_ascii_lowercase(),
+        hash.to_ascii_lowercase()
+    )))
+}
+
+pub(crate) fn save_device_check(
+    dir: &Path,
+    device_key: &str,
+    origin: &ImageOrigin,
+) -> Result<(), String> {
+    observe_firmware(dir, device_key, &origin.fingerprint)?;
+    let proof = DeviceImageCheck {
+        origin: origin.clone(),
+        device_key: device_key.into(),
+        checked_at: chrono::Utc::now().to_rfc3339(),
+    };
+    crate::storage::atomic_write(
+        &check_path(dir, device_key, &origin.sha256)?,
+        &serde_json::to_vec(&proof).map_err(|e| e.to_string())?,
+    )
+}
+
+pub(crate) fn observe_firmware(
+    dir: &Path,
+    device_key: &str,
+    fingerprint: &str,
+) -> Result<(), String> {
+    if fingerprint.trim().is_empty() {
+        return Ok(());
+    }
+    let path = dir
+        .join("image-checks")
+        .join(format!("{}-firmware.json", device_key.to_ascii_lowercase()));
+    // Validate the key before constructing a filename from it.
+    check_path(dir, device_key, &"0".repeat(64))?;
+    let value = serde_json::to_vec(fingerprint).map_err(|e| e.to_string())?;
+    if crate::storage::read_bounded(&path, 64 * 1024)?.as_deref() != Some(value.as_slice()) {
+        crate::storage::atomic_write(&path, &value)?;
+    }
+    Ok(())
+}
+
+/// A supplied hash alone is not evidence that this image matched this phone's firmware.
+pub(crate) fn require_device_check(
+    dir: &Path,
+    device_key: &str,
+    path: &Path,
+    image: &[u8],
+    partition: &str,
+    stock_only: bool,
+) -> Result<(), String> {
+    let origin = load_origin(path, image, "")?;
+    check_fits_partition(image, partition)?;
+    if origin.partition != partition || (stock_only && origin.source_sha256.is_some()) {
+        return Err("현재 요청에 맞는 순정 이미지 출처가 아닙니다".into());
+    }
+    let raw = crate::storage::read_bounded(&check_path(dir, device_key, &origin.sha256)?, 64 * 1024)?
+        .ok_or("이 기기와 이미지의 펌웨어 대조 기록이 없습니다 — OS에서 boot_image_check 또는 magisk_patch를 먼저 실행하세요")?;
+    let proof: DeviceImageCheck =
+        serde_json::from_slice(&raw).map_err(|e| format!("이미지 대조 기록 손상: {e}"))?;
+    if proof.device_key != device_key || proof.origin != origin || proof.checked_at.is_empty() {
+        return Err("이미지·기기·펌웨어 대조 기록이 요청과 다릅니다".into());
+    }
+    let current = crate::storage::read_bounded(
+        &dir.join("image-checks")
+            .join(format!("{}-firmware.json", device_key.to_ascii_lowercase())),
+        64 * 1024,
+    )?
+    .ok_or("현재 펌웨어 확인 기록이 없습니다")?;
+    let current: String = serde_json::from_slice(&current).map_err(|e| e.to_string())?;
+    if current != origin.fingerprint {
+        return Err(
+            "이미지 확인 이후 기기의 펌웨어가 변경됐습니다 — 현재 펌웨어를 다시 대조하세요".into(),
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn save_patched_origin(
+    path: &Path,
+    image: &[u8],
+    stock: &ImageOrigin,
+) -> Result<ImageOrigin, String> {
+    check_fits_partition(image, &stock.partition)?;
+    let origin = ImageOrigin {
+        partition: stock.partition.clone(),
+        fingerprint: stock.fingerprint.clone(),
+        sha256: sha256(image),
+        source_sha256: Some(stock.sha256.clone()),
+    };
+    crate::storage::atomic_write(
+        &origin_path(path),
+        &serde_json::to_vec(&origin).map_err(|e| e.to_string())?,
+    )?;
     Ok(origin)
 }
 
@@ -216,8 +344,11 @@ pub async fn boot_image_check(
         // 기기와 대조하는 지문은 추출 때 기록한 것 — 넘겨받은 지문은 그 기록과 같을 때만 인정
         let origin = load_origin(path, &bytes, &fingerprint)?;
         check_fits_partition(&bytes, &origin.partition)?;
+        let dir = crate::app_paths::data_dir().ok_or("앱 데이터 폴더 없음")?;
         crate::adb::with_first_device(&Some(serial), |dev| {
-            verify_fingerprint(dev, &origin.fingerprint)
+            verify_fingerprint(dev, &origin.fingerprint)?;
+            let key = crate::device_io::identity_key(dev)?;
+            save_device_check(&dir, &key, &origin)
         })?;
         Ok(sha256(&bytes))
     })
@@ -228,6 +359,47 @@ pub async fn boot_image_check(
 mod tests {
     use super::*;
     use crate::backup::fake_device::FakeADBDevice;
+
+    #[test]
+    fn caller_hash_cannot_replace_device_firmware_check_or_patch_provenance() {
+        let dir = tempfile::tempdir().unwrap();
+        let stock = dir.path().join("stock.img");
+        let patched = dir.path().join("patched.img");
+        let image = test_image(8192, 0x41);
+        let changed = test_image(8192, 0x42);
+        let key = "a".repeat(64);
+        save_with_origin(&stock, &image, "init_boot", "Sony/current").unwrap();
+        assert!(
+            require_device_check(dir.path(), &key, &stock, &image, "init_boot", false).is_err()
+        );
+        let origin = load_origin(&stock, &image, "").unwrap();
+        save_device_check(dir.path(), &key, &origin).unwrap();
+        assert!(require_device_check(dir.path(), &key, &stock, &image, "init_boot", true).is_ok());
+        assert!(require_device_check(
+            dir.path(),
+            &"b".repeat(64),
+            &stock,
+            &image,
+            "init_boot",
+            false
+        )
+        .is_err());
+        assert!(
+            require_device_check(dir.path(), &key, &stock, &changed, "init_boot", false).is_err()
+        );
+        assert!(require_device_check(dir.path(), &key, &stock, &image, "boot", false).is_err());
+        std::fs::write(&patched, &changed).unwrap();
+        let patched_origin = save_patched_origin(&patched, &changed, &origin).unwrap();
+        save_device_check(dir.path(), &key, &patched_origin).unwrap();
+        assert!(
+            require_device_check(dir.path(), &key, &patched, &changed, "init_boot", false).is_ok()
+        );
+        assert!(
+            require_device_check(dir.path(), &key, &patched, &changed, "init_boot", true).is_err()
+        );
+        observe_firmware(dir.path(), &key, "Sony/updated").unwrap();
+        assert!(require_device_check(dir.path(), &key, &stock, &image, "init_boot", true).is_err());
+    }
 
     #[test]
     fn extracted_image_carries_its_firmware_fingerprint() {

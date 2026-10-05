@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Modal from "$lib/components/Modal.svelte";
   // 백업 직전 안내 — 복구되지 않는 항목(기본 포커스) / 백업될 설정 / 백업될 앱을 보여주고 동의를 받는다.
   import { Button } from "$lib/components/ui/button";
   import { Checkbox } from "$lib/components/ui/checkbox";
@@ -60,7 +61,7 @@
   ] as const;
 </script>
 
-<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" role="dialog">
+<Modal title="백업 전 확인" onClose={() => wizard.abort()} class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
   <div class="w-full max-w-3xl h-[85vh] rounded-2xl border bg-background elev-3 flex flex-col overflow-hidden">
     <!-- 헤더 -->
     <div class="shrink-0 px-6 pt-5 pb-3 flex items-start gap-3">
@@ -234,4 +235,4 @@
       </div>
     </div>
   </div>
-</div>
+</Modal>

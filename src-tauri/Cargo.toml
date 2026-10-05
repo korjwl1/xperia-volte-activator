@@ -37,6 +37,7 @@ fs2 = "0.4"
 rsa = { version = "0.9.10", features = ["pem"] }
 ureq = "2"
 flate2 = "1"
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
 tar = "0.4"
 crc32fast = "1"
 roxmltree = "0.20"

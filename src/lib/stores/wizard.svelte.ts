@@ -7,7 +7,7 @@ import { mockBackupGroups } from "$lib/mock/apps";
 import { bootloaderOnly, buildPlan, stepHazard, updateTarget, type PlanOptions } from "$lib/domain/plan";
 import { firmwareUpdateProblems } from "$lib/domain/verify";
 import { SIMULATED_RUN, REAL_STEPS } from "$lib/data/runMode";
-import { executionPlanProblem } from "$lib/domain/execution";
+import { executionPlanProblem, hasLiveActions, liveStepEnabled } from "$lib/domain/execution";
 import { EFS_PRESET_MODE, EFS_PRESET_VERSION, efsPreset } from "$lib/data/efsPresets";
 import type { BackupProgress, BackupSummary, EfsConfiguration } from "$lib/types";
 import { AsyncQueue } from "$lib/domain/asyncQueue";
@@ -304,6 +304,8 @@ export class Wizard {
     this.simulateUsbError = false;
     this.simulateEfsFail = false;
     this.journalKey = null;
+    this.journalError = "";
+    this.journalReadBlocked = false;
     this.journalStarted = "";
     this.journalSims = undefined;
     this.pendingJournal = null;
@@ -505,15 +507,26 @@ export class Wizard {
     const gen = this.runGen;
     const key = await this.journalKeyReady();
     if (!key) return false;
-    const raw = await api.journalLoad(key);
-    if (!raw || gen !== this.runGen) return false;
+    let loaded;
+    try { loaded = await api.journalLoad(key); }
+    catch (error) { loaded = { ok: false as const, error: String(error) }; }
+    if (gen !== this.runGen) return true;
+    this.journalReadBlocked = !loaded.ok;
+    this.journalError = loaded.ok ? "" : `진행 기록을 읽지 못했습니다 — ${loaded.error}. 다시 확인해 주세요`;
+    if (!loaded.ok) return true;
+    const raw = loaded.value;
+    if (raw === null) return false;
     const journal = decodeJournal(raw);
     if (!journal) {
       // 읽을 수 없는 기록(손상·이전 형식)은 새 실행이 덮어쓰기 전에 보관해 둔다 (백업 폴더 경로 등 복구 단서 보존)
-      void this.journalWrites.push(() => api.journalArchive(key, "discarded"));
-      return false;
+      const archived = await this.archiveJournal(key, "discarded");
+      return gen !== this.runGen || !archived;
     }
-    if (journal.model !== this.device?.model || journal.serialMasked !== this.device?.serialMasked) return false;
+    if (journal.model !== this.device?.model || journal.serialMasked !== this.device?.serialMasked) {
+      this.journalReadBlocked = true;
+      this.journalError = "진행 기록의 기기 정보가 현재 기기와 다릅니다 — 기록을 덮어쓰지 않습니다";
+      return true;
+    }
     this.pendingJournal = journal;
     return true;
   }
@@ -552,9 +565,11 @@ export class Wizard {
   }
 
   /** [새로 시작] — 이전 기록은 discarded로 보관하고 1단계부터 */
-  discardJournal() {
+  async discardJournal() {
+    const gen = this.runGen;
     const key = this.journalKey;
-    if (key) void this.journalWrites.push(() => api.journalArchive(key, "discarded"));
+    if (key && !(await this.archiveJournal(key, "discarded"))) return;
+    if (gen !== this.runGen) return;
     this.pendingJournal = null;
     this.backupDir = "";
     this.patchedImage = "";
@@ -655,7 +670,7 @@ export class Wizard {
   private persist(force = false): Promise<boolean> {
     const key = this.journalKey;
     const d = this.device;
-    if (!key || !d || this.runSteps.length === 0) return Promise.resolve(false);
+    if (!key || !d || this.runSteps.length === 0 || this.journalReadBlocked) return Promise.resolve(false);
     const now = Date.now();
     if (!force && now - this.lastJournalSave < 2000) return Promise.resolve(false);
     this.lastJournalSave = now;
@@ -687,11 +702,34 @@ export class Wizard {
     };
     const data = JSON.stringify(j);
     const completed = this.finished;
+    const gen = this.runGen;
     return this.journalWrites.push(async () => {
-      const saved = await api.journalSave(key, data);
+      let saved = false;
+      try {
+        saved = await api.journalSave(key, data);
+        saved = saved && (!completed || await api.journalArchive(key, "done"));
+      } catch { saved = false; }
+      if (gen === this.runGen && key === this.journalKey) {
+        this.journalError = saved ? "" : "진행 기록을 저장하지 못했습니다 — 앱을 종료하면 현재 단계부터 이어서 진행할 수 없을 수 있습니다";
+      }
       // Post-completion checks update the completed record, never create a resumable run.
-      return saved && (!completed || await api.journalArchive(key, "done"));
+      return saved;
     });
+  }
+
+  journalError = $state("");
+  private journalReadBlocked = false;
+  get simulationControlsVisible(): boolean { return SIMULATED_RUN && !hasLiveActions(REAL_STEPS); }
+
+  private async archiveJournal(key: string, tag: "discarded" | "done"): Promise<boolean> {
+    const gen = this.runGen;
+    let archived = false;
+    try { archived = await this.journalWrites.push(() => api.journalArchive(key, tag)); } catch { /* preserve */ }
+    if (gen === this.runGen && key === this.journalKey) {
+      this.journalReadBlocked = !archived;
+      this.journalError = archived ? "" : "기존 진행 기록을 보관하지 못했습니다 — 새 기록으로 덮어쓰지 않습니다. 다시 시도해 주세요";
+    }
+    return archived;
   }
 
   // ── 작업 중 PC 보호 (절전·Windows 종료 방지) — 실행 중·폰 확인 대기 중에는 켜고, 끝나거나 멈추면 끈다
@@ -782,6 +820,7 @@ export class Wizard {
 
   begin() {
     if (this.running || this.usbError || this.stepError) return;
+    if (this.journalReadBlocked) return this.failStep(this.journalError);
     const problem = executionPlanProblem(this.runSteps.map(s => s.id), REAL_STEPS);
     if (problem) return this.failStep(problem);
     this.running = true;
@@ -848,6 +887,7 @@ export class Wizard {
 
   /** 단계 id → 실전 엔진 (해당 REAL_STEPS가 꺼져 있으면 null → 시뮬레이션) */
   private engineFor(cur: RunStep): EngineStep | null {
+    if (!liveStepEnabled(cur.id, REAL_STEPS)) return null;
     switch (cur.id) {
       case "backup":
         // smsie 수동 완료 후 재진입하면 완결 판정으로 마무리. 기기 읽기만 하므로 창 닫기를 막지 않는다
@@ -1156,10 +1196,19 @@ export class Wizard {
   }
 
   /** 수동 개입 시작 — 이미 충족이면 안내 없이 진행, 자동 감지 가능한 항목은 감지되면 자동 진행 */
+  private openingManual = new WeakSet<RunStep>();
   private async openManual(cur: RunStep, id: ManualId) {
+    if (this.openingManual.has(cur)) return;
+    this.openingManual.add(cur);
+    try { await this.showManual(cur, id); }
+    finally { this.openingManual.delete(cur); }
+  }
+
+  private async showManual(cur: RunStep, id: ManualId) {
     const gen = this.runGen;
+    const manualDone = cur.manualDone;
     const usbReady = id === "usb-debug" && (await this.usbDebugReady());
-    if (gen !== this.runGen) return; // 확인하는 사이 중단됨
+    if (gen !== this.runGen || cur !== this.runSteps[this.cursor] || cur.manualDone !== manualDone) return;
     if (usbReady) {
       this.log(cur, "[확인] USB 디버깅 연결 확인됨 — 자동으로 진행합니다");
       cur.manualDone++;
@@ -1195,6 +1244,7 @@ export class Wizard {
     this.oemUnknownAck = false;
     if (id === "ims-check" || id === "ims-precheck") this.callChecks = [];
     this.manualCurrent = { id, ...MANUAL_TEXT[id] };
+    if (id === "smsie-export") this.smsieExportAck = false;
     this.manualSetupState = "idle";
     this.onManualOpen(id);
     this.log(cur, `[대기] 수동 개입: ${this.manualCurrent.title}`);
@@ -1222,14 +1272,18 @@ export class Wizard {
         id,
         "내보내기 파일 감지",
         async () => {
+          if (this.manualChecking) return false;
+          const watch = this.watchGeneration;
           const outcome = await api.smsieCollect(this.device?.serial, this.backupDir);
+          if (gen !== this.runGen || watch !== this.watchGeneration || this.manualCurrent?.id !== id || this.manualChecking) return false;
+          if (outcome?.summary) this.backupSummary = outcome.summary;
           if (outcome?.ready && outcome.summary) {
-            this.backupSummary = outcome.summary;
             return true;
           }
           return false;
         },
         5000,
+        false,
       );
   }
 
@@ -1438,6 +1492,7 @@ export class Wizard {
   manualChecking = $state(false);
   manualCheckError = $state("");
   manualSetupState = $state<LoadState>("idle");
+  smsieExportAck = $state(false);
   /** 리락 전 통신 확인 — 실제 발신·수신을 확인했다는 체크 */
   imsVerified = $state(false);
   callVerified = $state(false);
@@ -1540,12 +1595,15 @@ export class Wizard {
         return `폰의 연락처가 ${r.onDevice}명으로 백업(${r.backedUp}명)보다 적습니다 — 가져오기가 끝났는지 확인해 주세요`;
       }
       case "smsie-export": {
+        if (REAL_STEPS.backup && !this.smsieExportAck) return "폰 앱에서 선택한 항목 모두의 내보내기 성공 안내를 먼저 확인해 주세요";
         // 산출물 수신 확인 — 수집이 합쳐지면 완결 여부도 갱신
-        const outcome = await api.smsieCollect(this.device?.serial, this.backupDir);
+        const outcome = await api.smsieCollect(this.device?.serial, this.backupDir, this.smsieExportAck);
         if (outcome?.ready && outcome.summary) {
+          if (outcome.cleanupWarning) this.log(this.runSteps[this.cursor], `[경고] PC 백업은 완료됐지만 폰 임시 사본 정리에 실패했습니다: ${outcome.cleanupWarning}`);
           this.backupSummary = outcome.summary;
           return null;
         }
+        if (outcome?.summary?.errors.length) return outcome.summary.errors.join(" / ");
         if (outcome === null && !SIMULATED_RUN) {
           return "산출 파일 확인에 실패했습니다 — 폰 연결과 폴더 선택(xvolte-smsie)을 확인해 주세요";
         }
@@ -1623,7 +1681,8 @@ export class Wizard {
   /** 입력형 수동 개입은 값이 채워져야 완료 가능 */
   get manualInputReady(): boolean {
     const m = this.manualCurrent;
-    if ((m?.id === "smsie-export" && REAL_STEPS.backup) || (m?.id === "smsie-import" && REAL_STEPS.restore)) return this.manualSetupState === "done";
+    if (m?.id === "smsie-export" && REAL_STEPS.backup) return this.manualSetupState === "done" && this.smsieExportAck;
+    if (m?.id === "smsie-import" && REAL_STEPS.restore) return this.manualSetupState === "done";
     if (m?.id === "backup-notice") return this.backupNoticeAck;
     if (m?.id === "ims-precheck") return this.callAck;
     if (m?.id === "oem-toggle") return this.prepMissing.length === 0 && (this.prepUnknown.length === 0 || this.oemUnknownAck) && !this.prepChecking;
@@ -2057,20 +2116,18 @@ export class Wizard {
       this.log(cur, "[게이트] 백업 선택 없음 — 실행 전 이중 확인으로 진행");
       return resume();
     }
-    if (this.backupSummary?.complete) {
-      this.log(cur, "[게이트] 이번 실행의 백업 완결 확인 — 진행");
-      return resume();
-    }
     if (this.backupDir) {
       // 재개·이어받기 등: 기존 폴더를 파일 존재·크기·해시 대조로 재검사
       const s = await api.backupManifestCheck(this.backupDir);
       if (gen !== this.runGen) return; // 그사이 중단됨
-      if (s?.complete) {
+      const key = await this.deviceKeyHex();
+      if (gen !== this.runGen) return;
+      if (s?.complete && key && s.deviceKey?.toLowerCase() === key) {
         this.backupSummary = s;
         this.log(cur, "[게이트] 기존 백업 완결 재검사 통과(파일·해시 대조)");
         return resume();
       }
-      const errs = s?.errors.length ? s.errors.join(" / ") : "완결 아님";
+      const errs = s?.complete ? "백업 원본 기기와 현재 기기가 다르거나 식별 기록이 없습니다" : s?.errors.length ? s.errors.join(" / ") : "완결 아님";
       return this.failStep(`백업 완결 게이트 실패 — ${errs}. 백업 단계를 다시 진행해 주세요`);
     }
     this.failStep("백업이 완결되지 않아 파괴 단계를 진행할 수 없습니다 — 백업 단계를 먼저 끝내주세요");
@@ -2431,6 +2488,32 @@ export class Wizard {
     this.stepError = "";
     this.runGen++;
     this.begin();
+  }
+
+  get corruptRelockHistory(): boolean {
+    return this.runSteps[this.cursor]?.id === "relock" && this.stepError.includes("FLASH_HISTORY_CORRUPT|");
+  }
+
+  async archiveFlashHistory() {
+    if (!this.corruptRelockHistory || this.busy > 0 || this.runInDanger) return;
+    const gen = this.runGen;
+    const result = await this.track(api.flashHistoryArchive(true));
+    if (gen !== this.runGen) return;
+    if (!result.ok) { this.stepError = `FLASH_HISTORY_CORRUPT|${result.error}`; return; }
+    const index = this.runSteps.findIndex(s => s.id === "unroot");
+    this.log(this.runSteps[this.cursor], `[이력 보관] ${result.value}`);
+    if (index < 0) {
+      this.stepError = "손상 이력을 보관했습니다 — 순정 양 슬롯을 다시 기록하는 계획을 만들어 주세요";
+      return;
+    }
+    for (let i = index; i <= this.cursor; i++) {
+      Object.assign(this.runSteps[i], { status: "pending", progress: 0, manualDone: 0, sub: undefined });
+    }
+    this.cursor = index;
+    this.stepError = "";
+    this.runGen++;
+    this.log(this.runSteps[index], "[안내] 폰을 OS로 부팅해 USB 디버깅을 연결한 다음 [이어서]를 누르세요 — 순정 복원과 양 슬롯 검증을 다시 진행합니다");
+    await this.persist(true);
   }
 
   /** 통신 확인 실패 시 VoLTE 적용부터 다시 (리락 전이라 루트가 남아 있음) */

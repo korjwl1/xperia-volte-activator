@@ -189,16 +189,21 @@ fn central_directory_offset(apk: &[u8]) -> Result<usize, String> {
     let lowest = apk.len().saturating_sub(EOCD_MIN + 0xFFFF);
     let eocd = (lowest..=apk.len() - EOCD_MIN)
         .rev()
-        .find(|&i| apk[i..i + 4] == [0x50, 0x4b, 0x05, 0x06])
+        .find(|&i| {
+            apk[i..i + 4] == [0x50, 0x4b, 0x05, 0x06]
+                && i + EOCD_MIN + u16::from_le_bytes([apk[i + 20], apk[i + 21]]) as usize
+                    == apk.len()
+        })
         .ok_or("APK 끝 정보(EOCD)를 찾을 수 없습니다")?;
     let offset = u32_at(apk, eocd + 16)?;
-    if offset == u32::MAX || offset as usize > eocd {
+    let cd_size = u32_at(apk, eocd + 12)? as usize;
+    if offset == u32::MAX || (offset as usize).checked_add(cd_size) != Some(eocd) {
         return Err("APK central directory 위치가 올바르지 않습니다".into());
     }
     Ok(offset as usize)
 }
 
-/// v2·v3 블록 각각에서 첫 서명자의 첫 인증서(DER) SHA-256을 모은다.
+/// v2·v3 블록의 모든 서명자에서 인증서 체인의 첫 인증서(DER) SHA-256을 모은다.
 /// 서명 블록이 없으면(v1 전용) 실패 — 핀을 확인할 근거가 없다.
 pub fn signer_cert_sha256(apk: &[u8]) -> Result<Vec<String>, String> {
     let cd = central_directory_offset(apk)?;
@@ -206,6 +211,9 @@ pub fn signer_cert_sha256(apk: &[u8]) -> Result<Vec<String>, String> {
         return Err("APK 서명 블록(v2/v3)이 없습니다".into());
     }
     let size = usize::try_from(u64_at(apk, cd - 24)?).map_err(|_| MALFORMED)?;
+    if size < 24 {
+        return Err(MALFORMED.into());
+    }
     // 블록 = [size u64][쌍들][size u64][magic 16] — 앞쪽 size 필드까지 포함한 시작 위치
     let start = cd
         .checked_sub(size)
@@ -214,7 +222,7 @@ pub fn signer_cert_sha256(apk: &[u8]) -> Result<Vec<String>, String> {
     if u64_at(apk, start)? != size as u64 {
         return Err(MALFORMED.into());
     }
-    let mut pairs = &apk[start + 8..cd - 24];
+    let mut pairs = apk.get(start + 8..cd - 24).ok_or(MALFORMED)?;
     let mut certs = Vec::new();
     while !pairs.is_empty() {
         let len = usize::try_from(u64_at(pairs, 0)?).map_err(|_| MALFORMED)?;
@@ -226,16 +234,22 @@ pub fn signer_cert_sha256(apk: &[u8]) -> Result<Vec<String>, String> {
             continue;
         }
         // 값 = signers(접두) → 첫 signer(접두) → signed data(접두) → digests(접두) → certificates(접두) → 첫 인증서(접두)
-        let (signers, _) = prefixed(&pair[4..])?;
-        let (signer, _) = prefixed(signers)?;
-        let (signed_data, _) = prefixed(signer)?;
-        let (_digests, rest) = prefixed(signed_data)?;
-        let (certificates, _) = prefixed(rest)?;
-        let (cert, _) = prefixed(certificates)?;
-        if cert.is_empty() {
+        let (mut signers, trailing) = prefixed(&pair[4..])?;
+        if signers.is_empty() || !trailing.is_empty() {
             return Err(MALFORMED.into());
         }
-        certs.push(sha256_hex(cert));
+        while !signers.is_empty() {
+            let (signer, remaining) = prefixed(signers)?;
+            signers = remaining;
+            let (signed_data, _) = prefixed(signer)?;
+            let (_digests, rest) = prefixed(signed_data)?;
+            let (certificates, _) = prefixed(rest)?;
+            let (cert, _) = prefixed(certificates)?;
+            if cert.is_empty() {
+                return Err(MALFORMED.into());
+            }
+            certs.push(sha256_hex(cert));
+        }
     }
     if certs.is_empty() {
         return Err("APK 서명 블록(v2/v3)이 없습니다".into());
@@ -288,10 +302,18 @@ pub(crate) mod tests {
 
     /// 지정한 인증서로 v2(그리고 선택적으로 v3) 서명 블록을 가진 최소 APK(ZIP) 바이트
     pub(crate) fn signed_apk(cert: &[u8], with_v3: bool) -> Vec<u8> {
+        signed_apk_signers(&[cert], with_v3)
+    }
+
+    fn signed_apk_signers(certs: &[&[u8]], with_v3: bool) -> Vec<u8> {
         let value = |id: u32| {
-            let signed_data = [prefix(&[]), prefix(&prefix(cert))].concat();
-            let signer = prefix(&signed_data);
-            let signers = prefix(&prefix(&signer));
+            let mut signers = Vec::new();
+            for cert in certs {
+                let signed_data = [prefix(&[]), prefix(&prefix(cert))].concat();
+                let signer = prefix(&signed_data);
+                signers.extend(prefix(&signer));
+            }
+            let signers = prefix(&signers);
             let mut pair = id.to_le_bytes().to_vec();
             pair.extend_from_slice(&signers);
             let mut out = (pair.len() as u64).to_le_bytes().to_vec();
@@ -320,6 +342,45 @@ pub(crate) mod tests {
         eocd.extend([0u8; 2]);
         apk.extend(eocd);
         apk
+    }
+
+    #[test]
+    fn adversarial_small_signing_block_is_an_error_not_a_panic() {
+        let mut apk = vec![0u8; 64];
+        apk[40..48].copy_from_slice(&16u64.to_le_bytes());
+        apk[48..64].copy_from_slice(SIG_BLOCK_MAGIC);
+        let mut eocd = vec![0u8; 22];
+        eocd[..4].copy_from_slice(b"PK\x05\x06");
+        eocd[16..20].copy_from_slice(&64u32.to_le_bytes());
+        apk.extend(eocd);
+        assert!(std::panic::catch_unwind(|| signer_cert_sha256(&apk))
+            .unwrap()
+            .is_err());
+    }
+
+    #[test]
+    fn adversarial_additional_unpinned_signer_is_rejected() {
+        let apk = signed_apk_signers(&[b"trusted", b"foreign"], true);
+        assert_eq!(signer_cert_sha256(&apk).unwrap().len(), 4);
+        assert!(check_pins(&apk, &[&sha256_hex(b"trusted")]).is_err());
+        assert!(check_pins(&apk, &[&sha256_hex(b"trusted"), &sha256_hex(b"foreign")]).is_ok());
+    }
+
+    #[test]
+    fn adversarial_truncation_and_length_mutations_never_panic() {
+        let apk = signed_apk_signers(&[b"trusted", b"foreign"], true);
+        for n in 0..apk.len() {
+            assert!(std::panic::catch_unwind(|| signer_cert_sha256(&apk[..n]))
+                .unwrap()
+                .is_err());
+        }
+        for i in 0..apk.len() {
+            for value in [0, 0xff] {
+                let mut mutated = apk.clone();
+                mutated[i] = value;
+                assert!(std::panic::catch_unwind(|| signer_cert_sha256(&mutated)).is_ok());
+            }
+        }
     }
 
     #[test]

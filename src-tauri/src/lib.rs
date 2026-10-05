@@ -19,6 +19,47 @@ mod storage;
 mod tasks;
 mod usbmode;
 
+#[cfg(all(
+    test,
+    not(any(
+        feature = "fastboot-write",
+        feature = "root-write",
+        feature = "efs-write"
+    ))
+))]
+mod release_tests {
+    #[test]
+    fn default_build_rejects_device_mutations_before_transport_lookup() {
+        let events = crate::events::Events::callback(|_, _| Ok(()));
+        tauri::async_runtime::block_on(async {
+            assert!(crate::fastboot::fastboot_flash_with_events(
+                events.clone(),
+                "init_boot".into(),
+                "missing.img".into(),
+                true,
+                "phone".into(),
+                "a".repeat(64)
+            )
+            .await
+            .is_err());
+            assert!(crate::fastboot::fastboot_unlock_with_events(
+                events,
+                "1234567890abcdef".into(),
+                true,
+                "phone".into()
+            )
+            .await
+            .is_err());
+            assert!(
+                crate::magisk::root_reboot(Some("phone".into()), "os".into())
+                    .await
+                    .is_err()
+            );
+            assert!(crate::efs::efs_preflight("COM999".into()).await.is_err());
+        });
+    }
+}
+
 #[cfg(feature = "dev-cli")]
 pub mod dev_cli;
 
@@ -76,6 +117,7 @@ pub fn run() {
             fastboot::fastboot_getvar,
             fastboot::fastboot_unlock,
             fastboot::fastboot_lock,
+            fastboot::flash_history_archive,
             fastboot::fastboot_flash,
             fastboot::fastboot_reboot,
             fastboot::relock_gate_check,

@@ -96,6 +96,10 @@ impl FakeADBDevice {
         );
     }
 
+    pub fn remove_file(&mut self, path: &str) {
+        self.files.remove(path);
+    }
+
     pub fn add_symlink(&mut self, path: &str, target: &str) {
         self.symlinks.insert(path.to_string(), target.to_string());
     }

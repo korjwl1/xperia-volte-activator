@@ -654,6 +654,10 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
             .trim_end_matches(" release-keys")
             .to_string();
     }
+    if let Some(dir) = crate::app_paths::data_dir() {
+        let key = crate::boot_image::sha256(serial.trim().as_bytes());
+        crate::boot_image::observe_firmware(&dir, &key, &get("ro.build.fingerprint"))?;
+    }
     Ok(DeviceOut {
         sony: get("ro.product.manufacturer").eq_ignore_ascii_case("sony"),
         state: "device".into(),

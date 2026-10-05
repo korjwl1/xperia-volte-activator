@@ -13,7 +13,14 @@ impl WriteOperation {
         WRITING
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .map_err(|_| "다른 기기 변경 작업이 진행 중입니다")?;
-        match process_lock(&std::env::temp_dir().join("xperia-volte-device-io.lock")) {
+        #[cfg(not(test))]
+        let lock_path = std::env::temp_dir().join("xperia-volte-device-io.lock");
+        #[cfg(test)]
+        let lock_path = std::env::temp_dir().join(format!(
+            "xperia-volte-test-{}-device-io.lock",
+            std::process::id()
+        ));
+        match process_lock(&lock_path) {
             Ok(file) => Ok(Self {
                 _process_lock: file,
             }),

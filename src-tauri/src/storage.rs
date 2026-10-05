@@ -24,6 +24,17 @@ pub fn read_bounded(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, String
 }
 
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
+    atomic_file(path, |file, _| {
+        file.write_all(data)
+            .map_err(|e| format!("파일 쓰기 실패: {e}"))
+    })
+}
+
+/// Streaming writes share the same publish-after-success rule as small records.
+pub fn atomic_file<T>(
+    path: &Path,
+    write: impl FnOnce(&mut std::fs::File, &Path) -> Result<T, String>,
+) -> Result<T, String> {
     let parent = path.parent().ok_or("저장 경로에 부모 폴더가 없습니다")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("저장 폴더 생성 실패: {e}"))?;
     // 비정상 종료로 남은 임시 파일과 PID가 겹칠 수 있다 — 다음 번호로 다시 시도한다.
@@ -49,13 +60,16 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
             }
         }
     };
-    let result = (|| {
-        file.write_all(data)
-            .and_then(|_| file.sync_all())
+    let result = write(&mut file, &temporary).and_then(|value| {
+        file.sync_all()
             .map_err(|e| format!("파일 쓰기 실패: {e}"))?;
-        drop(file);
-        std::fs::rename(&temporary, path).map_err(|e| format!("파일 교체 실패: {e}"))
-    })();
+        Ok(value)
+    });
+    drop(file);
+    let result = result.and_then(|value| {
+        std::fs::rename(&temporary, path).map_err(|e| format!("파일 교체 실패: {e}"))?;
+        Ok(value)
+    });
     if result.is_err() {
         let _ = std::fs::remove_file(&temporary);
     }
@@ -101,6 +115,20 @@ mod tests {
         atomic_write(&path, b"old").unwrap();
         atomic_write(&path, b"new").unwrap();
         assert_eq!(std::fs::read(path).unwrap(), b"new");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn failed_stream_keeps_previous_copy_and_cleans_only_its_temporary() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("copy");
+        atomic_write(&path, b"good").unwrap();
+        let result: Result<(), String> = atomic_file(&path, |file, _| {
+            file.write_all(b"partial").unwrap();
+            Err("interrupted".into())
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(path).unwrap(), b"good");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

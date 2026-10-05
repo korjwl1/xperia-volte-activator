@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Modal from "$lib/components/Modal.svelte";
   import CommunicationPanel from "$lib/components/CommunicationPanel.svelte";
   import { Button } from "$lib/components/ui/button";
   import { Card, CardContent, CardHeader, CardTitle } from "$lib/components/ui/card";
@@ -76,6 +77,9 @@
         <div class="flex gap-2">
           <Button size="sm" onclick={() => wizard.retryStep()}>이 단계 다시 시도</Button>
           <Button size="sm" variant="outline" onclick={() => wizard.abort()}>중단</Button>
+          {#if wizard.corruptRelockHistory}
+            <Button size="sm" variant="outline" disabled={wizard.busy > 0} onclick={() => wizard.archiveFlashHistory()}>손상 이력 보관 후 순정 복원부터 재검사</Button>
+          {/if}
         </div>
       </AlertDescription>
     </Alert>
@@ -110,6 +114,7 @@
           <div class="text-[11px] text-muted-foreground {currentStep ? '' : 'invisible'}">{Math.round((currentStep?.progress ?? 0) * 100)}%</div>
         </div>
         <div class="flex items-center gap-2 shrink-0">
+          {#if wizard.simulationControlsVisible}
           <div class="flex items-center gap-1.5 mr-1">
             <Switch id="sim-err" checked={wizard.simulateUsbError} onCheckedChange={(v: boolean) => (wizard.simulateUsbError = v)} />
             <Label for="sim-err" class="text-[11px] text-muted-foreground cursor-pointer">USB 오류 시뮬</Label>
@@ -118,6 +123,7 @@
             <Switch id="sim-efs" checked={wizard.simulateEfsFail} onCheckedChange={(v: boolean) => (wizard.simulateEfsFail = v)} />
             <Label for="sim-efs" class="text-[11px] text-muted-foreground cursor-pointer">EFS 실패 시뮬</Label>
           </div>
+          {/if}
           {#if !wizard.finished}
             {#if wizard.running}
               <Button size="sm" variant="outline" onclick={() => wizard.pause()}><Pause size={13} class="mr-1" />일시정지</Button>
@@ -168,10 +174,10 @@
   <BackupNotice />
 {:else if wizard.manualCurrent}
   {@const guide = GUIDES[wizard.manualCurrent.id]}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" role="dialog">
+  <Modal title={wizard.manualCurrent.title} onClose={() => { if (wizard.busy === 0 && !wizard.runInDanger) wizard.abort(); }} class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
     <Card class="w-full max-w-lg elev-3 max-h-[calc(100vh-2rem)] flex flex-col">
       <CardHeader class="shrink-0">
-        <CardTitle class="text-base">✋ {wizard.manualCurrent.title}</CardTitle>
+        <CardTitle class="text-base">{wizard.manualCurrent.title}</CardTitle>
       </CardHeader>
       <CardContent class="space-y-4 overflow-y-auto min-h-0">
         {#if guide}
@@ -186,6 +192,13 @@
               </li>
             {/each}
           </ol>
+        {/if}
+        {#if wizard.manualCurrent.id === "smsie-export"}
+          <label class="flex items-start gap-2 rounded-lg border p-3 text-xs">
+            <Checkbox checked={wizard.smsieExportAck} onCheckedChange={(v) => { wizard.smsieExportAck = v === true; }} />
+            폰 앱에서 선택한 문자·통화 기록 모두의 내보내기 성공 안내를 확인했습니다
+          </label>
+          <p class="text-xs text-muted-foreground">파일 검사 후 [확인하고 진행]을 누르면 PC 백업을 완료 처리하고 폰의 임시 사본을 정리합니다.</p>
         {/if}
         {#if wizard.manualCurrent.id === "oem-toggle" && wizard.device}
           {@const p = wizard.device.prep}
@@ -368,5 +381,5 @@
         </div>
       </CardContent>
     </Card>
-  </div>
+  </Modal>
 {/if}

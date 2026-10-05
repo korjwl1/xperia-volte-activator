@@ -62,6 +62,7 @@ requests! {
     FastbootLock("fastboot_lock", true, cfg!(feature = "fastboot-write")) { confirm: bool = true, partition: String = "init_boot", stock_path: String = "<stock image>", expected_serial: String = "sha256:<serialKey>" }
     FastbootReboot("fastboot_reboot", true, cfg!(feature = "fastboot-write")) { target: String = "os", expected_serial: String = "sha256:<serialKey>" }
     RelockGateCheck("relock_gate_check", false, true) { partition: String = "init_boot", stock_path: String = "<stock image>", device_key: Option<String> = Value::Null }
+    FlashHistoryArchive("flash_history_archive", false, true) { confirm: bool = false }
     EfsValidatePresets("efs_validate_presets", false, true) { preset_dirs: Vec<String> = json!(["<approved balance preset directory>"]) }
     EfsDiagOpen("efs_diag_open", true, cfg!(feature = "efs-write")) { serial: String = "sha256:<serialKey>" }
     EfsPreflight("efs_preflight", true, cfg!(feature = "efs-write")) { port: String = "COM<number>" }
@@ -75,7 +76,7 @@ requests! {
     BackupManifestCheck("backup_manifest_check", false, true) { dir: String = "<backup folder>" }
     ContactsRestoreCheck("contacts_restore_check", false, true) { serial: String = "sha256:<serialKey>", dir: String = "<backup folder>" }
     SmsiePrepare("smsie_prepare", true, true) { serial: String = "sha256:<serialKey>", download: bool = true }
-    SmsieCollect("smsie_collect", true, true) { serial: String = "sha256:<serialKey>", backup_dir: String = "<backup folder>" }
+    SmsieCollect("smsie_collect", true, true) { serial: String = "sha256:<serialKey>", backup_dir: String = "<backup folder>", confirm_complete: Option<bool> = false }
     RestoreRun("restore_run", true, true) { serial: String = "sha256:<serialKey>", dir: String = "<backup folder>", items: Vec<String> = json!(["dcim"]) }
     SmsieRestoreStage("smsie_restore_stage", true, true) { serial: String = "sha256:<serialKey>", dir: String = "<backup folder>", items: Vec<String> = json!(["sms", "calllog"]) }
     SmsieRestoreFinish("smsie_restore_finish", true, true) { serial: String = "sha256:<serialKey>" }
@@ -237,6 +238,9 @@ async fn dispatch(req: Request, events: Events) -> Result<Value, Value> {
             stock_path,
             device_key,
         } => packed(fastboot::relock_gate_check(partition, stock_path, device_key).await),
+        Request::FlashHistoryArchive { confirm } => {
+            packed(fastboot::flash_history_archive(confirm).await)
+        }
         Request::EfsValidatePresets { preset_dirs } => {
             packed(efs::efs_validate_presets(preset_dirs).await)
         }
@@ -279,9 +283,11 @@ async fn dispatch(req: Request, events: Events) -> Result<Value, Value> {
         Request::SmsiePrepare { serial, download } => {
             packed(backup::smsie_prepare(Some(serial), download).await)
         }
-        Request::SmsieCollect { serial, backup_dir } => {
-            packed(backup::smsie_collect(Some(serial), backup_dir).await)
-        }
+        Request::SmsieCollect {
+            serial,
+            backup_dir,
+            confirm_complete,
+        } => packed(backup::smsie_collect(Some(serial), backup_dir, confirm_complete).await),
         Request::RestoreRun { serial, dir, items } => {
             packed(backup::restore_run_with_events(events, Some(serial), dir, items).await)
         }
@@ -512,6 +518,7 @@ fn pc_only(command: &str) -> bool {
             | "firmware_dir_check"
             | "magisk_prepare"
             | "relock_gate_check"
+            | "flash_history_archive"
             | "efs_validate_presets"
             | "backup_manifest_check"
     )
@@ -551,7 +558,7 @@ async fn backup_gate(
                 };
                 return Err(format!("백업이 완결되지 않아 초기화 단계를 실행하지 않습니다 — {reason}"));
             }
-            Ok(Some(json!({"backup": "complete", "files": summary.files, "bytes": summary.bytes})))
+            Ok(Some(json!({"backup": "complete", "files": summary.files, "bytes": summary.bytes, "deviceKey": summary.device_key})))
         }
     }
 }
@@ -568,6 +575,10 @@ fn write_session(data_dir: &Path, devices: &Value) -> Result<(), String> {
         .filter_map(|d| d.get("serial").and_then(Value::as_str))
         .map(serial_key)
         .collect();
+    // A reboot/fastboot disconnect is not a change of the selected ADB device.
+    if keys.is_empty() {
+        return Ok(());
+    }
     write_record(
         &data_dir.join(SESSION_FILE),
         &json!({"version": 1, "at": now(), "adbSerialKeys": keys}),
@@ -592,6 +603,19 @@ fn check_gui_parity(adb_keys: &[String], expected_serial: &str) -> Result<(), St
     let key = serial_key(expected_serial);
     if !adb_keys.iter().any(|k| k.eq_ignore_ascii_case(&key)) {
         return Err("fastboot 기대값이 마지막 device_list의 ADB serial과 다릅니다 — 앱은 ADB serial을 기대값으로 넘기므로 이 단계는 앱에서 거부됩니다(앱과 CLI 결과 불일치)".into());
+    }
+    Ok(())
+}
+
+fn check_backup_device(gate: &Value, expected_serial: &str) -> Result<(), String> {
+    if gate["backup"] != "complete" {
+        return Ok(());
+    }
+    if gate["deviceKey"]
+        .as_str()
+        .is_none_or(|key| !key.eq_ignore_ascii_case(&serial_key(expected_serial)))
+    {
+        return Err("백업 원본 기기가 작업 대상과 다르거나 기기 식별 기록이 없습니다".into());
     }
     Ok(())
 }
@@ -699,6 +723,10 @@ async fn run(
         resolve_targets(&mut value, events.clone(), &adb_keys)
             .await
             .map_err(|e| json!(e))?;
+        if let Some(gate) = record.get("backupGate") {
+            let serial = value["args"]["expectedSerial"].as_str().unwrap_or_default();
+            check_backup_device(gate, serial).map_err(|e| json!(e))?;
+        }
         log.lock()
             .map_err(|_| json!("로그 잠금 실패"))?
             .redactor
@@ -966,6 +994,33 @@ mod tests {
         assert!(
             pc_only("relock_gate_check") && !pc_only("device_list") && !pc_only("fastboot_unlock")
         );
+    }
+
+    #[test]
+    fn adversarial_foreign_or_legacy_backup_does_not_authorize_wiping() {
+        let gate = json!({"backup":"complete", "deviceKey":serial_key("phone-A")});
+        assert!(check_backup_device(&gate, "phone-A").is_ok());
+        assert!(check_backup_device(&gate, "phone-B").is_err());
+        assert!(check_backup_device(&json!({"backup":"complete"}), "phone-A").is_err());
+        assert!(check_backup_device(&json!({"backup":"skipped-by-operator"}), "phone-A").is_ok());
+    }
+
+    #[test]
+    fn adversarial_empty_adb_scan_preserves_fastboot_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        write_session(dir.path(), &json!([{"state":"device", "serial":"phone-A"}])).unwrap();
+        let previous = std::fs::read(dir.path().join(SESSION_FILE)).unwrap();
+        for devices in [
+            json!([]),
+            json!([{"state":"unauthorized", "serial":"phone-A"}]),
+        ] {
+            write_session(dir.path(), &devices).unwrap();
+            assert_eq!(
+                std::fs::read(dir.path().join(SESSION_FILE)).unwrap(),
+                previous
+            );
+            assert!(check_gui_parity(&read_session(dir.path()), "phone-A").is_ok());
+        }
     }
 
     #[cfg(windows)]

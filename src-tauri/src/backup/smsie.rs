@@ -184,11 +184,21 @@ pub fn prepare(
     dev: &mut dyn ADBDeviceExt,
     apk: Option<&(PathBuf, String)>,
 ) -> Result<Vec<String>, String> {
+    prepare_with_pins(dev, apk, apk_verify::SMSIE_CERT_SHA256)
+}
+
+fn prepare_with_pins(
+    dev: &mut dyn ADBDeviceExt,
+    apk: Option<&(PathBuf, String)>,
+    pins: &[&str],
+) -> Result<Vec<String>, String> {
     let mut log = Vec::new();
     if !installed(dev)? {
         let Some((apk, sha)) = apk else {
             return Err("SMS Import/Export 앱이 설치되어 있지 않습니다".into());
         };
+        apk_verify::load_cached(apk, Some(sha), pins, MAX_APK as usize)
+            .ok_or("sms-ie APK가 준비 후 변경됐거나 검증된 캐시가 아닙니다")?;
         dev.install(&apk, None)
             .map_err(|e| format!("앱 설치 실패: {e}"))?;
         // 설치한 APK(GitHub 다이제스트·서명 핀 검증 완료)의 해시를 기록한다
@@ -223,9 +233,9 @@ pub fn prepare(
 /// 임시 폴더의 산출물을 item에 매핑 — 파일명 접두사로 구분
 fn item_for(name: &str) -> Option<&'static str> {
     let lower = name.to_lowercase();
-    if lower.starts_with(MESSAGES_PREFIX) {
+    if lower.starts_with(MESSAGES_PREFIX) && lower.ends_with(".zip") {
         Some("sms")
-    } else if lower.starts_with(CALLLOG_PREFIX) {
+    } else if lower.starts_with(CALLLOG_PREFIX) && lower.ends_with(".json") {
         Some("calllog")
     } else {
         None
@@ -233,7 +243,7 @@ fn item_for(name: &str) -> Option<&'static str> {
 }
 
 /// 수집 — 임시 폴더의 파일을 전부 받아(smsie/) 항목 기록 병합. 비었으면 not_ready.
-/// `selected`(sms/calllog 중 백업에 고른 항목)가 모두 완료되면 기기 임시 폴더를 지운다.
+/// 삭제는 선택 항목 검증과 manifest 저장이 모두 끝난 뒤 명령 층에서 실행한다.
 pub fn collect(
     dev: &mut dyn ADBDeviceExt,
     backup_root: &Path,
@@ -267,13 +277,26 @@ pub fn collect(
         let local_rel = format!("smsie/{name}");
         // 파일 백업과 같은 경로 — 해시·mtime 보존, 4GiB 이상 크기(stat 재확인)·실패 시 반쪽 파일 정리.
         // 받을 수 없는 이름 등 개별 실패는 그 파일의 오류로 남기고 나머지는 계속 받는다.
-        let entry = super::puller::pull_to_disk(
+        let entry = super::puller::pull_to_disk_checked(
             dev,
             &remote,
             Path::new(&local_rel),
             backup_root,
             size,
             mtime,
+            &|dev, path| {
+                let id = item_for(&name).ok_or("알 수 없는 내보내기 파일")?;
+                super::smsie_export::validate(path, id)?;
+                let stat = dev
+                    .stat_extended(&remote)
+                    .map_err(|e| e.to_string())?
+                    .ok_or("내보내기 파일 상태를 확인할 수 없습니다")?;
+                let local_size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+                if stat.size != local_size || stat.mtime != mtime {
+                    return Err("내보내기가 진행 중입니다 — 완료 후 다시 확인하세요".into());
+                }
+                Ok(())
+            },
         );
         match item_for(&name) {
             Some(id) => {
@@ -319,17 +342,25 @@ pub fn collect(
             rec.errors.push("이 항목의 산출 파일을 찾지 못했습니다 — 앱에서 해당 데이터를 내보냈는지 확인해 주세요".into());
         }
     }
-    // 임시 폴더 정리 — 고정 경로만. 고른 항목이 전부 끝났을 때(문자만 고른 경우도) 지워
-    // 개인 데이터 사본이 기기에 남거나 다음 "그 외 전체" 백업에 섞이지 않게 한다
-    let selected_done = !selected.is_empty()
-        && records
-            .iter()
-            .filter(|(id, _)| selected.contains(&id.as_str()))
-            .all(|(_, item)| item.status == ItemStatus::Done);
-    if selected_done {
-        let _ = run(dev, &format!("rm -rf {DEVICE_TMP_DIR}"));
-    }
+    let _ = selected;
     Ok(CollectState::Records(records))
+}
+
+pub(super) fn selected_done(records: &[(String, ItemRecord)], selected: &[&str]) -> bool {
+    !selected.is_empty()
+        && selected.iter().all(|id| {
+            records.iter().any(|(rid, item)| {
+                rid == id
+                    && item.status == ItemStatus::Done
+                    && item.errors.is_empty()
+                    && !item.entries.is_empty()
+                    && item.entries.iter().all(|e| e.error.is_none())
+            })
+        })
+}
+
+pub(super) fn cleanup_exports(dev: &mut dyn ADBDeviceExt) -> Result<(), String> {
+    run(dev, &format!("rm -rf {DEVICE_TMP_DIR}")).map(|_| ())
 }
 
 pub enum CollectState {
@@ -346,6 +377,7 @@ pub fn restore_stage(
     backup_root: &Path,
     items: &[String],
     state_dir: &Path,
+    apk: Option<&(PathBuf, String)>,
 ) -> Result<String, String> {
     super::runner::validate_items(items)?;
     let mut manifest = super::model::load_manifest(backup_root)?;
@@ -377,13 +409,15 @@ pub fn restore_stage(
             if name.contains(['/', '\\']) || item_for(name) != Some(item.id.as_str()) {
                 return Err("문자 백업 파일 형식이 잘못됐습니다".into());
             }
+            let path = super::paths::existing_file(backup_root, &entry.local)?;
+            super::smsie_export::validate(&path, &item.id)?;
             names.push(name.to_string());
         }
     }
     if names.is_empty() {
         return Err("백업된 문자·통화 기록 파일이 없습니다".into());
     }
-    run(dev, &format!("mkdir -p {DEVICE_TMP_DIR}"))?;
+    prepare(dev, apk)?;
     for name in &names {
         let path = crate::backup::paths::existing_file(backup_root, &format!("smsie/{name}"))?;
         let remote = format!("{DEVICE_TMP_DIR}/{name}");
@@ -504,7 +538,7 @@ mod tests {
         d.add_dir(DEVICE_TMP_DIR);
         d.add_file(
             &format!("{DEVICE_TMP_DIR}/messages-2026-10-03.zip"),
-            b"MZzip",
+            &super::super::smsie_export::tests::export_zip(b"{}\n"),
             1700000000,
             0o644,
         );
@@ -523,10 +557,7 @@ mod tests {
                 assert_eq!(calls.1.status, ItemStatus::Done);
                 assert_eq!(sms.1.files, 1);
                 assert!(tmp.path().join("smsie/messages-2026-10-03.zip").exists());
-                assert!(d
-                    .shell_calls
-                    .iter()
-                    .any(|c| c.contains("rm -rf /sdcard/xvolte-smsie")));
+                assert!(!d.shell_calls.iter().any(|c| c.starts_with("rm -rf")));
             }
             _ => panic!("records 여야 함"),
         }
@@ -535,7 +566,7 @@ mod tests {
     #[test]
     fn restore_role_goes_back_to_previous_holder() {
         // 실제 상태가 바뀌는 가짜 역할 서비스로 원복까지 검사한다.
-        let mut d = FakeADBDevice::new();
+        let mut d = dev_ready();
         d.answer_shell("getprop ro.serialno", "FAKE-A");
         d.sms_role_holder = Some(Some("com.google.android.apps.messaging".into()));
         d.answer_shell("mkdir", "");
@@ -543,7 +574,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let state = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("smsie")).unwrap();
-        std::fs::write(tmp.path().join("smsie/messages-1.zip"), b"z").unwrap();
+        std::fs::write(
+            tmp.path().join("smsie/messages-1.zip"),
+            super::super::smsie_export::tests::export_zip(b"{}\n"),
+        )
+        .unwrap();
         let mut manifest = super::super::model::Manifest::new("XQ", "masked", "v", "15");
         let mut item = ItemRecord::new("sms", ItemKind::SmsIe);
         item.status = ItemStatus::Done;
@@ -551,9 +586,11 @@ mod tests {
         item.entries.push(FileEntry {
             remote: format!("{DEVICE_TMP_DIR}/messages-1.zip"),
             local: "smsie/messages-1.zip".into(),
-            size: 1,
+            size: super::super::smsie_export::tests::export_zip(b"{}\n").len() as u64,
             mtime: 0,
-            sha256: Some(hex::encode(sha2::Sha256::digest(b"z"))),
+            sha256: Some(hex::encode(sha2::Sha256::digest(
+                super::super::smsie_export::tests::export_zip(b"{}\n"),
+            ))),
             quarantined: false,
             error: None,
         });
@@ -564,11 +601,13 @@ mod tests {
             &mut d,
             tmp.path(),
             &["sms".into(), "calllog".into()],
-            state.path()
+            state.path(),
+            None
         )
         .is_err());
         assert!(d.pushed.is_empty());
-        restore_stage(&mut d, tmp.path(), &["sms".into()], state.path()).unwrap();
+        restore_stage(&mut d, tmp.path(), &["sms".into()], state.path(), None).unwrap();
+        assert!(d.shell_calls.iter().any(|c| c.starts_with("pm grant")));
         assert_eq!(d.pushed.len(), 1);
         assert!(!d
             .pushed
@@ -689,10 +728,63 @@ mod tests {
     }
 
     #[test]
+    fn adversarial_uninstalled_restore_requires_install_and_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sms-ie.apk");
+        let apk = apk_verify::tests::signed_apk(b"fixture certificate", true);
+        let sha = apk_verify::sha256_hex(&apk);
+        apk_verify::store_verified(&path, &apk, &sha).unwrap();
+        let pin = apk_verify::sha256_hex(b"fixture certificate");
+        let mut dev = FakeADBDevice::new();
+        dev.answer_shell("pm list packages", "");
+        dev.answer_shell("pm grant", "");
+        dev.answer_shell("mkdir", "");
+        let input = (path.clone(), sha);
+        assert!(prepare_with_pins(&mut dev, None, &[&pin]).is_err());
+        prepare_with_pins(&mut dev, Some(&input), &[&pin]).unwrap();
+        assert_eq!(dev.installs.len(), 1);
+        assert_eq!(
+            dev.shell_calls
+                .iter()
+                .filter(|c| c.starts_with("pm grant"))
+                .count(),
+            5
+        );
+        std::fs::write(path, b"changed").unwrap();
+        assert!(prepare_with_pins(&mut dev, Some(&input), &[&pin]).is_err());
+        assert_eq!(dev.installs.len(), 1);
+    }
+
+    #[test]
+    fn adversarial_zero_or_incomplete_export_never_authorizes_cleanup() {
+        for payload in [b"".as_slice(), b"PK\x03\x04half-written", b"not a ZIP"] {
+            let mut d = dev_ready();
+            d.add_dir(DEVICE_TMP_DIR);
+            d.add_file(&format!("{DEVICE_TMP_DIR}/messages.zip"), payload, 0, 0o644);
+            d.add_file(&format!("{DEVICE_TMP_DIR}/calls.json"), b"[]", 0, 0o644);
+            let tmp = tempfile::tempdir().unwrap();
+            let CollectState::Records(records) =
+                collect(&mut d, tmp.path(), &["sms", "calllog"]).unwrap()
+            else {
+                panic!()
+            };
+            assert!(!selected_done(&records, &["sms", "calllog"]));
+            assert!(!d.shell_calls.iter().any(|c| c.starts_with("rm -rf")));
+            assert!(!tmp.path().join("smsie/messages.zip").exists());
+        }
+        assert!(!selected_done(&[], &["sms"]));
+    }
+
+    #[test]
     fn unknown_export_cannot_become_complete() {
         let mut d = dev_ready();
         d.add_dir(DEVICE_TMP_DIR);
-        d.add_file(&format!("{DEVICE_TMP_DIR}/messages-1.zip"), b"z", 0, 0o644);
+        d.add_file(
+            &format!("{DEVICE_TMP_DIR}/messages-1.zip"),
+            &super::super::smsie_export::tests::export_zip(b"{}\n"),
+            0,
+            0o644,
+        );
         d.add_file(&format!("{DEVICE_TMP_DIR}/unknown.json"), b"[]", 0, 0o644);
         let tmp = tempfile::tempdir().unwrap();
         let CollectState::Records(records) =
@@ -712,7 +804,7 @@ mod tests {
         d.add_dir(DEVICE_TMP_DIR);
         d.add_file(
             &format!("{DEVICE_TMP_DIR}/messages-1.zip"),
-            b"z",
+            &super::super::smsie_export::tests::export_zip(b"{}\n"),
             1700000000,
             0o644,
         );
@@ -723,6 +815,8 @@ mod tests {
         assert!(!removed(&d));
         // 문자만 골랐다면 끝났다 — 개인 데이터 사본을 지운다
         collect(&mut d, tmp.path(), &["sms"]).unwrap();
+        assert!(!removed(&d));
+        cleanup_exports(&mut d).unwrap();
         assert!(removed(&d));
     }
 
@@ -732,7 +826,7 @@ mod tests {
         d.add_dir(DEVICE_TMP_DIR);
         d.add_file(
             &format!("{DEVICE_TMP_DIR}/messages-1.zip"),
-            b"z",
+            &super::super::smsie_export::tests::export_zip(b"{}\n"),
             1700000000,
             0o644,
         );

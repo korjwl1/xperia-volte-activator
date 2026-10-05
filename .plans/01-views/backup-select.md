@@ -1,5 +1,8 @@
 # 백업 및 복구 탭 (PlanReviewView 좌측 — "작업 옵션 선택")
 
+2026-10-05 최종 리뷰: 백업 전 안내는 공통 Dialog를 사용하며 포커스 제한/복귀를 지원하고 Esc는 백업 작업을 중단한다. 비주얼: 기존 pane 스크롤·MD3 토큰을 유지하고 공통 모달 접근성을 적용한다.
+
+
 ※ 별도 화면(BackupSelectView/BackupTargetView)은 삭제됨 — 이 문서는 PlanReview의 백업 탭 설계.
 
 status: implemented (mock + 실측 용량)

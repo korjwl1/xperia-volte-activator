@@ -151,6 +151,27 @@ pub(crate) fn pull_to_disk(
     expected_size: u64,
     mtime: u32,
 ) -> FileEntry {
+    pull_to_disk_checked(
+        dev,
+        remote,
+        rel,
+        backup_root,
+        expected_size,
+        mtime,
+        &|_, _| Ok(()),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn pull_to_disk_checked(
+    dev: &mut dyn ADBDeviceExt,
+    remote: &str,
+    rel: &Path,
+    backup_root: &Path,
+    expected_size: u64,
+    mtime: u32,
+    validate: &dyn Fn(&mut dyn ADBDeviceExt, &Path) -> Result<(), String>,
+) -> FileEntry {
     let dest = match crate::backup::paths::write_target(backup_root, &rel.to_string_lossy()) {
         Ok(path) => path,
         Err(e) => return error_entry(remote, expected_size, mtime, e),
@@ -170,42 +191,25 @@ pub(crate) fn pull_to_disk(
             return base;
         }
     }
-    let file = match std::fs::File::create(&dest) {
-        Ok(f) => f,
-        Err(e) => {
-            base.error = Some(format!("파일 생성 실패: {e}"));
-            return base;
+    let result = crate::storage::atomic_file(&dest, |file, temporary| {
+        let mut writer = HashingWriter::new(file);
+        dev.pull(&remote, &mut writer)
+            .map_err(|e| format!("전송 실패: {e}"))?;
+        let (_, hash, written) = writer.finish();
+        let actual = verify_size(dev, remote, expected_size, written)?;
+        validate(dev, temporary)?;
+        let ft = filetime::FileTime::from_unix_time(mtime as i64, 0);
+        filetime::set_file_mtime(temporary, ft)
+            .map_err(|e| format!("파일 수정시각 보존 실패: {e}"))?;
+        Ok((hash, actual))
+    });
+    match result {
+        Ok((hash, size)) => {
+            base.sha256 = Some(hash);
+            base.size = size;
         }
-    };
-    let mut writer = HashingWriter::new(file);
-    if let Err(e) = dev.pull(&remote, &mut writer) {
-        // 실패 시 반쪽 파일 지우기 — 완결 아닌 항목은 흔적만 남긴다
-        drop(writer);
-        let _ = std::fs::remove_file(&dest);
-        base.error = Some(format!("전송 실패: {e}"));
-        return base;
+        Err(error) => base.error = Some(error),
     }
-    let (file, sha256, written) = writer.finish();
-    if let Err(e) = file.sync_all() {
-        base.error = Some(format!("파일 디스크 저장 실패: {e}"));
-        return base;
-    }
-    drop(file);
-    match verify_size(dev, remote, expected_size, written) {
-        Ok(actual) => base.size = actual,
-        Err(e) => {
-            base.error = Some(e);
-            let _ = std::fs::remove_file(&dest);
-            return base;
-        }
-    }
-    // mtime 보존(pull -a 상당) — ctime은 NTFS 한계로 보존 안 됨(§6-1 명시)
-    let ft = filetime::FileTime::from_unix_time(mtime as i64, 0);
-    if let Err(e) = filetime::set_file_mtime(&dest, ft) {
-        base.error = Some(format!("파일 수정시각 보존 실패: {e}"));
-        return base;
-    }
-    base.sha256 = Some(sha256);
     base
 }
 
@@ -269,6 +273,37 @@ fn error_entry(remote: &str, size: u64, mtime: u32, err: String) -> FileEntry {
 mod tests {
     use super::*;
     use crate::backup::fake_device::FakeADBDevice;
+
+    #[test]
+    fn adversarial_failed_repull_does_not_truncate_a_previous_success() {
+        let root = tempfile::tempdir().unwrap();
+        let mut d = FakeADBDevice::new();
+        d.add_file("/sdcard/a", b"original", 0, 0o644);
+        let first = pull_to_disk(&mut d, "/sdcard/a", Path::new("a"), root.path(), 8, 0);
+        assert!(first.error.is_none());
+        d.add_file("/sdcard/a", b"changed", 0, 0o644);
+        d.fail_pull("/sdcard/a");
+        assert!(
+            pull_to_disk(&mut d, "/sdcard/a", Path::new("a"), root.path(), 7, 0)
+                .error
+                .is_some()
+        );
+        assert_eq!(std::fs::read(root.path().join("a")).unwrap(), b"original");
+        d.fail_pull.clear();
+        assert!(pull_to_disk_checked(
+            &mut d,
+            "/sdcard/a",
+            Path::new("a"),
+            root.path(),
+            7,
+            0,
+            &|_, _| Err("validation failed".into())
+        )
+        .error
+        .is_some());
+        assert_eq!(std::fs::read(root.path().join("a")).unwrap(), b"original");
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
 
     fn setup() -> (
         FakeADBDevice,

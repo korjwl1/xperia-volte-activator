@@ -41,6 +41,8 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin xva-dev --features dev-cli 
 
 쓰기 feature를 포함한 빌드·단계별 요청·재시작·로그 확인은 [개발 CLI 사용법](.plans/04-engine/dev-cli.md)을 따른다. MSVC 개발 셸이 필요하다. CLI는 Rust 엔진 검토용이며 화면의 전체 단계 전환은 앱에서 따로 검토한다. 단계 순서·대기 시간·기종별 파티션 선택·수동 확인 같은 흐름은 앱(TypeScript 위자드)에만 있어 CLI 결과로 보장되지 않는다. 기기 명령은 GUI 앱을 닫고 실행하고, 초기화 단계는 백업 증명 옵션이 필요하다(사용법 문서의 "실기기 세션 규칙").
 
+오프라인 실패 입력 검증과 수정 내역은 [최종 적대적 리뷰](.plans/04-engine/adversarial-review-20261005.md)에 기록합니다. 이 검토는 실기기 전체 절차 검증을 대체하지 않습니다.
+
 ## Recommended IDE Setup
 
 [VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer).
