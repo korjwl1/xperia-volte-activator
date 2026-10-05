@@ -1,5 +1,7 @@
 # 02 — Tauri command 계약 (프론트 ↔ 백엔드)
 
+2026-10-05 개발 CLI: 기존 Tauri 명령 시그니처·반환·이벤트 이름은 유지한다. AppHandle이 필요한 엔진은 `events::Events`를 받는 공통 실행 함수에 위임하고 `dev-cli` 실행 파일도 같은 함수를 호출한다. CLI 입력/출력·명령 카탈로그는 별도 개발 계약이며 일반 앱에 CLI 명령을 추가하지 않는다. 세부 사항은 `../04-engine/dev-cli.md`.
+
 2026-10-05 `device_list` 읽기 전용 결과 확장: DeviceOut는 `baseband: string`, `observedAtMs: number`를 제공한다. 각 SIM의 `ims`는 `status`, `registration`, nullable boolean `voice/sms`, `transport`, `technology`를 제공한다(`src/lib/types.ts`). `status`는 no-sim/sim-not-ready/query-failed/unsupported-format/conflicting-evidence/not-registered/registering/voice-unavailable/registered/wifi-only/cross-sim/other-network/transport-unknown 중 하나다. 구형 `imsRadioTech`와 신형 `imsTransportType` 로그를 지원하며 현재 미등록 상태·최근 해제/등록 중 이벤트·모순된 근거를 정상 판정에 사용하지 않는다. 조회 명령은 원시 출력에서 종료 상태/권한 오류를 판별하고 필요한 줄만 반환한다. 기존 `volte=on`은 셀룰러 IMS 음성 준비 요약으로 유지하며 LTE/NR 및 실제 통화 성공은 별도 결과다. 새 쓰기 명령 없음. 작업 전/완료 후 진단은 기존 `api.deviceList()` facade를 재사용한다.
 
 status: 구현 — 등록된 명령 전체는 `src-tauri/src/lib.rs`. 기기·PC에 쓰는 명령도 구현돼 있지만 Cargo 쓰기 기능(`fastboot-write`·`root-write` 등)과 프론트 `REAL_STEPS` 게이트 뒤에 있고 기본은 모두 꺼져 있다. 실기기 미검증 항목은 `../04-engine/device-test-checklist.md`.

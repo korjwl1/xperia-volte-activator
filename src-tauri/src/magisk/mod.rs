@@ -8,11 +8,11 @@ pub mod patch;
 use crate::adb;
 use crate::apk_verify::{self, ReleaseAsset};
 use crate::app_paths;
+use crate::events::Events;
 use patch::PatchOutcome;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::PathBuf;
-use tauri::Emitter;
 
 const GH_LATEST: &str = "https://api.github.com/repos/topjohnwu/Magisk/releases/latest";
 
@@ -236,7 +236,7 @@ fn validate_apk(bytes: &[u8]) -> Result<(), String> {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MagiskPatchRequest {
     serial: String,
     apk_path: String,
@@ -252,6 +252,13 @@ pub struct MagiskPatchRequest {
 #[tauri::command]
 pub async fn magisk_patch(
     app: tauri::AppHandle,
+    request: MagiskPatchRequest,
+) -> Result<PatchOutcome, String> {
+    magisk_patch_with_events(Events::desktop(app), request).await
+}
+
+pub(crate) async fn magisk_patch_with_events(
+    app: Events,
     request: MagiskPatchRequest,
 ) -> Result<PatchOutcome, String> {
     let MagiskPatchRequest {

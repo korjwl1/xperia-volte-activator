@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Xperia VoLTE Activator"
 authors = ["korjwl1"]
 edition = "2021"
+default-run = "xperia-volte-activator"
 # vendor/adb_client(1.88)·is_multiple_of(1.87) 기준 최소 Rust 버전
 rust-version = "1.88"
 
@@ -15,6 +16,11 @@ rust-version = "1.88"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "xperia_volte_activator_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "xva-dev"
+path = "src/bin/xva-dev.rs"
+required-features = ["dev-cli"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -48,6 +54,7 @@ tempfile = "3"
 [features]
 # 실기기 검증 전에는 직접 invoke도 쓰기/재부팅을 실행할 수 없다.
 default = []
+dev-cli = []
 fastboot-write = []
 root-write = []
 efs-write = []

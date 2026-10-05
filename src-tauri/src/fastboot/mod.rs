@@ -5,10 +5,10 @@ pub mod protocol;
 pub mod relock;
 pub mod transport;
 
+use crate::events::Events;
 use protocol::FastbootDevice;
 use serde::Serialize;
 use std::io::Write;
-use tauri::Emitter;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,7 +85,7 @@ fn redact(line: &str, secret: Option<&str>) -> String {
 
 fn with_device<T>(
     operation: crate::device_io::WriteOperation,
-    app: tauri::AppHandle,
+    app: Events,
     secret: Option<String>,
     work: impl FnOnce(FastbootDevice<transport::RusbTransport>) -> Result<T, String>,
 ) -> Result<T, String> {
@@ -106,6 +106,12 @@ fn with_device<T>(
 #[tauri::command]
 pub async fn fastboot_getvar(
     app: tauri::AppHandle,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    fastboot_getvar_with_events(Events::desktop(app)).await
+}
+
+pub(crate) async fn fastboot_getvar_with_events(
+    app: Events,
 ) -> Result<std::collections::HashMap<String, String>, String> {
     // 읽기 전용이지만 fastboot USB 인터페이스를 독점하므로 기기 작업 실행권을 함께 쓴다
     let operation = crate::device_io::WriteOperation::acquire()?;
@@ -128,6 +134,15 @@ fn normalize_unlock_code(raw: &str) -> Result<String, String> {
 #[tauri::command]
 pub async fn fastboot_unlock(
     app: tauri::AppHandle,
+    code: String,
+    confirm: bool,
+    expected_serial: String,
+) -> Result<UnlockResult, String> {
+    fastboot_unlock_with_events(Events::desktop(app), code, confirm, expected_serial).await
+}
+
+pub(crate) async fn fastboot_unlock_with_events(
+    app: Events,
     code: String,
     confirm: bool,
     expected_serial: String,
@@ -160,6 +175,23 @@ pub async fn fastboot_unlock(
 #[tauri::command]
 pub async fn fastboot_lock(
     app: tauri::AppHandle,
+    confirm: bool,
+    partition: String,
+    stock_path: String,
+    expected_serial: String,
+) -> Result<UnlockResult, String> {
+    fastboot_lock_with_events(
+        Events::desktop(app),
+        confirm,
+        partition,
+        stock_path,
+        expected_serial,
+    )
+    .await
+}
+
+pub(crate) async fn fastboot_lock_with_events(
+    app: Events,
     confirm: bool,
     partition: String,
     stock_path: String,
@@ -272,6 +304,25 @@ pub async fn fastboot_flash(
     expected_serial: String,
     expected_sha256: String,
 ) -> Result<(), String> {
+    fastboot_flash_with_events(
+        Events::desktop(app),
+        partition,
+        path,
+        confirm,
+        expected_serial,
+        expected_sha256,
+    )
+    .await
+}
+
+pub(crate) async fn fastboot_flash_with_events(
+    app: Events,
+    partition: String,
+    path: String,
+    confirm: bool,
+    expected_serial: String,
+    expected_sha256: String,
+) -> Result<(), String> {
     ensure_write_enabled()?;
     if !confirm {
         return Err("확인 없이는 실행하지 않습니다".into());
@@ -345,6 +396,14 @@ pub async fn fastboot_flash(
 #[tauri::command]
 pub async fn fastboot_reboot(
     app: tauri::AppHandle,
+    target: String,
+    expected_serial: String,
+) -> Result<(), String> {
+    fastboot_reboot_with_events(Events::desktop(app), target, expected_serial).await
+}
+
+pub(crate) async fn fastboot_reboot_with_events(
+    app: Events,
     target: String,
     expected_serial: String,
 ) -> Result<(), String> {

@@ -31,6 +31,16 @@ Sony Xperia의 VoLTE 패치 과정을 통합하는 Windows용 도구입니다. T
 
 `*`는 모델 코드 접미사를 묶어 표기한 것입니다. 실기기 단계별 검증 항목은 [기기 테스트 체크리스트](.plans/04-engine/device-test-checklist.md)에서 관리합니다.
 
+## 개발용 단계 실행
+
+내일 실기기 검토용 CLI는 Cargo `dev-cli` feature로 별도 빌드한다. 앱과 **같은 Rust 엔진**을 호출하므로 엔진을 수정하고 재빌드하면 양쪽에 적용된다. 한 명령씩 실행하고 결과를 남겨 필요한 단계만 다시 실행할 수 있다. 일반 앱의 쓰기 기능 기본값은 유지한다.
+
+```powershell
+cargo run --manifest-path src-tauri/Cargo.toml --bin xva-dev --features dev-cli -- commands
+```
+
+쓰기 feature를 포함한 빌드·단계별 요청·재시작·로그 확인은 [개발 CLI 사용법](.plans/04-engine/dev-cli.md)을 따른다. MSVC 개발 셸이 필요하다. CLI는 Rust 엔진 검토용이며 화면의 전체 단계 전환은 앱에서 따로 검토한다.
+
 ## Recommended IDE Setup
 
 [VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer).

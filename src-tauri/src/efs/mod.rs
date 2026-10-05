@@ -14,6 +14,7 @@ mod transport;
 pub mod volte;
 mod wire;
 
+use crate::events::Events;
 use error::{Error, Result};
 use serde::Serialize;
 use session::Session;
@@ -25,7 +26,6 @@ use std::{
     },
     time::Duration,
 };
-use tauri::Emitter;
 static OWNER: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
 
 fn gate() -> Result<()> {
@@ -110,7 +110,7 @@ async fn execute<R: Send + 'static>(
     .await
     .map_err(|e| Error::io("EFS worker", e))?
 }
-fn progress(app: tauri::AppHandle) -> impl FnMut(engine::Progress) {
+fn progress(app: Events) -> impl FnMut(engine::Progress) {
     move |p| {
         let _ = app.emit("efs:progress", &p);
         let _ = app.emit(
@@ -169,6 +169,14 @@ pub async fn efs_upload(
     port: String,
     preset_dir: String,
 ) -> Result<engine::UploadOut> {
+    efs_upload_with_events(Events::desktop(app), port, preset_dir).await
+}
+
+pub(crate) async fn efs_upload_with_events(
+    app: Events,
+    port: String,
+    preset_dir: String,
+) -> Result<engine::UploadOut> {
     gate()?;
     let owner = Operation::acquire()?;
     let plan = offline(move || manifest::Plan::load_approved(&PathBuf::from(preset_dir))).await?;
@@ -183,6 +191,14 @@ pub async fn efs_upload(
 #[tauri::command]
 pub async fn efs_verify(
     app: tauri::AppHandle,
+    port: String,
+    preset_dir: String,
+) -> Result<engine::VerifyReport> {
+    efs_verify_with_events(Events::desktop(app), port, preset_dir).await
+}
+
+pub(crate) async fn efs_verify_with_events(
+    app: Events,
     port: String,
     preset_dir: String,
 ) -> Result<engine::VerifyReport> {
@@ -204,6 +220,15 @@ pub async fn efs_snapshot(
     preset_dir: String,
     dest: String,
 ) -> Result<engine::SnapshotOut> {
+    efs_snapshot_with_events(Events::desktop(app), port, preset_dir, dest).await
+}
+
+pub(crate) async fn efs_snapshot_with_events(
+    app: Events,
+    port: String,
+    preset_dir: String,
+    dest: String,
+) -> Result<engine::SnapshotOut> {
     gate()?;
     let owner = Operation::acquire()?;
     let plan = offline(move || manifest::Plan::load_approved(&PathBuf::from(preset_dir))).await?;
@@ -218,6 +243,14 @@ pub async fn efs_snapshot(
 #[tauri::command]
 pub async fn efs_rollback(
     app: tauri::AppHandle,
+    port: String,
+    snapshot: String,
+) -> Result<engine::UploadOut> {
+    efs_rollback_with_events(Events::desktop(app), port, snapshot).await
+}
+
+pub(crate) async fn efs_rollback_with_events(
+    app: Events,
     port: String,
     snapshot: String,
 ) -> Result<engine::UploadOut> {
@@ -269,9 +302,22 @@ pub async fn efs_diag_open(serial: String) -> Result<()> {
         ));
     }
     tauri::async_runtime::spawn_blocking(move || {
-        crate::adb::with_first_device(&Some(serial), |dev| diag::open(dev, &owner.cancel))
-            .map_err(|message| Error::new(if owner.cancel.load(Ordering::Acquire) { "cancelled" } else { "io" }, "DIAG switch", message))
-    }).await.map_err(|e|Error::io("DIAG worker",e))?
+        crate::adb::with_first_device(&Some(serial), |dev| diag::open(dev, &owner.cancel)).map_err(
+            |message| {
+                Error::new(
+                    if owner.cancel.load(Ordering::Acquire) {
+                        "cancelled"
+                    } else {
+                        "io"
+                    },
+                    "DIAG switch",
+                    message,
+                )
+            },
+        )
+    })
+    .await
+    .map_err(|e| Error::io("DIAG worker", e))?
 }
 #[tauri::command]
 pub async fn efs_cancel() -> Result<()> {

@@ -7,6 +7,7 @@ mod boot_image;
 mod device_io;
 mod efs;
 mod env;
+mod events;
 mod fastboot;
 mod firmware;
 mod guard;
@@ -17,6 +18,9 @@ mod magisk;
 mod storage;
 mod tasks;
 mod usbmode;
+
+#[cfg(feature = "dev-cli")]
+pub mod dev_cli;
 
 use tauri::Manager;
 

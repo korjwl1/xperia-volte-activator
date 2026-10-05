@@ -26,6 +26,8 @@ Xperia VoLTE 활성화 통합 도구. Tauri 2 + SvelteKit 2 + Svelte 5 + TypeScr
 - 기기 통신: ADB는 `adb_client` 크레이트(ADB 프로토콜 순수 Rust) — 실행 중인 adb 서버 재사용 → USB 직접 연결 폴백. EFS/NV는 명시적으로 지정한 COM의 순수 Rust DIAG 세션. adb·EfsTools 바이너리 직접 실행 및 .NET 런타임 의존 금지.
   - 레지스트리 판이 아니라 I/O 시간 상한을 넣은 사본 `src-tauri/vendor/adb_client`(3.2.3, `[patch.crates-io]`)을 쓴다. 고친 내용은 `vendor/adb_client/PATCHES.md`에 기록하고, 업그레이드할 때 다시 적용한다.
 
+- 예외(사용자 요청 2026-10-05, 개발 CLI): **기존 Rust 엔진을 공유하는 단계별 개발 실행 파일 구현·오프라인 검증 허용**. Cargo `dev-cli`로만 CLI를 포함하고 쓰기 feature는 별도 명시한다. 일반 앱의 기본 feature·REAL_STEPS는 유지한다. 내일 실기기 검토를 위한 준비이며 이번 작업에서는 기기 통신·실기기 테스트를 실행하지 않는다. 설계·사용법: `.plans/04-engine/dev-cli.md`.
+
 ## 필수 작업 규칙
 
 1. **.plans 문서 의무**: 뷰를 작성·변경하면 대응하는 `.plans/01-views/<view>.md`를 같은 커밋에서 갱신한다.

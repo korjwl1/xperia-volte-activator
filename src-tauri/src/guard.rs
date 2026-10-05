@@ -230,6 +230,27 @@ pub async fn run_guard(app: AppHandle, active: bool, reason: Option<String>) -> 
     Ok(())
 }
 
+/// CLI owns no window, so it shares sleep prevention but cannot promise GUI shutdown blocking.
+#[cfg(feature = "dev-cli")]
+pub(crate) struct CliPowerGuard;
+
+#[cfg(feature = "dev-cli")]
+impl CliPowerGuard {
+    pub fn acquire() -> Result<Self, String> {
+        #[cfg(windows)]
+        win::power(true, "Xperia 개발 CLI 단계 실행 중")?;
+        Ok(Self)
+    }
+}
+
+#[cfg(feature = "dev-cli")]
+impl Drop for CliPowerGuard {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        let _ = win::power(false, "");
+    }
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     use super::win;

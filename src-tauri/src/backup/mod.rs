@@ -19,6 +19,7 @@ pub mod winname;
 #[cfg(test)]
 pub mod fake_device;
 
+use crate::events::Events;
 use model::BackupSummary;
 use puller::CancelFlag;
 use serde::Serialize;
@@ -27,7 +28,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::Emitter;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -115,7 +115,7 @@ impl Drop for RunRegistration {
 
 /// 진행 이벤트 방출기 — 50ms 쓰로틀(마지막 파일·항목 전환은 즉시)
 struct Emitter50ms {
-    app: tauri::AppHandle,
+    app: Events,
     event: &'static str,
     last: Instant,
     /// 마지막으로 보낸 (항목, 단계) — 바뀌면 쓰로틀 없이 바로 보낸다(다음 항목 시작이 묻히지 않게)
@@ -123,7 +123,7 @@ struct Emitter50ms {
 }
 
 impl Emitter50ms {
-    fn new(app: tauri::AppHandle, event: &'static str) -> Self {
+    fn new(app: Events, event: &'static str) -> Self {
         Self {
             app,
             event,
@@ -167,6 +167,25 @@ fn verify_backup_dir(dir: &std::path::Path) -> Result<BackupSummary, String> {
 #[tauri::command]
 pub async fn backup_run(
     app: tauri::AppHandle,
+    serial: Option<String>,
+    items: Vec<String>,
+    dest: String,
+    resume_dir: Option<String>,
+    run_id: String,
+) -> Result<BackupSummary, String> {
+    backup_run_with_events(
+        Events::desktop(app),
+        serial,
+        items,
+        dest,
+        resume_dir,
+        run_id,
+    )
+    .await
+}
+
+pub(crate) async fn backup_run_with_events(
+    app: Events,
     serial: Option<String>,
     items: Vec<String>,
     dest: String,
@@ -418,6 +437,15 @@ pub struct RestoreOutcomeOut {
 #[tauri::command]
 pub async fn restore_run(
     app: tauri::AppHandle,
+    serial: Option<String>,
+    dir: String,
+    items: Vec<String>,
+) -> Result<RestoreOutcomeOut, String> {
+    restore_run_with_events(Events::desktop(app), serial, dir, items).await
+}
+
+pub(crate) async fn restore_run_with_events(
+    app: Events,
     serial: Option<String>,
     dir: String,
     items: Vec<String>,

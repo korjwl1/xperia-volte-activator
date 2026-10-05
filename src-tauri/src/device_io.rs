@@ -4,19 +4,44 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static WRITING: AtomicBool = AtomicBool::new(false);
 /// ADB 서버 경로도 엔진 간 쓰기 충돌을 막는다. I/O 종료 전에는 실행권을 반환하지 않는다.
-pub struct WriteOperation;
+pub struct WriteOperation {
+    // GUI and developer CLI are separate processes. The OS releases this lock on exit/crash.
+    _process_lock: std::fs::File,
+}
 impl WriteOperation {
     pub fn acquire() -> Result<Self, String> {
         WRITING
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .map_err(|_| "다른 기기 변경 작업이 진행 중입니다")?;
-        Ok(Self)
+        match process_lock(&std::env::temp_dir().join("xperia-volte-device-io.lock")) {
+            Ok(file) => Ok(Self {
+                _process_lock: file,
+            }),
+            Err(error) => {
+                WRITING.store(false, Ordering::SeqCst);
+                Err(error)
+            }
+        }
     }
 }
 impl Drop for WriteOperation {
     fn drop(&mut self) {
         WRITING.store(false, Ordering::SeqCst);
     }
+}
+
+fn process_lock(path: &std::path::Path) -> Result<std::fs::File, String> {
+    use fs2::FileExt;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| format!("기기 작업 잠금 파일 열기 실패: {e}"))?;
+    file.try_lock_exclusive()
+        .map_err(|_| "다른 앱 또는 개발 CLI가 기기 작업을 실행 중입니다")?;
+    Ok(file)
 }
 
 /// 원본 시리얼을 파일 이름이나 기록에 남기지 않고 기기를 구분한다.
@@ -102,6 +127,15 @@ pub fn shell_write(dev: &mut dyn ADBDeviceExt, command: &str) -> Result<String, 
 mod tests {
     use super::*;
     use crate::backup::fake_device::FakeADBDevice;
+    #[test]
+    fn separate_file_handles_cannot_own_the_device_lock_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("device.lock");
+        let first = process_lock(&path).unwrap();
+        assert!(process_lock(&path).is_err());
+        drop(first);
+        assert!(process_lock(&path).is_ok());
+    }
     #[test]
     fn write_permission_is_exclusive_until_the_operation_finishes() {
         let first = WriteOperation::acquire().unwrap();
