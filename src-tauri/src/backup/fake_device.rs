@@ -35,6 +35,9 @@ pub struct FakeADBDevice {
     shell_answers: Vec<(String, String)>,
     /// 실행된 셸 명령 전체 기록
     pub shell_calls: Vec<String>,
+    pub pull_calls: Vec<String>,
+    pub list_calls: Vec<String>,
+    pub storage_full: bool,
     /// Some이면 SMS 역할 변경을 모의한다(내부 None은 기본 앱 없음).
     pub sms_role_holder: Option<Option<String>>,
     pub ignore_role_changes: bool,
@@ -57,6 +60,7 @@ pub struct FakeADBDevice {
     pub now: u32,
     /// exec 명령의 종료 코드(종료 코드 표식을 붙인 명령에만 반영)
     pub exec_rc: i32,
+    pub exec_exit_codes: BTreeMap<String, i32>,
     /// 설정하면 exec stdin을 메모리 대신 이 폴더의 파일로 받는다(실제 백업 크기 복원 모의용)
     pub spool_dir: Option<std::path::PathBuf>,
     /// spool_dir 사용 시 (명령, 받은 파일)
@@ -280,7 +284,17 @@ impl ADBDeviceExt for FakeADBDevice {
         }
         let mut output = b"Success\n".to_vec();
         if command.contains("echo __XV_RC=") {
-            output.extend_from_slice(format!("__XV_RC={}\n", self.exec_rc).as_bytes());
+            output.extend_from_slice(
+                format!(
+                    "__XV_RC={}\n",
+                    self.exec_exit_codes
+                        .iter()
+                        .find(|(prefix, _)| command.starts_with(prefix.as_str()))
+                        .map(|(_, code)| *code)
+                        .unwrap_or(self.exec_rc)
+                )
+                .as_bytes(),
+            );
         }
         if self.exec_never_closes {
             // 출력 스트림이 끝나지 않는 기기 — 수집기를 해제하지 않는다
@@ -349,6 +363,10 @@ impl ADBDeviceExt for FakeADBDevice {
         output: &mut dyn Write,
     ) -> Result<(), RustADBError> {
         let path = source.as_ref();
+        self.pull_calls.push(path.to_owned());
+        if self.storage_full {
+            return Err(std::io::Error::from(std::io::ErrorKind::StorageFull).into());
+        }
         if self.fail_pull.contains(path) {
             return Err(RustADBError::ADBRequestFailed(format!(
                 "pull failed for {path}"
@@ -374,6 +392,7 @@ impl ADBDeviceExt for FakeADBDevice {
 
     fn list(&mut self, path: &dyn AsRef<str>) -> Result<Vec<ADBListItemType>, RustADBError> {
         let dir = path.as_ref();
+        self.list_calls.push(dir.to_owned());
         if self.fail_list.contains(dir) {
             return Err(RustADBError::ADBRequestFailed(format!(
                 "list failed for {dir}"

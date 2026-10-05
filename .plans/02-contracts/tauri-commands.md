@@ -10,13 +10,14 @@ status: 구현 — 등록된 명령 전체는 `src-tauri/src/lib.rs`. 기기·PC
 
 규칙: 프론트는 `src/lib/api/` facade로만 호출한다. command 이름/인자/반환은 이 문서가 단일 진실 공급원이다.
 이벤트 스트림은 Tauri `emit` → facade의 콜백/스토어로 전달된다.
-**구현 원칙**: 기기·PC에 영향 주는 명령(쓰기·설치·삭제·플래시)은 쓰기 기능 빌드 + `REAL_STEPS`가 모두 켜졌을 때만 실행된다. 읽기 명령은 항상 동작한다.
+**구현 원칙**: 부트·EFS 변경은 해당 Cargo 쓰기 기능 + 프론트 `REAL_STEPS`가 모두 켜졌을 때 실행된다. 백업·일반 파일/문자 복원은 별도 Cargo 쓰기 기능이 없으며 프론트 실전 플래그로 활성화한다. CLI에서 폰을 바꾸는 명령은 매번 `--allow-device-write`를 요구한다. 읽기 명령은 항상 동작한다.
 **기기 통신 구현체**: `adb_client` 크레이트(ADB 프로토콜 순수 Rust) — 1순위 이미 실행 중인 adb 서버(5037, TCP 포트 확인으로만 판단) 재사용, 2순위 USB 직접 연결. adb 바이너리 설치/경로 탐색 불필요.
   - adb_client는 로컬 서버 연결 시 `adb start-server`를 실행하므로, 존재하지 않는 adb 경로를 넘겨 바이너리 실행을 차단한다(서버를 새로 띄우지 않음).
 
 ## device (M1)
 
 ```ts
+invoke('engine_capabilities') → { fastbootWrite: boolean, rootWrite: boolean, efsWrite: boolean } // PC 전용; 현재 Cargo 기능
 invoke('adb_status') → AdbStatus                   // ✅ 구현: 연결 수단 점검 { available, mode: "adb-server"
 //   adb 서버가 응답 오류를 내면 { available: false, mode: "adb-server", detail: <오류> } — USB 직접 연결로 넘어가지 않는다|"usb-direct"|"none", detail }
 invoke('device_list') → DeviceStatus[]            // ✅ 구현: adb_client 연결 + getprop 덤프 + which su + dumpsys isub + TelephonyDebugService (읽기 전용)
@@ -84,9 +85,9 @@ invoke('firmware_versions', { serial? }) → { model, installed, supported, vers
 // ✅ 구현: match/v2의 버전 목록 중 설치된 버전 이상만(최신순). 지원 기종 표에 없으면 supported=false
 invoke('firmware_fetch', { serial?, partition: 'init_boot'|'boot', version?, dest? }) → { partition, path, version, fingerprint, imageBytes, downloadedBytes }
 // dest: 저장 위치(사용자가 고른 폴더, 생략 시 앱 데이터 폴더) — <dest>/<model>_<version>/<partition>.img
-// 받기 전에 여유 공간 확인(.sin 크기 + 16 MiB), 부족하면 "NO_SPACE
+// 받기 전에 여유 공간 확인(.sin 크기 + 16 MiB), 부족하면 "NO_SPACE|<사유>" 오류 → 프론트에서 다른 저장 위치 선택
 // 추출 이미지 옆에 출처 기록 <이미지>.json(partition, fingerprint, sha256) 저장, 이미지 종류가 파티션과 맞지 않으면 거부.
-// 네트워크 작업이라 기기 질의 상한을 쓰지 않는다. 300초 초과 시 "펌웨어 받기 시간 초과 — 네트워크 연결을 확인한 뒤 다시 시도해 주세요"(작업 스레드는 취소되지 않음)|<사유>" 오류 → 프론트는 다른 위치 선택 팝업
+// 네트워크 작업은 300초 상한. 초과 시 "펌웨어 받기 시간 초과 — 네트워크 연결을 확인한 뒤 다시 시도해 주세요" 오류(작업 스레드는 취소되지 않음)
 // version 생략 = 설치된 버전(지문 완전 일치) / 지정 = 설치된 버전보다 새 버전만(지문 앞부분 기기·지역 일치 + 대상 버전 포함)
 // ✅ 구현(src-tauri/src/firmware.rs): Sony 배포 서버 match/v2 → APP_SW 청크 → ZIP 끝부분 Range로 목록 → update.xml 지문 = ro.build.fingerprint 확인
 //   → <partition>_*.sin만 Range로 받아 inflate·CRC → tar의 .000(ANDROID!) → 앱 데이터 폴더 firmware/<model>_<ver>/<partition>.img
@@ -196,8 +197,8 @@ invoke('plan_generate', { profile, toggles, deviceStatus }) → PlanStep[]   // 
 invoke('backup_prepare', { serial, dest }) → string  // 고유 백업 폴더 절대 경로
 invoke('backup_run', { serial, items: string[], dest, resumeDir?: string, runId: string }) → BackupSummary
 //   runId: 프론트가 실행마다 만든 식별값(crypto.randomUUID). 취소는 이 값으로 대상을 지정한다.
-// invoke('backup_cancel', { runId?: string }) → void — runId 실행만 취소(시작 전에 오면 시작 즉시 멈춤), 없으면 실행 중인 백업
-// invoke('backup_delete', { dir }) → void — 완료 화면에서 사용자 확인 후. 절대 경로 · 이름 backup-* · 유효한 manifest.json · 실제 폴더(링크·정션 아님)일 때만 삭제.
+invoke('backup_cancel', { runId?: string }) → void — runId 실행만 취소(시작 전에 오면 시작 즉시 멈춤), 없으면 실행 중인 백업
+invoke('backup_delete', { dir }) → void — 완료 화면에서 사용자 확인 후. 절대 경로 · 이름 backup-* · 유효한 manifest.json · 실제 폴더(링크·정션 아님)일 때만 삭제.
 //   manifest.json을 맨 마지막에 지운다(중간 실패 후 다시 시도해도 백업 폴더로 확인됨). 다른 기기 변경 작업(백업·복원·fastboot·Magisk) 중에는 거부(전역 실행권)
 // 실행: 항목별 열거 → pull(sha256 동시 계산) → manifest 원자 저장 → quarantine 격리 → 설정·연락처 덤프 → sms-ie 산출물 수령
 // 이벤트 'backup:progress': { itemId, phase: 'scan'|'copy'|'quarantine'|'settings'|'contacts'|'smsie',
@@ -217,6 +218,7 @@ invoke('smsie_collect', { serial, backupDir, confirmComplete?: boolean }) → { 
 invoke('smsie_restore_stage', { serial, dir, items: string[] }) → string  // 선택한 문자/통화 파일만 검증·전송
 invoke('smsie_restore_finish', { serial }) → string[]  // 기기별 영속 기록으로 원복, 실제 역할 확인 전 실패는 reject/기록 유지
 invoke('contacts_restore_check', { serial, dir }) → { backedUp: number, onDevice: number }
+invoke('contacts_restore_finish', { serial, dir }) → void // 사용자 가져오기 확인 후: 같은 기기·백업 수 충족 재검사 → /sdcard/contacts-restore.vcf 정리
 // 순서(§6-5): 선택 기록 무결성 검사 → APK 재설치 → tar 스트리밍 복원(원본 mtime 보존, 선택 quarantine만) → 설정 화이트리스트 6키(adb_enabled 제외) →
 //   deviceidle whitelist → 연락처·sms-ie 복원(수동 개입 포함)
 // 이벤트 'restore:progress': { itemId, phase: 'apk'|'files'|'quarantine'|'settings'|'contacts'|'smsie',
@@ -362,15 +364,10 @@ invoke('firmware_dir_check', { dir, partition }) → { file, path, fingerprint, 
 - 네이티브 EFS(2026-10-04): EfsTools/.NET 설치 검사는 폐기. 원본 net5.0·카페 net8.0 런타임 조사 기록은 레퍼런스이며 앱 실행 의존성이 아니다. .NET 8은 오프라인 C# 골든 픽스처 재생성에만 사용한다.
 - 게시자 기준 추적(tasks/research-efs-preset-versions.md "게시자 기준 추적"): 20250901 이후 EFS 후속 배포 없음. 1 VII 등의 속성 모듈·IMS 앱·APN·eSIM 모뎀 패키지는 EFS와 별개 자료로 분리 관리
 
-## backup 추가 명령 (2026-10-03)
-
-```ts
-invoke('backup_prepare', { serial?, dest }) → string            // 지정 폴더 아래 backup-<시각>-<모델> 생성, 절대 경로 — 진행 기록에 먼저 저장 후 backup_run(resumeDir)
-invoke('contacts_restore_check', { serial?, dir }) → { backedUp, onDevice }  // 연락처 가져오기 확인(폰은 목록 조회만)
-```
-
 ## 보안 설정 (2026-10-05)
 
 - capability: 외부 열기는 `opener:allow-open-url`의 `https://*`만(이전 `opener:default`의 http·mailto·tel·폴더 열기 제외), `dialog:allow-open`, `core:window:allow-destroy`.
 - CSP(tauri.conf.json): 운영 `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost …`, 개발용 `devCsp`는 HMR·인라인 스크립트 허용.
   release 실행 파일에서 첫 화면·OMD 화면이 CSP 위반·콘솔 오류 없이 동작함을 WebView2 원격 디버깅으로 확인(2026-10-05).
+
+2026-10-06 복원: restore_run과 smsie_restore_stage는 manifest.deviceKey를 현재 ro.serialno SHA-256과 대조한 뒤 기기에 쓴다. 원본 키가 없는 구형 백업은 자동 복원을 거부한다. 파일 복원은 /sdcard의 고유 임시 폴더에 tar를 모두 받고 성공 후 파일별 rename, 성공·실패 모두 정리를 시도한다. 교체 중 실패해도 이미 교체된 파일은 완전한 파일이며 나머지는 재실행 대상이다. 임시 폴더 정리 실패는 오류로 표시한다. 연락처 0개는 전송 없이 성공하고 실제 가져오기 후 contacts_restore_finish가 고정 임시 파일을 정리한다.

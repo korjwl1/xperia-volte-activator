@@ -150,3 +150,8 @@ mod tests {
         assert!(driver_packages().is_some_and(|list| !list.is_empty()));
     }
 }
+
+#[tauri::command]
+pub fn engine_capabilities() -> serde_json::Value {
+    serde_json::json!({"fastbootWrite": cfg!(feature = "fastboot-write"), "rootWrite": cfg!(feature = "root-write"), "efsWrite": cfg!(feature = "efs-write")})
+}

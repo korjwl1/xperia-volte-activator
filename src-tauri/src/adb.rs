@@ -655,8 +655,16 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
             .to_string();
     }
     if let Some(dir) = crate::app_paths::data_dir() {
-        let key = crate::boot_image::sha256(serial.trim().as_bytes());
-        crate::boot_image::observe_firmware(&dir, &key, &get("ro.build.fingerprint"))?;
+        let physical_serial = get("ro.serialno");
+        if !physical_serial.trim().is_empty() {
+            if let Err(error) = crate::boot_image::observe_physical_firmware(
+                &dir,
+                &physical_serial,
+                &get("ro.build.fingerprint"),
+            ) {
+                eprintln!("[rust] 펌웨어 관찰 기록 실패(기기 조회는 유지): {error}");
+            }
+        }
     }
     Ok(DeviceOut {
         sony: get("ro.product.manufacturer").eq_ignore_ascii_case("sony"),

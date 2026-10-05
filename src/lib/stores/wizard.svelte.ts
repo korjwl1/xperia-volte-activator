@@ -7,7 +7,7 @@ import { mockBackupGroups } from "$lib/mock/apps";
 import { bootloaderOnly, buildPlan, stepHazard, updateTarget, type PlanOptions } from "$lib/domain/plan";
 import { firmwareUpdateProblems } from "$lib/domain/verify";
 import { SIMULATED_RUN, REAL_STEPS } from "$lib/data/runMode";
-import { executionPlanProblem, hasLiveActions, liveStepEnabled } from "$lib/domain/execution";
+import { buildFeatureProblem, executionPlanProblem, hasLiveActions, liveStepEnabled } from "$lib/domain/execution";
 import { EFS_PRESET_MODE, EFS_PRESET_VERSION, efsPreset } from "$lib/data/efsPresets";
 import type { BackupProgress, BackupSummary, EfsConfiguration } from "$lib/types";
 import { AsyncQueue } from "$lib/domain/asyncQueue";
@@ -306,6 +306,7 @@ export class Wizard {
     this.journalKey = null;
     this.journalError = "";
     this.journalReadBlocked = false;
+    this.journalMismatch = false;
     this.journalStarted = "";
     this.journalSims = undefined;
     this.pendingJournal = null;
@@ -352,7 +353,7 @@ export class Wizard {
   }
 
   /** 2단계 진입 시: 기기가 바뀌었을 때만 기본 선택 생성 + 실측(앱 목록 → 용량 순차) */
-  ensureOptions() {
+  ensureOptions(measure = true) {
     const d = this.device;
     if (!d) return;
     // 작업 종류(부트로더만 작업 여부)가 바뀌면 기본 선택을 다시 만든다
@@ -366,7 +367,7 @@ export class Wizard {
       items: g.items.map((i) => ({ ...i, checked: defaultOn })),
     }));
     this.opts = { unroot: false, relock: false, restore: defaultOn };
-    void this.loadMeasurements(key, d.serial);
+    if (measure) void this.loadMeasurements(key, d.serial);
   }
 
   private async loadMeasurements(key: string, serial?: string) {
@@ -463,7 +464,7 @@ export class Wizard {
     void this.journalKeyReady()
       .then(() => this.persist(true))
       .catch(() => this.log(this.runSteps[this.cursor], "[경고] 진행 기록을 저장하지 못했습니다 — 중간에 끊기면 이어서 진행할 수 없습니다"));
-    this.begin();
+    void this.startCheckedRun();
   }
 
   // ── 작업 진행 기록 (끊긴 작업 이어서 진행) ───────────────────
@@ -512,6 +513,7 @@ export class Wizard {
     catch (error) { loaded = { ok: false as const, error: String(error) }; }
     if (gen !== this.runGen) return true;
     this.journalReadBlocked = !loaded.ok;
+    this.journalMismatch = false;
     this.journalError = loaded.ok ? "" : `진행 기록을 읽지 못했습니다 — ${loaded.error}. 다시 확인해 주세요`;
     if (!loaded.ok) return true;
     const raw = loaded.value;
@@ -524,6 +526,7 @@ export class Wizard {
     }
     if (journal.model !== this.device?.model || journal.serialMasked !== this.device?.serialMasked) {
       this.journalReadBlocked = true;
+      this.journalMismatch = true;
       this.journalError = "진행 기록의 기기 정보가 현재 기기와 다릅니다 — 기록을 덮어쓰지 않습니다";
       return true;
     }
@@ -571,6 +574,7 @@ export class Wizard {
     if (key && !(await this.archiveJournal(key, "discarded"))) return;
     if (gen !== this.runGen) return;
     this.pendingJournal = null;
+    this.journalMismatch = false;
     this.backupDir = "";
     this.patchedImage = "";
     this.backupSummary = null;
@@ -583,7 +587,7 @@ export class Wizard {
     if (!j) return;
     this.resetExecution();
     this.volteConfig = { ...defaultVolteConfig(), ...j.config };
-    this.ensureOptions();
+    this.ensureOptions(false);
     for (const g of this.groups) for (const i of g.items) i.checked = j.backupItems.includes(i.id);
     this.opts = { ...j.opts };
     this.backupPath = j.backupPath;
@@ -718,6 +722,7 @@ export class Wizard {
   }
 
   journalError = $state("");
+  journalMismatch = $state(false);
   private journalReadBlocked = false;
   get simulationControlsVisible(): boolean { return SIMULATED_RUN && !hasLiveActions(REAL_STEPS); }
 
@@ -820,6 +825,7 @@ export class Wizard {
 
   begin() {
     if (this.running || this.usbError || this.stepError) return;
+    if (this.firmwareDirState === "loading") return;
     if (this.journalReadBlocked) return this.failStep(this.journalError);
     const problem = executionPlanProblem(this.runSteps.map(s => s.id), REAL_STEPS);
     if (problem) return this.failStep(problem);
@@ -833,10 +839,25 @@ export class Wizard {
    *  (엔진 내부의 진행은 begin()을 직접 부른다) */
   resumeRun() {
     if (!this.readyToResume()) return;
-    this.begin();
+    void this.startCheckedRun();
+  }
+
+  private async startCheckedRun() {
+    const gen = this.runGen;
+    const planProblem = executionPlanProblem(this.runSteps.map(s => s.id), REAL_STEPS);
+    if (planProblem) return this.failStep(planProblem);
+    if (hasLiveActions(REAL_STEPS)) {
+      const capabilities = await this.track(api.engineCapabilities());
+      if (gen !== this.runGen) return;
+      if (!capabilities.ok) return this.failStep(`빌드 기능 확인 실패: ${capabilities.error}`);
+      const problem = buildFeatureProblem(this.runSteps.map(s => s.id), capabilities.value);
+      if (problem) return this.failStep(problem);
+    }
+    if (gen === this.runGen) this.begin();
   }
 
   private readyToResume(): boolean {
+    if (this.firmwareDirState === "loading") return false;
     if (this.busy > 0) {
       this.log(this.runSteps[this.cursor], "[대기] 이전 작업이 아직 끝나지 않았습니다 — 끝난 뒤 다시 눌러 주세요");
       return false;
@@ -1082,7 +1103,17 @@ export class Wizard {
   private communicationReq = 0;
 
   /** Read-only observation. It never edits target selection or authorizes a device write. */
+  private communicationPending: { key: string; result: Promise<boolean> } | null = null;
   async refreshCommunication(phase: "before" | "latest" = "latest"): Promise<boolean> {
+    const key = JSON.stringify([phase, this.runGen, this.device?.serial, this.volteConfig.sims, this.manualCurrent?.id, this.watchGeneration]);
+    if (this.communicationPending?.key === key) return this.communicationPending.result;
+    const result: Promise<boolean> = this.readCommunication(phase).finally(() => {
+      if (this.communicationPending?.result === result) this.communicationPending = null;
+    });
+    this.communicationPending = { key, result };
+    return result;
+  }
+  private async readCommunication(phase: "before" | "latest"): Promise<boolean> {
     const gen = this.runGen;
     const req = ++this.communicationReq;
     const selected = this.device;
@@ -1168,7 +1199,7 @@ export class Wizard {
     const poll = async () => {
       if (watch !== this.watchGeneration) return;
       if (this.manualCurrent?.id !== id || gen !== this.runGen) return this.stopWatch();
-      if (busy) return;
+      if (busy || this.manualChecking) return;
       busy = true;
       try {
         const ok = await check();
@@ -1523,8 +1554,9 @@ export class Wizard {
 
   /** 목업 실행에서만 — 폰이 실제로 재부팅되지 않아 확인할 수 없는 단계 건너뛰기 */
   get manualSkippable(): boolean {
-    return SIMULATED_RUN && !REAL_STEPS.fastboot && !REAL_STEPS.root && !REAL_STEPS.verify && !REAL_STEPS.efs && (this.manualVerifiable || this.manualCurrent?.id === "firmware-select");
+    return this.simulationControlsVisible && (this.manualVerifiable || this.manualCurrent?.id === "firmware-select");
   }
+  get manualCanDismiss(): boolean { return !this.manualChecking && this.busy === 0 && !this.runInDanger; }
 
   /** 직접 지정한 펌웨어 폴더 — 고르는 즉시 검사 */
   private firmwareRequest = 0;
@@ -1586,9 +1618,18 @@ export class Wizard {
       case "ims-check":
         return this.imsCheckError("VoLTE 등록이 아직 확인되지 않았습니다 — 재부팅 후 통신사 신호가 잡힐 때까지 잠시 기다려 주세요");
       case "contacts-import": {
-        const r = await api.contactsRestoreCheck(this.device?.serial, this.backupDir);
+        const gen = this.runGen;
+        const serial = this.device?.serial;
+        const dir = this.backupDir;
+        const r = await api.contactsRestoreCheck(serial, dir);
+        if (gen !== this.runGen) return "이전 실행의 연락처 확인 결과입니다";
         if (!r) return "연락처 수를 확인하지 못했습니다 — 폰 연결을 확인해 주세요";
         if (r.onDevice >= r.backedUp) {
+          if (REAL_STEPS.restore) {
+            const cleanup = await api.contactsRestoreFinish(serial, dir);
+            if (gen !== this.runGen) return "이전 실행의 연락처 정리 결과입니다";
+            if (!cleanup.ok) return `연락처 가져오기는 확인됐지만 임시 파일 정리에 실패했습니다: ${cleanup.error}`;
+          }
           this.log(this.runSteps[this.cursor], `[확인] 연락처 ${r.onDevice}명 (백업 ${r.backedUp}명)`);
           return null;
         }
@@ -2491,8 +2532,9 @@ export class Wizard {
   }
 
   get corruptRelockHistory(): boolean {
-    return this.runSteps[this.cursor]?.id === "relock" && this.stepError.includes("FLASH_HISTORY_CORRUPT|");
+    return this.stepError.includes("FLASH_HISTORY_CORRUPT|");
   }
+  get displayedStepError(): string { return this.stepError.replaceAll("FLASH_HISTORY_CORRUPT|", ""); }
 
   async archiveFlashHistory() {
     if (!this.corruptRelockHistory || this.busy > 0 || this.runInDanger) return;

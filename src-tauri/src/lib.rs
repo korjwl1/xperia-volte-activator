@@ -82,6 +82,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            env::engine_capabilities,
             adb::adb_status,
             adb::device_list,
             adb::storage_sizes,
@@ -127,6 +128,7 @@ pub fn run() {
             magisk::root_reboot,
             backup::backup_prepare,
             backup::contacts_restore_check,
+            backup::contacts_restore_finish,
             backup::backup_run,
             backup::backup_cancel,
             backup::backup_manifest_check,

@@ -110,7 +110,9 @@
       <span class="ml-auto text-[11px] text-muted-foreground">v0.1.0</span>
     </header>
     {#if wizard.journalError}
-      <div role="alert" class="shrink-0 flex items-center gap-2 bg-warning-container text-warning px-6 py-2 text-xs"><TriangleAlert size={14} />{wizard.journalError}</div>
+      <div role="alert" class="shrink-0 flex items-center gap-2 bg-warning-container text-warning px-6 py-2 text-xs"><TriangleAlert size={14} />{wizard.journalError}
+        {#if wizard.journalMismatch}<Button size="sm" variant="outline" onclick={() => wizard.discardJournal()}>기존 기록 보관 후 새로 시작</Button>{/if}
+      </div>
     {/if}
     <!-- 사이드바 + 콘텐츠 (경고 페이지는 1~4단계 시작 전이라 사이드바 없음) -->
     <div class="flex-1 min-h-0 flex">

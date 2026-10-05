@@ -180,7 +180,8 @@ test("resume is refused while engine work is in flight, and device writes block 
   w.dispatchEngine(() => work.promise);
   w.resumeRun(); assert.equal(begun, 0); assert.equal(w.runInDanger, true);
   work.resolve(); await new Promise(resolve => setTimeout(resolve, 0));
-  w.resumeRun(); assert.equal(begun, 1); assert.equal(w.runInDanger, false);
+  api.engineCapabilities = async () => ({ ok: true, value: { fastbootWrite: true, rootWrite: true, efsWrite: true } });
+  w.resumeRun(); await new Promise(resolve => setTimeout(resolve, 0)); assert.equal(begun, 1); assert.equal(w.runInDanger, false);
 });
 test("late engine work cannot complete a step that already failed", async () => {
   const w = wizard(), check = deferred(); api.bootImageCheck = () => check.promise;

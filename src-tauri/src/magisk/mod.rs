@@ -125,44 +125,50 @@ fn prepare_work() -> Result<MagiskPrepareOut, String> {
         .ok_or("앱 데이터 폴더를 확인할 수 없습니다")?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("캐시 폴더 생성 실패: {e}"))?;
     let release = gh_get_json(GH_LATEST).and_then(|json| pick_asset(&json));
-    let (version, path, bytes, sha256) = match release {
-        Ok((tag, asset)) => {
-            let path = dir.join(&asset.name);
-            let (bytes, sha256) = match apk_verify::load_cached(
-                &path,
-                Some(&asset.sha256),
-                apk_verify::MAGISK_CERT_SHA256,
-                MAX_APK as usize,
-            ) {
-                Some(hit) => hit,
-                None => {
-                    let bytes = download(&asset)?;
-                    // 검증을 모두 통과한 뒤에만 캐시에 남긴다
-                    apk_verify::verify_download(&bytes, &asset)?;
-                    apk_verify::check_pins(&bytes, apk_verify::MAGISK_CERT_SHA256)?;
-                    validate_apk(&bytes)?;
-                    apk_verify::store_verified(&path, &bytes, &asset.sha256)?;
-                    (bytes, asset.sha256)
-                }
-            };
-            (tag, path, bytes, sha256)
-        }
+    let online = release.and_then(|(tag, asset)| {
+        let path = dir.join(&asset.name);
+        let (bytes, sha256) = match apk_verify::load_cached(
+            &path,
+            Some(&asset.sha256),
+            apk_verify::MAGISK_CERT_SHA256,
+            MAX_APK as usize,
+        ) {
+            Some(hit) => hit,
+            None => {
+                let bytes = download(&asset)?;
+                // 검증을 모두 통과한 뒤에만 캐시에 남긴다
+                apk_verify::verify_download(&bytes, &asset)?;
+                apk_verify::check_pins(&bytes, apk_verify::MAGISK_CERT_SHA256)?;
+                validate_apk(&bytes)?;
+                apk_verify::store_verified(&path, &bytes, &asset.sha256)?;
+                (bytes, asset.sha256)
+            }
+        };
+        Ok((tag, path, bytes, sha256))
+    });
+    prepare_or_cache(&dir, online, apk_verify::MAGISK_CERT_SHA256)
+}
+
+type PreparedApk = (String, PathBuf, Vec<u8>, String);
+fn prepare_or_cache(
+    dir: &std::path::Path,
+    online: Result<PreparedApk, String>,
+    pins: &[&str],
+) -> Result<MagiskPrepareOut, String> {
+    let (version, path, bytes, sha256) = match online {
+        Ok(prepared) => prepared,
         // 오프라인·요청 한도 초과 — 다이제스트가 기록된 검증 캐시만 쓴다
         Err(online) => {
-            let (path, bytes, sha256) = apk_verify::newest_verified_cache(
-                &dir,
-                is_magisk_apk_name,
-                apk_verify::MAGISK_CERT_SHA256,
-                MAX_APK as usize,
-            )
-            .ok_or_else(|| format!("{online} — 검증된 Magisk 캐시도 없습니다"))?;
+            let (path, bytes, sha256) =
+                apk_verify::newest_verified_cache(dir, is_magisk_apk_name, pins, MAX_APK as usize)
+                    .ok_or_else(|| format!("{online} — 검증된 Magisk 캐시도 없습니다"))?;
             let version = path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .and_then(|n| n.strip_prefix("Magisk-")?.strip_suffix(".apk"))
                 .unwrap_or_default()
                 .to_string();
-            eprintln!("[rust] Magisk 릴리스 조회 실패({online}) — 검증된 캐시 {version} 사용");
+            eprintln!("[rust] Magisk 다운로드 준비 실패({online}) — 검증된 캐시 {version} 사용");
             (version, path, bytes, sha256)
         }
     };
@@ -456,6 +462,16 @@ mod tests {
             load_verified_apk_in(cache.path(), &path, &sha, &[&pin]).unwrap(),
             bytes
         );
+        let fallback =
+            prepare_or_cache(cache.path(), Err("APK 다운로드 실패".into()), &[&pin]).unwrap();
+        assert_eq!(fallback.apk_path, path.to_string_lossy());
+        assert_eq!(fallback.sha256, sha);
+        assert!(prepare_or_cache(
+            cache.path(),
+            Err("APK 다운로드 실패".into()),
+            &[&"0".repeat(64)]
+        )
+        .is_err());
         // 해시 불일치·다른 서명자
         assert!(load_verified_apk_in(cache.path(), &path, &"f".repeat(64), &[&pin]).is_err());
         assert!(load_verified_apk_in(cache.path(), &path, &sha, &[&"0".repeat(64)]).is_err());

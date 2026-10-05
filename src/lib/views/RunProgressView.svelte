@@ -12,6 +12,11 @@
   import { LINKS, maskImei } from "$lib/data/links";
 
   let imeiCopied = $state(false);
+  let abortAsk = $state(false);
+  function requestAbort() {
+    if (wizard.runInDanger || wizard.busy > 0 || wizard.manualChecking) abortAsk = true;
+    else wizard.abort();
+  }
   let copiedTimer: ReturnType<typeof setTimeout> | undefined;
   async function copyImei() {
     if (!wizard.imei1) return;
@@ -73,12 +78,12 @@
       <OctagonX size={16} />
       <AlertTitle>{currentFailed?.title ?? "단계"} 단계가 실패했습니다</AlertTitle>
       <AlertDescription class="flex flex-col gap-2">
-        <span>{wizard.stepError} — 다음 단계(리락 포함)로 넘어가지 않습니다.</span>
+        <span>{wizard.displayedStepError} — 다음 단계(리락 포함)로 넘어가지 않습니다.</span>
         <div class="flex gap-2">
           <Button size="sm" onclick={() => wizard.retryStep()}>이 단계 다시 시도</Button>
-          <Button size="sm" variant="outline" onclick={() => wizard.abort()}>중단</Button>
+          <Button size="sm" variant="outline" onclick={requestAbort}>중단</Button>
           {#if wizard.corruptRelockHistory}
-            <Button size="sm" variant="outline" disabled={wizard.busy > 0} onclick={() => wizard.archiveFlashHistory()}>손상 이력 보관 후 순정 복원부터 재검사</Button>
+            <Button size="sm" variant="outline" disabled={wizard.busy > 0} onclick={() => wizard.archiveFlashHistory()}>손상 이력 보관 후 복원 조건 다시 확인</Button>
           {/if}
         </div>
       </AlertDescription>
@@ -130,9 +135,9 @@
             {:else if wizard.busy === 0}
               <!-- 기기 작업(엔진·완결 게이트·펌웨어 받기)이 진행 중이면 [이어서]를 두지 않는다 -->
 
-              <Button size="sm" disabled={wizard.usbError || !!wizard.stepError} onclick={() => wizard.resumeRun()}><Play size={13} class="mr-1" />{wizard.runSteps.some((s) => s.status !== "pending") ? "이어서" : "실행"}</Button>
+              <Button size="sm" disabled={wizard.usbError || !!wizard.stepError || wizard.firmwareDirState === "loading"} onclick={() => wizard.resumeRun()}><Play size={13} class="mr-1" />{wizard.runSteps.some((s) => s.status !== "pending") ? "이어서" : "실행"}</Button>
             {/if}
-            <Button size="sm" variant="destructive" onclick={() => wizard.abort()}><Square size={12} class="mr-1" />중단</Button>
+            <Button size="sm" variant="destructive" onclick={requestAbort}><Square size={12} class="mr-1" />중단</Button>
           {:else}
             <Button size="sm" onclick={() => wizard.goFinish()}>다음 단계 →</Button>
           {/if}
@@ -174,7 +179,7 @@
   <BackupNotice />
 {:else if wizard.manualCurrent}
   {@const guide = GUIDES[wizard.manualCurrent.id]}
-  <Modal title={wizard.manualCurrent.title} onClose={() => { if (wizard.busy === 0 && !wizard.runInDanger) wizard.abort(); }} class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+  <Modal title={wizard.manualCurrent.title} onClose={() => { if (wizard.manualCanDismiss) wizard.abort(); }} class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
     <Card class="w-full max-w-lg elev-3 max-h-[calc(100vh-2rem)] flex flex-col">
       <CardHeader class="shrink-0">
         <CardTitle class="text-base">{wizard.manualCurrent.title}</CardTitle>
@@ -381,5 +386,15 @@
         </div>
       </CardContent>
     </Card>
+  </Modal>
+{/if}
+
+{#if abortAsk}
+  <Modal title="작업 중단 확인" onClose={() => { abortAsk = false; }}>
+    <Card class="w-full max-w-md"><CardHeader><CardTitle>작업을 중단할까요?</CardTitle></CardHeader>
+      <CardContent class="space-y-4"><p class="text-sm">이미 기기에 보낸 명령은 즉시 취소되지 않을 수 있습니다. 중단 후 기기 상태를 확인해야 합니다.</p>
+        <div class="flex justify-end gap-2"><Button variant="outline" onclick={() => { abortAsk = false; }}>계속 진행</Button>
+          <Button variant="destructive" disabled={wizard.manualChecking} onclick={() => { abortAsk = false; wizard.abort(); }}>중단</Button></div>
+      </CardContent></Card>
   </Modal>
 {/if}

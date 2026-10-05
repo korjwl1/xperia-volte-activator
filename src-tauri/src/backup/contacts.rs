@@ -316,23 +316,57 @@ pub fn stage_restore_contacts(
     dev: &mut dyn ADBDeviceExt,
     backup_root: &Path,
 ) -> Result<(String, String), String> {
-    let src = backup_root.join("contacts").join("contacts.vcf");
+    let src = super::paths::existing_file(backup_root, "contacts/contacts.vcf")?;
     let bytes = std::fs::read(&src).map_err(|e| format!("contacts.vcf 읽기 실패: {e}"))?;
     if bytes.is_empty() {
-        return Err("백업된 연락처가 없습니다".into());
+        return Ok((
+            String::new(),
+            "백업된 연락처가 0개이므로 가져올 파일이 없습니다".into(),
+        ));
     }
     let remote = "/sdcard/contacts-restore.vcf";
     let mut reader = &bytes[..];
-    dev.push(&mut reader, &remote)
-        .map_err(|e| format!("연락처 파일 전송 실패: {e}"))?;
+    if let Err(error) = dev.push(&mut reader, &remote) {
+        let cleanup = finish_restore_contacts(dev).err();
+        return Err(format!(
+            "연락처 파일 전송 실패: {error}{}",
+            cleanup
+                .map(|e| format!(" (임시 파일 정리 실패: {e})"))
+                .unwrap_or_default()
+        ));
+    }
     let note = "연락처 앱 → 설정(⋮) → 가져오기 → .vcf 파일 → contacts-restore.vcf 선택 (수동 1회)"
         .to_string();
     Ok((remote.to_string(), note))
 }
 
+pub fn finish_restore_contacts(dev: &mut dyn ADBDeviceExt) -> Result<(), String> {
+    crate::device_io::shell(dev, "rm -f /sdcard/contacts-restore.vcf").map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_contacts_restore_needs_no_push_and_finish_removes_only_its_temp_file() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("contacts")).unwrap();
+        std::fs::write(root.path().join("contacts/contacts.vcf"), b"").unwrap();
+        let mut d = dev();
+        assert!(stage_restore_contacts(&mut d, root.path())
+            .unwrap()
+            .0
+            .is_empty());
+        assert!(d.pushed.is_empty());
+        d.answer_shell("rm -f /sdcard/contacts-restore.vcf", "");
+        finish_restore_contacts(&mut d).unwrap();
+        assert!(d
+            .shell_calls
+            .iter()
+            .any(|c| c.starts_with("rm -f /sdcard/contacts-restore.vcf")));
+    }
+
     use crate::backup::fake_device::FakeADBDevice;
     use crate::backup::model::ItemStatus;
 

@@ -109,3 +109,5 @@ invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb r
 4. ✅ `feat(magisk)`: Tauri 명령 4종(root-write feature 게이트) + facade + REAL_STEPS.root
 5. ✅ `feat(front)`: wizard 루팅 단계 실전 연결(모드 전환 2회·su-grant 마무리·waitFor 폴링)
 6. ✅ `docs(plans)`: 상태 배지 갱신
+
+2026-10-06: 릴리스 조회뿐 아니라 최신 APK 다운로드·검증·캐시 저장 준비 실패에도 기존 검증 캐시를 다시 검사해 사용한다. 캐시의 다이제스트·서명 핀·패치 페이로드 구조를 통과해야 하며 실제 반환된 버전과 원인은 로그에 남긴다.

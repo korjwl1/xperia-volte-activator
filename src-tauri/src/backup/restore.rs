@@ -242,15 +242,72 @@ struct TarFile {
 /// 진행 콜백 — (보낸 파일 수, 보낸 바이트). 빌더 스레드에서 파일마다 호출된다
 type TarProgress = Arc<dyn Fn(u64, u64) + Send + Sync>;
 
+fn quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Extract into a unique staging directory on the destination filesystem. Publish only complete
+/// files by rename; a failed stream cannot truncate an existing user file.
+fn staged_extract<T: Send + 'static>(
+    dev: &mut dyn ADBDeviceExt,
+    dst: &str,
+    names: &[String],
+    produce: impl FnOnce(&mut TarBuilder) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let stage = format!(
+        "/sdcard/.xvolte-restore-{}-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    exec_checked(
+        dev,
+        &format!("mkdir -- {}", quote(&stage)),
+        &mut std::io::empty(),
+    )?;
+    let result =
+        pipe_exec(dev, &format!("tar -xf - -C {}", quote(&stage)), produce).and_then(|value| {
+            for name in names {
+                let target = format!("{dst}/{name}");
+                let parent = target.rsplit_once('/').ok_or("복원 대상 경로 오류")?.0;
+                exec_checked(
+                    dev,
+                    &format!(
+                        "[ ! -d {} ] && mkdir -p -- {} && mv -f -- {} {}",
+                        quote(&target),
+                        quote(parent),
+                        quote(&format!("{stage}/{name}")),
+                        quote(&target)
+                    ),
+                    &mut std::io::empty(),
+                )?;
+            }
+            Ok(value)
+        });
+    let cleanup = exec_checked(
+        dev,
+        &format!("rm -rf -- {}", quote(&stage)),
+        &mut std::io::empty(),
+    );
+    match (result, cleanup) {
+        (Ok(value), Ok(_)) => Ok(value),
+        (Ok(_), Err(error)) => Err(format!("복원 임시 파일 정리 실패: {error}")),
+        (Err(error), Ok(_)) => Err(error),
+        (Err(error), Err(cleanup)) => Err(format!("{error}; 임시 파일 정리 실패: {cleanup}")),
+    }
+}
+
 /// tar 스트리밍 복원 — `cmd`(tar -xf - … )의 stdin으로 로컬 파일들을 아카이브해 흘린다.
 /// 헤더 크기는 manifest 기록값 — 검증 후 파일이 바뀌어 길이가 달라지면 아카이브가 어긋나므로 오류.
 fn stream_tar(
     dev: &mut dyn ADBDeviceExt,
-    cmd: &str,
+    dst: &str,
     files: Vec<TarFile>,
     progress: TarProgress,
 ) -> Result<(), String> {
-    pipe_exec(dev, cmd, move |b| {
+    let names: Vec<_> = files.iter().map(|f| f.name.clone()).collect();
+    staged_extract(dev, dst, &names, move |b| {
         let mut bytes = 0u64;
         for (i, file) in files.iter().enumerate() {
             let name = &file.name;
@@ -285,13 +342,14 @@ fn pick_quarantined(
     for entry in archive.entries_with_seek().map_err(|e| e.to_string())? {
         let mut entry = entry.map_err(|e| e.to_string())?;
         let remote = super::verify::tar_remote(&entry);
-        super::paths::sdcard_relative(&remote)?;
+        super::paths::archive_relative(&remote)?;
         if !entry.header().entry_type().is_file() {
             return Err("격리 파일 유형이 올바르지 않습니다".into());
         }
         let Some(expected) = wanted.get(remote.as_str()) else {
             continue;
         };
+        super::paths::sdcard_relative(&remote)?;
         if restored.contains(&remote) || picked.contains(&remote) {
             continue;
         }
@@ -320,7 +378,11 @@ fn restore_quarantined(
         return Ok(vec![]); // 이 세그먼트엔 복원할 것이 없다 — 기기 명령을 보내지 않는다
     }
     let segment = segment.to_path_buf();
-    pipe_exec(dev, "tar -xf - -C /sdcard", move |output| {
+    let names = picks
+        .iter()
+        .map(|(remote, _, _, _)| super::paths::sdcard_relative(remote))
+        .collect::<Result<Vec<_>, _>>()?;
+    staged_extract(dev, "/sdcard", &names, move |output| {
         let mut file = std::fs::File::open(&segment).map_err(|e| e.to_string())?;
         let mut included = Vec::with_capacity(picks.len());
         for (remote, mut header, offset, size) in picks {
@@ -464,6 +526,10 @@ pub fn run_restore(
     if !out.failures.is_empty() {
         return out;
     } // 기기에 쓰기 전에 무결성 검증
+    if let Err(error) = super::verify::verify_device(dev, &selected) {
+        out.failures.push(error);
+        return out;
+    }
     out.verified = true;
 
     // 1) APK 재설치 (§6-5 첫 순서)
@@ -579,7 +645,7 @@ pub fn run_restore(
                 ..StepProgress::at(&item_id, "files", done, total)
             });
         });
-        match stream_tar(dev, &format!("tar -xf - -C {dst}"), files, progress) {
+        match stream_tar(dev, dst, files, progress) {
             Ok(()) => out.logs.push(format!("{item} 복원 — 파일 {total}개")),
             Err(e) => out.failures.push(format!("{item}: {e}")),
         }
@@ -589,6 +655,7 @@ pub fn run_restore(
     let wanted: std::collections::HashMap<&str, &super::model::FileEntry> = selected
         .items
         .iter()
+        .filter(|item| file_phases.iter().any(|(id, _)| *id == item.id))
         .flat_map(|item| &item.entries)
         .filter(|entry| entry.quarantined)
         .map(|entry| (entry.remote.as_str(), entry))
@@ -657,6 +724,43 @@ pub fn run_restore(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_extract_cleans_staging_without_publishing_a_partial_file() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("f");
+        std::fs::write(&path, b"short").unwrap();
+        let mut d = test_device();
+        assert!(stream_tar(
+            &mut d,
+            "/sdcard",
+            vec![TarFile {
+                path,
+                name: "DCIM/a.jpg".into(),
+                mtime: 0,
+                size: 100
+            }],
+            Arc::new(|_, _| {})
+        )
+        .is_err());
+        assert!(d
+            .shell_calls
+            .iter()
+            .any(|c| c.starts_with("rm -rf -- '/sdcard/.xvolte-restore-")));
+        assert!(!d.shell_calls.iter().any(|c| c.contains("mv -f")));
+    }
+    #[test]
+    fn foreign_backup_stops_restore_before_any_write() {
+        let root = backup_dir_with(Manifest::new("XQ", "masked", "v", "15"));
+        let mut d = FakeADBDevice::new();
+        d.answer_shell("getprop ro.serialno", "OTHER-PHONE");
+        let out = run_restore(&mut d, root.path(), &["dcim".into()], &noop_progress());
+        assert!(!out.verified);
+        assert!(!out.failures.is_empty());
+        assert!(d.shell_streams.is_empty());
+        assert!(d.pushed.is_empty());
+    }
+
     use crate::backup::fake_device::FakeADBDevice;
 
     #[test]
@@ -664,7 +768,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let apk = root.path().join("base.apk");
         std::fs::write(&apk, b"apk").unwrap();
-        let mut dev = FakeADBDevice::new();
+        let mut dev = test_device();
         dev.answer_shell(
             "pm install-create",
             "Success: created install session [42]\n",
@@ -693,7 +797,7 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             let apk = root.path().join("base.apk");
             std::fs::write(&apk, b"apk").unwrap();
-            let mut dev = FakeADBDevice::new();
+            let mut dev = test_device();
             dev.answer_shell(
                 "pm install-create",
                 "Success: created install session [42]\n",
@@ -727,7 +831,7 @@ mod tests {
             if let Some(bytes) = bytes {
                 std::fs::write(&apk, bytes).unwrap();
             }
-            let mut dev = FakeADBDevice::new();
+            let mut dev = test_device();
             dev.answer_shell(
                 "pm install-create",
                 "Success: created install session [42]\n",
@@ -755,8 +859,55 @@ mod tests {
     }
     use crate::backup::model::{save_manifest_atomic, Manifest};
 
+    #[test]
+    fn legacy_skipped_snapshot_is_verified_and_restorable_without_recollecting() {
+        let root = backup_dir_with(Manifest::new("XQ", "masked", "v", "15"));
+        let mut manifest = crate::backup::model::load_manifest(root.path()).unwrap();
+        manifest
+            .items
+            .iter_mut()
+            .find(|i| i.id == "dcim")
+            .unwrap()
+            .status = ItemStatus::Skipped;
+        save_manifest_atomic(&manifest, root.path()).unwrap();
+        let recovered = crate::backup::model::load_manifest(root.path()).unwrap();
+        assert_eq!(
+            recovered
+                .items
+                .iter()
+                .find(|i| i.id == "dcim")
+                .unwrap()
+                .status,
+            ItemStatus::Done
+        );
+        assert!(recovered.excluded_items.contains(&"dcim".into()));
+        let mut d = test_device();
+        let result = run_restore(&mut d, root.path(), &["dcim".into()], &noop_progress());
+        assert!(result.failures.is_empty(), "{:?}", result.failures);
+        assert!(d.pull_calls.is_empty());
+        std::fs::write(root.path().join("sdcard/DCIM/Camera/a.jpg"), b"corrupt").unwrap();
+        assert_eq!(
+            crate::backup::model::load_manifest(root.path())
+                .unwrap()
+                .items
+                .iter()
+                .find(|i| i.id == "dcim")
+                .unwrap()
+                .status,
+            ItemStatus::Partial
+        );
+    }
+
+    fn test_device() -> FakeADBDevice {
+        let mut d = FakeADBDevice::new();
+        d.answer_shell("getprop ro.serialno", "TEST-SERIAL");
+        d
+    }
+
     /// 백업→복구 왕복 검증용 fixture: 가상 기기 → 백업 폴더 수동 구성 → 복구 → 기기 상태 확인
     fn backup_dir_with(mut manifest: Manifest) -> tempfile::TempDir {
+        use sha2::Digest;
+        manifest.device_key = Some(hex::encode(sha2::Sha256::digest(b"TEST-SERIAL")));
         let tmp = tempfile::tempdir().unwrap();
         // 설정 덤프
         let sdir = tmp.path().join("settings");
@@ -866,7 +1017,7 @@ mod tests {
         }];
         let tmp = backup_dir_with(m);
 
-        let mut d = FakeADBDevice::new();
+        let mut d = test_device();
         d.answer_shell(
             "pm install-create",
             "Success: created install session [42]\n",
@@ -889,9 +1040,9 @@ mod tests {
         let (cmd, bytes) = d
             .shell_streams
             .iter()
-            .find(|(c, _)| c.starts_with("tar -xf - -C /sdcard"))
+            .find(|(c, _)| c.starts_with("tar -xf"))
             .expect("tar 스트리밍 있어야 함");
-        assert!(cmd.contains("-C /sdcard"));
+        assert!(cmd.contains("/sdcard/.xvolte-restore-"));
         let mut ar = tar::Archive::new(&bytes[..]);
         let mut names = Vec::new();
         for e in ar.entries().unwrap() {
@@ -962,7 +1113,12 @@ mod tests {
             .collect();
         eprintln!("[모의] 복원 항목: {items:?}");
 
-        let mut d = FakeADBDevice::new();
+        let mut d = test_device();
+        d.answer_shell(
+            "getprop ro.serialno",
+            &std::env::var("XVOLTE_RESTORE_DEVICE_SERIAL")
+                .expect("XVOLTE_RESTORE_DEVICE_SERIAL 필요"),
+        );
         d.spool_dir = Some(spool.clone());
         d.answer_shell(
             "pm install-create",
@@ -1138,10 +1294,10 @@ mod tests {
 
     #[test]
     fn exec_checked_reports_nonzero_exit() {
-        let mut d = FakeADBDevice::new();
+        let mut d = test_device();
         d.exec_rc = 1;
         let mut r: &[u8] = b"";
-        let e = exec_checked(&mut d, "tar -xf - -C /sdcard", &mut r).unwrap_err();
+        let e = exec_checked(&mut d, "/sdcard", &mut r).unwrap_err();
         assert!(e.contains("종료 코드 1"), "{e}");
         d.exec_rc = 0;
         assert!(exec_checked(&mut d, "tar -xf - -C /sdcard", &mut r).is_ok());
@@ -1150,7 +1306,7 @@ mod tests {
     #[test]
     fn exec_waits_for_output_that_arrives_after_stdin() {
         // 실제 adb_client: exec는 stdin을 보낸 즉시 반환하고 출력은 수신 스레드가 늦게 쓴다
-        let mut d = FakeADBDevice::new();
+        let mut d = test_device();
         d.exec_output_delay = Some(Duration::from_millis(150));
         let mut r: &[u8] = b"";
         assert!(exec_checked(&mut d, "tar -xf - -C /sdcard", &mut r).is_ok());
@@ -1161,7 +1317,7 @@ mod tests {
 
     #[test]
     fn exec_that_never_finishes_is_an_error() {
-        let mut d = FakeADBDevice::new();
+        let mut d = test_device();
         d.exec_never_closes = true;
         let mut r: &[u8] = b"";
         let e = exec_checked_within(
@@ -1180,10 +1336,10 @@ mod tests {
         let path = tmp.path().join("f");
         std::fs::write(&path, b"abc").unwrap();
         let long = format!("Download/{}/a\\b.txt", "d".repeat(120));
-        let mut d = FakeADBDevice::new();
+        let mut d = test_device();
         stream_tar(
             &mut d,
-            "tar -xf - -C /sdcard",
+            "/sdcard",
             vec![TarFile {
                 path,
                 name: long.clone(),
@@ -1193,7 +1349,14 @@ mod tests {
             Arc::new(|_, _| {}),
         )
         .unwrap();
-        let mut archive = tar::Archive::new(d.shell_streams[0].1.as_slice());
+        let mut archive = tar::Archive::new(
+            d.shell_streams
+                .iter()
+                .find(|(c, _)| c.starts_with("tar -xf"))
+                .unwrap()
+                .1
+                .as_slice(),
+        );
         let mut entry = archive.entries().unwrap().next().unwrap().unwrap();
         // Windows에서도 `\`가 `/`로 바뀌지 않고, 100바이트를 넘는 이름도 그대로
         assert_eq!(entry.path_bytes().as_ref(), long.as_bytes());
@@ -1207,10 +1370,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("f");
         std::fs::write(&path, b"ab").unwrap();
-        let mut d = FakeADBDevice::new();
+        let mut d = test_device();
         let e = stream_tar(
             &mut d,
-            "tar -xf - -C /sdcard",
+            "/sdcard",
             vec![TarFile {
                 path,
                 name: "DCIM/a.jpg".into(),
@@ -1239,8 +1402,19 @@ mod tests {
         let hashes =
             super::super::verify::quarantine_hashes(tmp.path(), &std::collections::HashSet::new())
                 .unwrap();
-        assert_eq!(hashes.segment_errors.len(), 1);
-        assert!(hashes.segment_errors[0].starts_with("seg000.tar"));
+        assert!(hashes.segment_errors.is_empty());
+        let mut wanted = std::collections::HashMap::new();
+        let expected = super::super::model::FileEntry {
+            remote: "/system/evil".into(),
+            local: String::new(),
+            size: 1,
+            mtime: 0,
+            sha256: None,
+            quarantined: true,
+            error: None,
+        };
+        wanted.insert("/system/evil", &expected);
+        assert!(pick_quarantined(&seg, &wanted, &Default::default()).is_err());
     }
 
     #[test]
@@ -1248,7 +1422,7 @@ mod tests {
         let mut m = Manifest::new("XQ-DQ44", "AB1234****", "67.2.A.3.178", "15");
         m.items = vec![];
         let tmp = backup_dir_with(m);
-        let mut d = FakeADBDevice::new();
+        let mut d = test_device();
         d.answer_shell("settings put", "");
         d.answer_shell("dumpsys deviceidle whitelist +", "");
         // tar 스트리밍은 exec → 성공 처리되지만, settings 실패 유도: whitelist 파일 없는 폴더로
@@ -1266,7 +1440,7 @@ mod tests {
     fn corrupt_backup_stops_before_any_device_write() {
         let tmp = backup_dir_with(Manifest::new("XQ", "masked", "v", "15"));
         std::fs::write(tmp.path().join("sdcard/DCIM/Camera/a.jpg"), b"damaged").unwrap();
-        let mut device = FakeADBDevice::new();
+        let mut device = test_device();
         let out = run_restore(&mut device, tmp.path(), &["dcim".into()], &noop_progress());
         assert!(!out.failures.is_empty());
         assert!(device.shell_calls.is_empty());
@@ -1277,10 +1451,18 @@ mod tests {
     fn restores_only_manifest_files_with_manifest_mtime() {
         let tmp = backup_dir_with(Manifest::new("XQ", "masked", "v", "15"));
         std::fs::write(tmp.path().join("sdcard/DCIM/extra.jpg"), b"unrecorded").unwrap();
-        let mut device = FakeADBDevice::new();
+        let mut device = test_device();
         let out = run_restore(&mut device, tmp.path(), &["dcim".into()], &noop_progress());
         assert!(out.failures.is_empty(), "{:?}", out.failures);
-        let mut archive = tar::Archive::new(device.shell_streams[0].1.as_slice());
+        let mut archive = tar::Archive::new(
+            device
+                .shell_streams
+                .iter()
+                .find(|(c, _)| c.starts_with("tar -xf"))
+                .unwrap()
+                .1
+                .as_slice(),
+        );
         let entries: Vec<_> = archive.entries().unwrap().map(|e| e.unwrap()).collect();
         assert_eq!(entries.len(), 1);
         assert_eq!(
@@ -1300,6 +1482,7 @@ mod tests {
         for (name, data) in [
             ("sdcard/DCIM/bad?.jpg", b"old".as_slice()),
             ("sdcard/Music/no?.mp3", b"music"),
+            ("data/app/pkg:odd/base.apk", b"apk"),
             ("sdcard/DCIM/bad?.jpg", b"new"),
         ] {
             let mut header = tar::Header::new_gnu();
@@ -1320,6 +1503,7 @@ mod tests {
             error: None,
         };
         let mut manifest = Manifest::new("XQ", "masked", "v", "15");
+        manifest.device_key = Some(hex::encode(Sha256::digest(b"TEST-SERIAL")));
         manifest.record(super::super::model::ItemRecord {
             id: "dcim".into(),
             kind: ItemKind::Files,
@@ -1330,13 +1514,39 @@ mod tests {
             artifacts: vec![],
             errors: vec![],
         });
+        let mut apk = super::super::model::ItemRecord::new("apk", ItemKind::Files);
+        apk.entries.push(super::super::model::FileEntry {
+            remote: "/data/app/pkg:odd/base.apk".into(),
+            local: String::new(),
+            size: 3,
+            mtime: 0,
+            sha256: Some(hex::encode(Sha256::digest(b"apk"))),
+            quarantined: true,
+            error: None,
+        });
+        apk.finalize();
+        manifest.record(apk);
         save_manifest_atomic(&manifest, tmp.path()).unwrap();
-        let mut device = FakeADBDevice::new();
+        let mut device = test_device();
         let out = run_restore(&mut device, tmp.path(), &["dcim".into()], &noop_progress());
         assert!(out.failures.is_empty(), "{:?}", out.failures);
         // 일반 파일 복원과 같은 기준 — /sdcard 아래 상대 이름
-        assert!(device.shell_streams[0].0.contains("-C /sdcard"));
-        let mut archive = tar::Archive::new(device.shell_streams[0].1.as_slice());
+        assert!(device
+            .shell_streams
+            .iter()
+            .find(|(c, _)| c.starts_with("tar -xf"))
+            .unwrap()
+            .0
+            .contains("/sdcard/.xvolte-restore-"));
+        let mut archive = tar::Archive::new(
+            device
+                .shell_streams
+                .iter()
+                .find(|(c, _)| c.starts_with("tar -xf"))
+                .unwrap()
+                .1
+                .as_slice(),
+        );
         let mut entries = archive.entries().unwrap();
         let mut entry = entries.next().unwrap().unwrap();
         assert_eq!(entry.path().unwrap().to_string_lossy(), "DCIM/bad?.jpg");
@@ -1344,5 +1554,18 @@ mod tests {
         entry.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, b"new");
         assert!(entries.next().is_none());
+        let mut all = test_device();
+        let result = run_restore(
+            &mut all,
+            tmp.path(),
+            &["dcim".into(), "apk".into()],
+            &noop_progress(),
+        );
+        assert!(result.failures.iter().any(|e| e.contains("APK")));
+        assert!(!result.failures.iter().any(|e| e.contains("격리")));
+        assert!(all
+            .shell_streams
+            .iter()
+            .any(|(cmd, data)| cmd.starts_with("tar -xf") && !data.is_empty()));
     }
 }

@@ -388,7 +388,7 @@ fn parse_central_directory(cd: &[u8]) -> Result<Vec<ZipEntry>, String> {
             }
             e += 4 + size;
         }
-        if extra_end + comment_len > cd.len() {
+        if e != extra_end || extra_end + comment_len > cd.len() {
             return Err(ZIP_BAD.into());
         }
         out.push(ZipEntry {
@@ -403,6 +403,9 @@ fn parse_central_directory(cd: &[u8]) -> Result<Vec<ZipEntry>, String> {
     }
     if out.is_empty() {
         return Err("펌웨어 ZIP 목록이 비어 있습니다".into());
+    }
+    if i != cd.len() {
+        return Err(ZIP_BAD.into());
     }
     Ok(out)
 }
@@ -869,6 +872,23 @@ pub async fn firmware_versions(serial: Option<String>) -> Result<FirmwareVersion
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn partial_central_directory_suffix_is_rejected() {
+        let mut cd = vec![0u8; 47];
+        cd[..4].copy_from_slice(&0x02014b50u32.to_le_bytes());
+        cd[28..30].copy_from_slice(&1u16.to_le_bytes());
+        cd[46] = b'a';
+        assert!(parse_central_directory(&cd).is_ok());
+        for tail in [vec![0], vec![0x50, 0x4b, 1, 2], vec![0; 45]] {
+            let mut truncated = cd.clone();
+            truncated.extend(tail);
+            assert!(parse_central_directory(&truncated).is_err());
+        }
+        cd[30..32].copy_from_slice(&1u16.to_le_bytes());
+        cd.push(0);
+        assert!(parse_central_directory(&cd).is_err());
+    }
 
     /// 테스트용 stored 방식 ZIP 빌더 — 로컬 헤더 + 데이터 + central directory + EOCD
     pub(crate) fn build_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {

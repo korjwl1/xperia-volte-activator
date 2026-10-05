@@ -6,7 +6,7 @@ static WRITING: AtomicBool = AtomicBool::new(false);
 /// ADB 서버 경로도 엔진 간 쓰기 충돌을 막는다. I/O 종료 전에는 실행권을 반환하지 않는다.
 pub struct WriteOperation {
     // GUI and developer CLI are separate processes. The OS releases this lock on exit/crash.
-    _process_lock: std::fs::File,
+    process_lock: Option<std::fs::File>,
 }
 impl WriteOperation {
     pub fn acquire() -> Result<Self, String> {
@@ -22,7 +22,7 @@ impl WriteOperation {
         ));
         match process_lock(&lock_path) {
             Ok(file) => Ok(Self {
-                _process_lock: file,
+                process_lock: Some(file),
             }),
             Err(error) => {
                 WRITING.store(false, Ordering::SeqCst);
@@ -33,6 +33,8 @@ impl WriteOperation {
 }
 impl Drop for WriteOperation {
     fn drop(&mut self) {
+        // Release the OS lock before another thread can acquire the in-process token.
+        drop(self.process_lock.take());
         WRITING.store(false, Ordering::SeqCst);
     }
 }
@@ -46,8 +48,15 @@ fn process_lock(path: &std::path::Path) -> Result<std::fs::File, String> {
         .write(true)
         .open(path)
         .map_err(|e| format!("기기 작업 잠금 파일 열기 실패: {e}"))?;
-    file.try_lock_exclusive()
-        .map_err(|_| "다른 앱 또는 개발 CLI가 기기 작업을 실행 중입니다")?;
+    file.try_lock_exclusive().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::WouldBlock
+            || e.raw_os_error() == Some(fs2::lock_contended_error().raw_os_error().unwrap_or(-1))
+        {
+            "다른 앱 또는 개발 CLI가 기기 작업을 실행 중입니다".to_string()
+        } else {
+            format!("기기 작업 잠금 실패: {e}")
+        }
+    })?;
     Ok(file)
 }
 

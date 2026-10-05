@@ -7,7 +7,7 @@ import type { MagiskPatchRequest, FirmwareDirInfo, AdbStatus, AppItem, BackupPro
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
 import type { ApiResult } from "$lib/types";
 import { REAL_STEPS } from "$lib/data/runMode";
-import { canReboot } from "$lib/domain/execution";
+import { canReboot, type EngineCapabilities } from "$lib/domain/execution";
 import { classifyApp, SAMPLE_FLAGS, type AppFlag } from "$lib/data/appRules";
 import { efsApi, type EfsApi } from "./efs";
 import { inDesktop as inTauri, transport } from "./transport";
@@ -63,6 +63,8 @@ export interface Api extends EfsApi {
   runGuard(active: boolean, reason?: string): Promise<boolean>;
   /** 연락처 복원 확인 — 백업한 연락처 수와 지금 폰의 연락처 수, 조회 실패 시 null */
   contactsRestoreCheck(serial: string | undefined, dir: string): Promise<{ backedUp: number; onDevice: number } | null>;
+  contactsRestoreFinish(serial: string | undefined, dir: string): Promise<ApiResult<null>>;
+  engineCapabilities(): Promise<ApiResult<EngineCapabilities>>;
   /** 백업 시작 — 지정 폴더 아래 시작 시각 기준 폴더 생성, 절대 경로 반환 */
   backupPrepare(serial: string | undefined, dest: string): Promise<ApiResult<string>>;
   /** 백업 실행(자동 항목) — 진행은 onBackupProgress로. 실패 시 error 문구 */
@@ -90,9 +92,9 @@ export interface Api extends EfsApi {
   fastbootGetvar(): Promise<FastbootVars | null>;
   /** 부트로더 언락 — oem unlock 0x{code} 후 getvar 이중 확인 (로그에 코드 마스킹) */
   fastbootUnlock(code: string, confirm: boolean, expectedSerial: string): Promise<ApiResult<UnlockResult>>;
-  /** 리락 요청 — 순정 출처·AVB·전체 체인 검증 전까지 백엔드가 항상 거부 */
+  /** 리락 요청 — 순정 출처·현재 펌웨어·동일 기기 및 양 슬롯 이력 조건 검사 */
   fastbootLock(confirm: boolean, partition: string, stockPath: string, expectedSerial: string): Promise<ApiResult<UnlockResult>>;
-  /** 리락 이력 진단(읽기 전용) — 진단 정상도 실제 리락을 허용하지 않음 */
+  /** 리락 이력 진단(읽기 전용) — 실제 명령은 별도 확인·기기 조건을 재검사 */
   relockGateCheck(partition: string, stockPath: string, deviceKey?: string): Promise<ApiResult<RelockGate>>;
   /** fastboot 재부팅 — os | bootloader (OKAY 확인 시 성공, 실패 시 백엔드 오류 문구) */
   fastbootReboot(target: "os" | "bootloader", expectedSerial: string): Promise<ApiResult<null>>;
@@ -115,6 +117,7 @@ export interface Api extends EfsApi {
 }
 
 const hybridApi: Api = {
+  async engineCapabilities() { return invokeResult<EngineCapabilities>("engine_capabilities", {}); },
   ...efsApi,
   async deviceList() {
     if (inTauri()) {
@@ -232,6 +235,10 @@ const hybridApi: Api = {
 
   async contactsRestoreCheck(serial, dir) {
     return await invokeBackend<{ backedUp: number; onDevice: number }>("contacts_restore_check", { serial: serial ?? null, dir });
+  },
+  async contactsRestoreFinish(serial, dir) {
+    if (!REAL_STEPS.restore) return { ok: false, error: "실전 복원이 비활성화되어 있습니다" };
+    return invokeResult<null>("contacts_restore_finish", { serial: serial ?? null, dir });
   },
 
   async backupPrepare(serial, dest) {

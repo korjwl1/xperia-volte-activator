@@ -49,7 +49,6 @@ impl CancelFlag {
     pub fn from_shared(arc: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
         Self(arc)
     }
-    #[cfg(test)]
     pub fn set(&self) {
         self.0.store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -136,7 +135,15 @@ pub fn pull_item_files(
             bytes_done,
             bytes_total: total_bytes,
         });
+        let no_space = entry
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("NO_SPACE|"));
         rec.entries.push(entry);
+        if no_space {
+            cancel.set();
+            break;
+        }
     }
     rec.finalize();
     rec
@@ -187,20 +194,20 @@ pub(crate) fn pull_to_disk_checked(
     };
     if let Some(parent) = dest.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            base.error = Some(format!("폴더 생성 실패: {e}"));
+            base.error = Some(format!("폴더 생성 실패: {}", crate::storage::io_error(&e)));
             return base;
         }
     }
     let result = crate::storage::atomic_file(&dest, |file, temporary| {
         let mut writer = HashingWriter::new(file);
         dev.pull(&remote, &mut writer)
-            .map_err(|e| format!("전송 실패: {e}"))?;
+            .map_err(|e| format!("전송 실패: {}", crate::storage::adb_io_error(&e)))?;
         let (_, hash, written) = writer.finish();
         let actual = verify_size(dev, remote, expected_size, written)?;
         validate(dev, temporary)?;
         let ft = filetime::FileTime::from_unix_time(mtime as i64, 0);
         filetime::set_file_mtime(temporary, ft)
-            .map_err(|e| format!("파일 수정시각 보존 실패: {e}"))?;
+            .map_err(|e| format!("파일 수정시각 보존 실패: {}", crate::storage::io_error(&e)))?;
         Ok((hash, actual))
     });
     match result {
@@ -220,13 +227,18 @@ fn pull_to_tmp(
     tmp: &Path,
     expected_size: u64,
 ) -> Result<(String, u64), String> {
-    let file = std::fs::File::create(tmp).map_err(|e| format!("임시 파일 생성 실패: {e}"))?;
+    let file = std::fs::File::create(tmp)
+        .map_err(|e| format!("임시 파일 생성 실패: {}", crate::storage::io_error(&e)))?;
     let mut writer = HashingWriter::new(file);
     dev.pull(&remote, &mut writer)
-        .map_err(|e| format!("전송 실패: {e}"))?;
+        .map_err(|e| format!("전송 실패: {}", crate::storage::adb_io_error(&e)))?;
     let (file, sha256, written) = writer.finish();
-    file.sync_all()
-        .map_err(|e| format!("임시 파일 디스크 저장 실패: {e}"))?;
+    file.sync_all().map_err(|e| {
+        format!(
+            "임시 파일 디스크 저장 실패: {}",
+            crate::storage::io_error(&e)
+        )
+    })?;
     drop(file);
     let actual = verify_size(dev, remote, expected_size, written)?;
     Ok((sha256, actual))

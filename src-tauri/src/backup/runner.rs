@@ -101,7 +101,7 @@ impl TreeCtx<'_, '_> {
             files,
             skipped,
             errors,
-        } = walker::walk(self.dev, remote_root, skip);
+        } = walker::walk_cancellable(self.dev, remote_root, skip, self.cancel);
         let files: Vec<PullFile> = files.into_iter().map(PullFile::plain).collect();
         let mut rec = self.pull(id, &files, &|pf| PathBuf::from(local(&pf.entry.remote)));
         merge_walk(&mut rec, errors, &skipped);
@@ -120,7 +120,11 @@ fn collect_apks(ctx: &mut TreeCtx, id: &str) -> ItemRecord {
     let mut files: Vec<PullFile> = Vec::new();
     let mut walk_errors: Vec<String> = Vec::new();
     for (pkg, dir) in dirs {
-        let w = walker::walk(ctx.dev, &dir, &|_| false);
+        if ctx.cancel.cancelled() {
+            walk_errors.push("열거가 취소됐습니다".into());
+            break;
+        }
+        let w = walker::walk_cancellable(ctx.dev, &dir, &|_| false, ctx.cancel);
         walk_errors.extend(w.errors);
         files.extend(
             w.files
@@ -335,10 +339,14 @@ pub fn run_backup_items(
         }
     }
     // 첫 항목 전에 취소돼도 선택한 모든 항목이 Pending으로 남아야 한다.
+    manifest.excluded_items = manifest
+        .items
+        .iter()
+        .filter(|item| !items.contains(&item.id))
+        .map(|item| item.id.clone())
+        .collect();
     for item in &mut manifest.items {
-        if !items.contains(&item.id) {
-            item.status = ItemStatus::Skipped;
-        } else if item.status == ItemStatus::Skipped {
+        if items.contains(&item.id) && item.status == ItemStatus::Skipped {
             // Re-enumerate reselected items; a previously skipped Pending item is not Done.
             item.status = ItemStatus::Pending;
         }
@@ -448,6 +456,11 @@ pub fn run_backup_items(
             bytes_done: rec.bytes,
             bytes_total: rec.bytes,
         };
+        if rec.errors.iter().any(|e| e.contains("NO_SPACE|")) {
+            cancel.set();
+        }
+        // Commit closed/synced quarantine segments before publishing their receipts.
+        quarantine.checkpoint()?;
         manifest.record(rec);
         save_manifest_atomic(&manifest, &root)?;
         on_progress(progress);
@@ -465,6 +478,92 @@ pub fn run_backup_items(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deselecting_completed_files_preserves_restore_and_reselection_after_wipe() {
+        let mut d = dev_full();
+        let dest = tempfile::tempdir().unwrap();
+        let mut sink: ProgressSink = Box::new(|_| {});
+        let first = run_backup_items(
+            &mut d,
+            &["dcim".into()],
+            dest.path(),
+            None,
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        let root = Path::new(&first.dir);
+        let second = run_backup_items(
+            &mut d,
+            &["app-data".into()],
+            dest.path(),
+            Some(root),
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(second.complete);
+        let m = load_manifest(root).unwrap();
+        assert_eq!(
+            m.items.iter().find(|i| i.id == "dcim").unwrap().status,
+            ItemStatus::Done
+        );
+        assert_eq!(m.excluded_items, vec!["dcim"]);
+        d.remove_file("/sdcard/DCIM/a.jpg");
+        let pulls = d.pull_calls.len();
+        let third = run_backup_items(
+            &mut d,
+            &["dcim".into()],
+            dest.path(),
+            Some(root),
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(third.complete);
+        assert_eq!(d.pull_calls.len(), pulls);
+        assert_eq!(
+            std::fs::read(root.join("sdcard/DCIM/a.jpg")).unwrap(),
+            b"photo"
+        );
+        let restore_sink: super::super::restore::RestoreSink = std::sync::Arc::new(|_| {});
+        let mut restored = super::super::fake_device::FakeADBDevice::new();
+        restored.answer_shell("getprop ro.serialno", "AB1234CDEFGH");
+        let out = super::super::restore::run_restore(
+            &mut restored,
+            root,
+            &["dcim".into()],
+            &restore_sink,
+        );
+        assert!(out.failures.is_empty(), "{:?}", out.failures);
+    }
+    #[test]
+    fn full_disk_stops_before_the_next_file_and_item() {
+        let mut d = dev_full();
+        d.add_file("/sdcard/DCIM/b.jpg", b"b", 0, 0o644);
+        d.storage_full = true;
+        let dest = tempfile::tempdir().unwrap();
+        let mut sink: ProgressSink = Box::new(|_| {});
+        let result = run_backup_items(
+            &mut d,
+            &["dcim".into(), "apk".into()],
+            dest.path(),
+            None,
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(!result.complete);
+        assert_eq!(d.pull_calls.len(), 1);
+        assert!(result.errors.iter().any(|e| e.contains("NO_SPACE|")));
+        let m = load_manifest(Path::new(&result.dir)).unwrap();
+        assert_eq!(
+            m.items.iter().find(|i| i.id == "apk").unwrap().status,
+            ItemStatus::Pending
+        );
+    }
+
     use crate::backup::fake_device::FakeADBDevice;
 
     fn dev_full() -> FakeADBDevice {
@@ -571,7 +670,7 @@ mod tests {
         )
         .unwrap();
         // 같은 폴더로 재개 — 이미 끝난 dcim은 건너뛰고 app-data만 진행
-        let calls_before = d.shell_calls.len();
+        let calls_before = d.pull_calls.len();
         let second = run_backup_items(
             &mut d,
             &["dcim".into(), "app-data".into()],
@@ -583,7 +682,7 @@ mod tests {
         .unwrap();
         assert_eq!(second.dir, first.dir);
         assert!(second.complete);
-        let dcim_pulls = d.shell_calls[calls_before..]
+        let dcim_pulls = d.pull_calls[calls_before..]
             .iter()
             .filter(|c| c.contains("DCIM"))
             .count();
@@ -662,8 +761,9 @@ mod tests {
                 .find(|i| i.id == "sms")
                 .unwrap()
                 .status,
-            ItemStatus::Skipped
+            ItemStatus::Pending
         );
+        assert_eq!(manifest.excluded_items, vec!["sms"]);
         // Reselecting a previously Pending SMS item cannot mark it Done without an export.
         let third = run_backup_items(
             &mut reconnected,

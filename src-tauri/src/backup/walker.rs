@@ -53,12 +53,26 @@ impl WalkResult {
 /// `root` 아래 전수 열거(파일만). `skip`은 각 항목 경로(디렉터리 포함)에 대해 호출,
 /// true면 그 항목과 하위 전체를 건너뛴다(제외 사유는 호출부에서 기록).
 /// 심볼릭 링크는 따라가지 않는다(사이클·기기 외 경로 방지).
+#[cfg(test)]
 pub fn walk(dev: &mut dyn ADBDeviceExt, root: &str, skip: &dyn Fn(&str) -> bool) -> WalkResult {
+    walk_cancellable(dev, root, skip, &super::puller::CancelFlag::new())
+}
+
+pub fn walk_cancellable(
+    dev: &mut dyn ADBDeviceExt,
+    root: &str,
+    skip: &dyn Fn(&str) -> bool,
+    cancel: &super::puller::CancelFlag,
+) -> WalkResult {
     let mut out = WalkResult::default();
     let mut queue: Vec<String> = vec![root.to_string()];
     let mut depth: BTreeMap<String, u32> = BTreeMap::new();
     depth.insert(root.to_string(), 0);
     while let Some(dir) = queue.pop() {
+        if cancel.cancelled() {
+            out.errors.push("열거가 취소됐습니다".into());
+            break;
+        }
         let entries = match dev.list(&dir) {
             // adbd의 LIST는 열 수 없는 폴더(권한·없음)도 빈 목록으로 답한다 — 비었으면 셸로 실제 상태를 확인
             Ok(l) if l.is_empty() => {
@@ -77,6 +91,10 @@ pub fn walk(dev: &mut dyn ADBDeviceExt, root: &str, skip: &dyn Fn(&str) -> bool)
             }
         };
         for e in entries {
+            if cancel.cancelled() {
+                out.errors.push("열거가 취소됐습니다".into());
+                return out;
+            }
             let item = match e {
                 ADBListItemType::File(i) => i,
                 ADBListItemType::Directory(i) => {
@@ -176,6 +194,17 @@ pub fn join(dir: &str, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_walk_never_lists_a_directory() {
+        let mut d = dev_with_sdcard();
+        let flag = super::super::puller::CancelFlag::new();
+        flag.set();
+        let result = walk_cancellable(&mut d, "/sdcard", &|_| false, &flag);
+        assert!(!result.errors.is_empty());
+        assert!(d.list_calls.is_empty());
+    }
+
     use crate::backup::fake_device::FakeADBDevice;
 
     #[test]

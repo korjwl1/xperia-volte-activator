@@ -5,20 +5,54 @@ const MAX_JSON: u64 = 128 * 1024 * 1024;
 const MAX_LINE: u64 = 8 * 1024 * 1024;
 const MAX_EXPANDED: u64 = 32 * 1024 * 1024 * 1024;
 
+// Validate object arrays without retaining all call records in memory.
+struct CallRecord;
+impl<'de> serde::Deserialize<'de> for CallRecord {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Object;
+        impl<'de> serde::de::Visitor<'de> for Object {
+            type Value = CallRecord;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a call record object")
+            }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> Result<Self::Value, M::Error> {
+                while map
+                    .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                    .is_some()
+                {}
+                Ok(CallRecord)
+            }
+        }
+        d.deserialize_map(Object)
+    }
+}
+fn validate_calls(reader: impl Read) -> Result<(), String> {
+    struct Calls;
+    impl<'de> serde::de::Visitor<'de> for Calls {
+        type Value = ();
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("an array of call record objects")
+        }
+        fn visit_seq<S: serde::de::SeqAccess<'de>>(self, mut seq: S) -> Result<(), S::Error> {
+            while seq.next_element::<CallRecord>()?.is_some() {}
+            Ok(())
+        }
+    }
+    let mut d = serde_json::Deserializer::from_reader(BufReader::new(reader.take(MAX_JSON + 1)));
+    serde::Deserializer::deserialize_seq(&mut d, Calls).map_err(|e| e.to_string())?;
+    d.end().map_err(|e| e.to_string())
+}
+
 pub(super) fn validate(path: &Path, item: &str) -> Result<(), String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     if item == "calllog" {
         if file.metadata().map_err(|e| e.to_string())?.len() > MAX_JSON {
             return Err("통화 기록 JSON이 허용 크기(128 MiB)를 초과했습니다".into());
         }
-        let value: serde_json::Value = serde_json::from_reader(file).map_err(|e| e.to_string())?;
-        if !value
-            .as_array()
-            .is_some_and(|a| a.iter().all(|v| v.is_object()))
-        {
-            return Err("통화 기록은 JSON 객체 배열이어야 합니다".into());
-        }
-        return Ok(());
+        return validate_calls(file);
     }
     if item != "sms" {
         return Err("알 수 없는 문자 백업 종류입니다".into());

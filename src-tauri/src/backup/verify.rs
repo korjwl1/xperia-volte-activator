@@ -76,7 +76,7 @@ fn archive_hashes(
     {
         let entry = entry.map_err(|e| format!("격리 tar 항목 오류: {e}"))?;
         let remote = tar_remote(&entry);
-        paths::sdcard_relative(&remote)?;
+        paths::archive_relative(&remote)?;
         if !entry.header().entry_type().is_file() {
             return Err("격리 tar에 일반 파일이 아닌 항목이 있습니다".into());
         }
@@ -243,8 +243,24 @@ pub fn verify_selected(root: &Path, manifest: &mut Manifest, selected: &[String]
     }
 }
 
+pub(super) fn verify_device(
+    dev: &mut dyn adb_client::ADBDeviceExt,
+    manifest: &Manifest,
+) -> Result<(), String> {
+    let saved = manifest
+        .device_key
+        .as_deref()
+        .ok_or("백업의 원본 기기 키가 없어 같은 폰인지 확인할 수 없습니다")?;
+    if crate::device_io::identity_key(dev)? != saved {
+        return Err("백업 원본 기기와 복원 대상 기기가 다릅니다".into());
+    }
+    Ok(())
+}
+
 pub fn backup_summary(root: &Path) -> Result<BackupSummary, String> {
     let mut manifest = super::model::load_manifest(root)?;
+    let excluded = manifest.excluded_items.clone();
+    manifest.items.retain(|item| !excluded.contains(&item.id));
     let problems = verify_manifest(root, &mut manifest);
     let mut summary = BackupSummary::from(&manifest);
     if !problems.is_empty() {

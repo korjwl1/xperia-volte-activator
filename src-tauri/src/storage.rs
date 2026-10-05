@@ -6,17 +6,34 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
+pub fn io_error(e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::StorageFull
+        || cfg!(windows) && matches!(e.raw_os_error(), Some(112 | 39))
+    {
+        format!("NO_SPACE|PC 저장 공간이 부족합니다: {e}")
+    } else {
+        e.to_string()
+    }
+}
+
+pub fn adb_io_error(e: &adb_client::RustADBError) -> String {
+    match e {
+        adb_client::RustADBError::IOError(e) => io_error(e),
+        _ => e.to_string(),
+    }
+}
+
 /// 크기 상한을 실제 읽기에 적용한다. 파일이 커지더라도 메모리 사용량을 제한한다.
 pub fn read_bounded(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, String> {
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("파일 읽기 실패: {e}")),
+        Err(e) => return Err(format!("파일 읽기 실패: {}", crate::storage::io_error(&e))),
     };
     let mut bytes = Vec::new();
     file.take(limit as u64 + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| format!("파일 읽기 실패: {e}"))?;
+        .map_err(|e| format!("파일 읽기 실패: {}", crate::storage::io_error(&e)))?;
     if bytes.len() > limit {
         return Err("파일이 허용 크기를 초과했습니다".into());
     }
@@ -26,7 +43,7 @@ pub fn read_bounded(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, String
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
     atomic_file(path, |file, _| {
         file.write_all(data)
-            .map_err(|e| format!("파일 쓰기 실패: {e}"))
+            .map_err(|e| format!("파일 쓰기 실패: {}", crate::storage::io_error(&e)))
     })
 }
 
@@ -36,7 +53,8 @@ pub fn atomic_file<T>(
     write: impl FnOnce(&mut std::fs::File, &Path) -> Result<T, String>,
 ) -> Result<T, String> {
     let parent = path.parent().ok_or("저장 경로에 부모 폴더가 없습니다")?;
-    std::fs::create_dir_all(parent).map_err(|e| format!("저장 폴더 생성 실패: {e}"))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("저장 폴더 생성 실패: {}", crate::storage::io_error(&e)))?;
     // 비정상 종료로 남은 임시 파일과 PID가 겹칠 수 있다 — 다음 번호로 다시 시도한다.
     // 남의 파일을 지우지 않도록 생성에 성공한 이름만 정리 대상으로 삼는다.
     let (temporary, mut file) = {
@@ -56,18 +74,24 @@ pub fn atomic_file<T>(
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 16 => {
                     attempt += 1;
                 }
-                Err(e) => return Err(format!("임시 파일 생성 실패: {e}")),
+                Err(e) => {
+                    return Err(format!(
+                        "임시 파일 생성 실패: {}",
+                        crate::storage::io_error(&e)
+                    ))
+                }
             }
         }
     };
     let result = write(&mut file, &temporary).and_then(|value| {
         file.sync_all()
-            .map_err(|e| format!("파일 쓰기 실패: {e}"))?;
+            .map_err(|e| format!("파일 쓰기 실패: {}", crate::storage::io_error(&e)))?;
         Ok(value)
     });
     drop(file);
     let result = result.and_then(|value| {
-        std::fs::rename(&temporary, path).map_err(|e| format!("파일 교체 실패: {e}"))?;
+        std::fs::rename(&temporary, path)
+            .map_err(|e| format!("파일 교체 실패: {}", crate::storage::io_error(&e)))?;
         Ok(value)
     });
     if result.is_err() {
@@ -83,7 +107,7 @@ pub fn hash_reader(mut reader: impl Read) -> Result<(String, u64), String> {
     loop {
         let n = reader
             .read(&mut buffer)
-            .map_err(|e| format!("해시 읽기 실패: {e}"))?;
+            .map_err(|e| format!("해시 읽기 실패: {}", crate::storage::io_error(&e)))?;
         if n == 0 {
             break;
         }

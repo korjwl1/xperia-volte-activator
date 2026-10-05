@@ -25,8 +25,18 @@ export function liveStepEnabled(id: string, flags: ExecutionFlags): boolean {
     case "fw-verify": return flags.verify;
     case "final-verify": return flags.verify || flags.efs;
     case "fw-flash": return false;
-    default: return true;
+    case "prep": case "setup": case "setup-unlock": case "setup-relock": case "setup-min": return true;
+    default: return false;
   }
+}
+
+export interface EngineCapabilities { fastbootWrite: boolean; rootWrite: boolean; efsWrite: boolean }
+export function buildFeatureProblem(ids: readonly string[], features: EngineCapabilities): string | null {
+  if (ids.some(id => ["unlock", "relock", "root", "unroot"].includes(id)) && !features.fastbootWrite) return "이 빌드에는 fastboot-write 기능이 없습니다";
+  if (ids.some(id => ["root", "unroot"].includes(id)) && !features.rootWrite) return "이 빌드에는 root-write 기능이 없습니다";
+  if (ids.some(id => ["efs-input", "efs-preflight", "efs", "verify", "volte-props", "comm-check"].includes(id)) && !features.efsWrite) return "이 빌드에는 efs-write 기능이 없습니다";
+  if (ids.includes("final-verify") && !Object.values(features).some(Boolean)) return "이 빌드에는 최종 OS 재부팅 기능이 없습니다";
+  return null;
 }
 
 export function executionPlanProblem(ids: readonly string[], flags: ExecutionFlags): string | null {

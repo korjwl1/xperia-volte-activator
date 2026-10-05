@@ -24,12 +24,20 @@ impl Quarantine {
     pub fn new(backup_root: &Path) -> Result<Self, String> {
         let target = super::paths::write_target(backup_root, "quarantine/seg000.tar")?;
         let dir = target.parent().expect("quarantine 부모").to_path_buf();
-        std::fs::create_dir_all(&dir).map_err(|e| format!("quarantine 폴더 생성 실패: {e}"))?;
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            format!(
+                "quarantine 폴더 생성 실패: {}",
+                crate::storage::io_error(&e)
+            )
+        })?;
         // 이어서 백업할 때 이전 실행의 세그먼트(완료된 항목의 격리 파일)를 덮어쓰지 않도록 다음 번호부터
         let mut segment = 0;
-        for entry in
-            std::fs::read_dir(&dir).map_err(|e| format!("quarantine 목록 읽기 실패: {e}"))?
-        {
+        for entry in std::fs::read_dir(&dir).map_err(|e| {
+            format!(
+                "quarantine 목록 읽기 실패: {}",
+                crate::storage::io_error(&e)
+            )
+        })? {
             let name = entry
                 .map_err(|e| e.to_string())?
                 .file_name()
@@ -72,7 +80,12 @@ impl Quarantine {
                 .write(true)
                 .create_new(true)
                 .open(self.seg_path())
-                .map_err(|e| format!("quarantine 세그먼트 생성 실패: {e}"))?;
+                .map_err(|e| {
+                    format!(
+                        "quarantine 세그먼트 생성 실패: {}",
+                        crate::storage::io_error(&e)
+                    )
+                })?;
             self.builder = Some(tar::Builder::new(f));
             self.written = 0;
             self.created += 1;
@@ -84,12 +97,27 @@ impl Quarantine {
     fn rotate(&mut self) -> Result<(), String> {
         if let Some(b) = self.builder.take() {
             b.into_inner()
-                .map_err(|e| format!("quarantine 세그먼트 종료 실패: {e}"))?
+                .map_err(|e| {
+                    format!(
+                        "quarantine 세그먼트 종료 실패: {}",
+                        crate::storage::io_error(&e)
+                    )
+                })?
                 .sync_all()
-                .map_err(|e| format!("quarantine 디스크 저장 실패: {e}"))?;
+                .map_err(|e| {
+                    format!(
+                        "quarantine 디스크 저장 실패: {}",
+                        crate::storage::io_error(&e)
+                    )
+                })?;
             self.segment += 1;
         }
         Ok(())
+    }
+
+    /// manifest 저장 전에 tar 끝 표시와 내용을 디스크에 확정한다.
+    pub fn checkpoint(&mut self) -> Result<(), String> {
+        self.rotate()
     }
 
     /// 임시 파일(안전한 이름)에 받아 둔 내용을 원본 이름의 tar 항목으로 추가.
@@ -102,10 +130,12 @@ impl Quarantine {
         }
         let data = std::fs::File::open(tmp).map_err(|e| e.to_string())?;
         let builder = self.ensure_open()?;
-        let start = builder
-            .get_mut()
-            .stream_position()
-            .map_err(|e| format!("quarantine 위치 확인 실패: {e}"))?;
+        let start = builder.get_mut().stream_position().map_err(|e| {
+            format!(
+                "quarantine 위치 확인 실패: {}",
+                crate::storage::io_error(&e)
+            )
+        })?;
         let mut header = tar::Header::new_gnu();
         header.set_size(size);
         header.set_mode(0o644);
@@ -115,8 +145,14 @@ impl Quarantine {
         if let Err(e) = append_unix_path(builder, &mut header, name, ExactReader::new(data, size)) {
             let rollback = self.truncate_and_close(start);
             return Err(match rollback {
-                Ok(()) => format!("quarantine 항목 추가 실패({remote}): {e}"),
-                Err(r) => format!("quarantine 항목 추가 실패({remote}): {e} (정리 실패: {r})"),
+                Ok(()) => format!(
+                    "quarantine 항목 추가 실패({remote}): {}",
+                    crate::storage::io_error(&e)
+                ),
+                Err(r) => format!(
+                    "quarantine 항목 추가 실패({remote}): {} (정리 실패: {r})",
+                    crate::storage::io_error(&e)
+                ),
             });
         }
         self.written += size;

@@ -661,3 +661,35 @@ test("the mock skip button is unavailable while real checks are on", () => {
   }
   assert.equal(w.manualSkippable, skippable);
 });
+
+
+test("SMS confirmation cannot dismiss its guide and backup-only live mode cannot skip it", () => {
+  const w = wizard(); Object.assign(flags, { backup: true, restore: false, root: false, fastboot: false, efs: false, verify: false });
+  w.manualCurrent = { id: "smsie-export" };
+  w.manualChecking = true; assert.equal(w.manualCanDismiss, false); assert.equal(w.manualSkippable, false);
+  w.manualChecking = false; assert.equal(w.manualCanDismiss, true);
+  Object.assign(flags, { backup: false }); assert.equal(w.manualSkippable, true);
+});
+test("a mismatched journal can be archived explicitly without overwriting it", async () => {
+  const w = wizard(); const mismatched = journal(); mismatched.model = "XQ-OTHER";
+  api.journalLoad = async () => ({ ok: true, value: JSON.stringify(mismatched) });
+  const archived = []; api.journalArchive = async (key, tag) => { archived.push([key, tag]); return true; };
+  assert.equal(await w.checkJournal(), true); assert.equal(w.journalMismatch, true); assert.equal(w.journalReadBlocked, true);
+  await w.discardJournal(); assert.equal(archived.length, 1); assert.equal(archived[0][1], "discarded"); assert.equal(w.journalReadBlocked, false); assert.equal(w.journalMismatch, false);
+});
+test("resume waits for firmware folder validation before any build or device checks", async () => {
+  const w = wizard(); w.firmwareDirState = "loading"; let calls = 0;
+  api.engineCapabilities = async () => { calls++; throw Error("must not query"); }; w.begin = () => calls++;
+  w.resumeRun(); await new Promise(r => setImmediate(r)); assert.equal(calls, 0);
+});
+
+
+test("contact import finishes cleanup after counts pass and never writes after a stale check", async () => {
+  const w = wizard(); w.backupDir = "backup"; w.manualCurrent = { id: "contacts-import" };
+  let cleanups = 0; api.contactsRestoreCheck = async () => ({ backedUp: 0, onDevice: 0 });
+  api.contactsRestoreFinish = async (serial, dir) => { assert.equal(serial, w.device.serial); assert.equal(dir, "backup"); cleanups++; return { ok: true, value: null }; };
+  assert.equal(await w.verifyManual("contacts-import"), null); assert.equal(cleanups, 1);
+  api.contactsRestoreFinish = async () => ({ ok: false, error: "cleanup failed" }); assert.match(await w.verifyManual("contacts-import"), /cleanup failed/);
+  const pending = deferred(); api.contactsRestoreCheck = () => pending.promise;
+  const stale = w.verifyManual("contacts-import"); w.runGen++; pending.resolve({ backedUp: 0, onDevice: 0 }); await stale; assert.equal(cleanups, 1);
+});

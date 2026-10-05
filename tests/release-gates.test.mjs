@@ -33,6 +33,7 @@ test("actual API facade rejects disabled writes before invoking the native bridg
     () => api.magiskPatch({ serial: "A" }),
     () => api.magiskInstall("A", "apk", "hash"),
     () => api.rootReboot("A", "os"),
+    () => api.contactsRestoreFinish("A", "backup"),
     () => api.efsDiagOpen("A"),
     () => api.efsUpload("preset"),
     () => api.efsVerify("preset"),

@@ -56,3 +56,5 @@
 내보내기 형식과 실패 후에도 닫힐 수 있는 ZIP 구조는 [sms-ie 메시지 코드](https://github.com/tmo1/sms-ie/blob/master/app/src/main/java/com/github/tmo1/sms_ie/ImportExportMessages.kt), [Worker의 실패 처리](https://github.com/tmo1/sms-ie/blob/master/app/src/main/java/com/github/tmo1/sms_ie/ImportExportWorker.kt)를 확인했다. APK 컨테이너 구조는 [AOSP v2 서명 명세](https://source.android.com/docs/security/features/apksigning/v2)와 대조했다.
 
 오프라인 검증 결과로 실기기 동작을 보장하지 않는다. XQ-DQ44의 실제 드라이버/모드 전환, sms-ie 사용자 조작/초기화 후 복원, 양 슬롯 기록·리락 후 부팅, DIAG/EFS, IMS·사용자 발신/수신/음성은 [단일 실기기 체크리스트](device-test-checklist.md)에 남겼다. 기본 배포에서는 모든 쓰기 기능을 계속 끈다.
+
+후속 정정(2026-10-06): 완료 항목 선택 해제·펌웨어 관찰 키 회귀와 연락처·CLI 등 미보완 사항이 추가로 확인됐다. 최신 판정·수정·검증은 [후속 적대적 검토](review-followup-20261006.md)를 따른다.

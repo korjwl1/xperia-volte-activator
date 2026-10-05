@@ -12,7 +12,7 @@ const MAX_REQUEST: usize = 1024 * 1024;
 const MAX_RECORD: usize = 16 * 1024 * 1024;
 
 macro_rules! requests {
-    ($($variant:ident ($name:literal, $write:expr, $enabled:expr) { $($field:ident : $ty:ty = $example:expr),* $(,)? })*) => {
+    ($($variant:ident ($name:literal, $write:expr, $enabled:expr, $pc:expr) { $($field:ident : $ty:ty = $example:expr),* $(,)? })*) => {
         #[derive(Deserialize)]
         #[serde(tag = "command", content = "args", rename_all_fields = "camelCase", deny_unknown_fields)]
         enum Request {
@@ -23,9 +23,10 @@ macro_rules! requests {
                 match self { $(Self::$variant { .. } => ($name, $write, $enabled),)* }
             }
         }
+        fn pc_only(command: &str) -> bool { match command { $($name => $pc,)* _ => false } }
         fn catalog() -> Value {
             json!([$(json!({"command": $name, "requiresDeviceWrite": $write,
-                "enabledInBuild": $enabled, "example": {"command": $name,
+                "enabledInBuild": $enabled, "pcOnly": $pc, "example": {"command": $name,
                 "args": {$(stringify!($field): $example),*}}})),*])
         }
     };
@@ -33,53 +34,55 @@ macro_rules! requests {
 
 // CLI args follow Tauri camelCase. Catalog generation uses snake_case field names converted below.
 requests! {
-    AdbStatus("adb_status", false, true) {}
-    DeviceList("device_list", false, true) {}
-    UsbModes("usb_modes", false, true) {}
-    EnvCheck("env_check", false, true) {}
-    ToolCheck("efs_tool_check", false, true) {}
-    RootCheck("root_check", false, true) { serial: String = "sha256:<serialKey>" }
-    StorageSizes("storage_sizes", false, true) { serial: String = "sha256:<serialKey>" }
-    AppFlags("app_flags", false, true) { serial: String = "sha256:<serialKey>" }
-    SettingsOverview("settings_overview", false, true) { serial: String = "sha256:<serialKey>" }
-    FirmwareVersions("firmware_versions", false, true) { serial: String = "sha256:<serialKey>" }
-    FirmwareFetch("firmware_fetch", false, true) {
+    EngineCapabilities("engine_capabilities", false, true, true) {}
+    AdbStatus("adb_status", false, true, false) {}
+    DeviceList("device_list", false, true, false) {}
+    UsbModes("usb_modes", false, true, false) {}
+    EnvCheck("env_check", false, true, true) {}
+    ToolCheck("efs_tool_check", false, true, true) {}
+    RootCheck("root_check", false, true, false) { serial: String = "sha256:<serialKey>" }
+    StorageSizes("storage_sizes", false, true, false) { serial: String = "sha256:<serialKey>" }
+    AppFlags("app_flags", false, true, false) { serial: String = "sha256:<serialKey>" }
+    SettingsOverview("settings_overview", false, true, false) { serial: String = "sha256:<serialKey>" }
+    FirmwareVersions("firmware_versions", false, true, false) { serial: String = "sha256:<serialKey>" }
+    FirmwareFetch("firmware_fetch", false, true, false) {
         serial: String = "sha256:<serialKey>", partition: String = "init_boot",
         version: Option<String> = Value::Null, dest: Option<String> = Value::Null
     }
-    FirmwareDirCheck("firmware_dir_check", false, true) { dir: String = "<absolute firmware folder>", partition: String = "init_boot" }
-    BootImageCheck("boot_image_check", false, true) { serial: String = "sha256:<serialKey>", path: String = "<stock image path>", fingerprint: String = "<extraction fingerprint>" }
-    MagiskPrepare("magisk_prepare", false, true) {}
-    MagiskPatch("magisk_patch", true, cfg!(feature = "root-write")) { request: crate::magisk::MagiskPatchRequest = json!({"serial":"sha256:<serialKey>", "apkPath":"<verified APK>", "imagePath":"<stock image>", "partition":"init_boot", "imageSha256":"<stock SHA256>", "fingerprint":"<extraction fingerprint>", "apkSha256":"<APK SHA256>"}) }
-    MagiskInstall("magisk_install", true, cfg!(feature = "root-write")) { serial: String = "sha256:<serialKey>", apk_path: String = "<verified APK>", apk_sha256: String = "<APK SHA256>" }
-    RootReboot("root_reboot", true, cfg!(any(feature = "root-write", feature = "fastboot-write", feature = "efs-write"))) { serial: String = "sha256:<serialKey>", target: String = "os" }
-    FastbootGetvar("fastboot_getvar", false, true) {}
-    FastbootUnlock("fastboot_unlock", true, cfg!(feature = "fastboot-write")) { code: String = "<unlock code, private input only>", confirm: bool = true, expected_serial: String = "sha256:<serialKey>" }
-    FastbootFlash("fastboot_flash", true, cfg!(feature = "fastboot-write")) {
+    FirmwareDirCheck("firmware_dir_check", false, true, true) { dir: String = "<absolute firmware folder>", partition: String = "init_boot" }
+    BootImageCheck("boot_image_check", false, true, false) { serial: String = "sha256:<serialKey>", path: String = "<stock image path>", fingerprint: String = "<extraction fingerprint>" }
+    MagiskPrepare("magisk_prepare", false, true, true) {}
+    MagiskPatch("magisk_patch", true, cfg!(feature = "root-write"), false) { request: crate::magisk::MagiskPatchRequest = json!({"serial":"sha256:<serialKey>", "apkPath":"<verified APK>", "imagePath":"<stock image>", "partition":"init_boot", "imageSha256":"<stock SHA256>", "fingerprint":"<extraction fingerprint>", "apkSha256":"<APK SHA256>"}) }
+    MagiskInstall("magisk_install", true, cfg!(feature = "root-write"), false) { serial: String = "sha256:<serialKey>", apk_path: String = "<verified APK>", apk_sha256: String = "<APK SHA256>" }
+    RootReboot("root_reboot", true, cfg!(any(feature = "root-write", feature = "fastboot-write", feature = "efs-write")), false) { serial: String = "sha256:<serialKey>", target: String = "os" }
+    FastbootGetvar("fastboot_getvar", false, true, false) {}
+    FastbootUnlock("fastboot_unlock", true, cfg!(feature = "fastboot-write"), false) { code: String = "<unlock code, private input only>", confirm: bool = true, expected_serial: String = "sha256:<serialKey>" }
+    FastbootFlash("fastboot_flash", true, cfg!(feature = "fastboot-write"), false) {
         partition: String = "init_boot", path: String = "<checked image>", confirm: bool = true,
         expected_serial: String = "sha256:<serialKey>", expected_sha256: String = "<checked SHA256>"
     }
-    FastbootLock("fastboot_lock", true, cfg!(feature = "fastboot-write")) { confirm: bool = true, partition: String = "init_boot", stock_path: String = "<stock image>", expected_serial: String = "sha256:<serialKey>" }
-    FastbootReboot("fastboot_reboot", true, cfg!(feature = "fastboot-write")) { target: String = "os", expected_serial: String = "sha256:<serialKey>" }
-    RelockGateCheck("relock_gate_check", false, true) { partition: String = "init_boot", stock_path: String = "<stock image>", device_key: Option<String> = Value::Null }
-    FlashHistoryArchive("flash_history_archive", false, true) { confirm: bool = false }
-    EfsValidatePresets("efs_validate_presets", false, true) { preset_dirs: Vec<String> = json!(["<approved balance preset directory>"]) }
-    EfsDiagOpen("efs_diag_open", true, cfg!(feature = "efs-write")) { serial: String = "sha256:<serialKey>" }
-    EfsPreflight("efs_preflight", true, cfg!(feature = "efs-write")) { port: String = "COM<number>" }
-    EfsSnapshot("efs_snapshot", true, cfg!(feature = "efs-write")) { port: String = "COM<number>", preset_dir: String = "<approved balance preset>", dest: String = "<new snapshot folder>" }
-    EfsUpload("efs_upload", true, cfg!(feature = "efs-write")) { port: String = "COM<number>", preset_dir: String = "<approved balance preset>" }
-    EfsVerify("efs_verify", true, cfg!(feature = "efs-write")) { port: String = "COM<number>", preset_dir: String = "<approved balance preset>" }
-    EfsRollback("efs_rollback", true, cfg!(feature = "efs-write")) { port: String = "COM<number>", snapshot: String = "<complete snapshot folder>" }
-    VoltePropsSet("volte_props_set", true, cfg!(feature = "efs-write")) { serial: String = "sha256:<serialKey>" }
-    BackupPrepare("backup_prepare", false, true) { serial: String = "sha256:<serialKey>", dest: String = "<existing backup parent>" }
-    BackupRun("backup_run", false, true) { serial: String = "sha256:<serialKey>", items: Vec<String> = json!(["dcim"]), dest: String = "<existing backup parent>", resume_dir: Option<String> = Value::Null, run_id: String = "backup-test-1" }
-    BackupManifestCheck("backup_manifest_check", false, true) { dir: String = "<backup folder>" }
-    ContactsRestoreCheck("contacts_restore_check", false, true) { serial: String = "sha256:<serialKey>", dir: String = "<backup folder>" }
-    SmsiePrepare("smsie_prepare", true, true) { serial: String = "sha256:<serialKey>", download: bool = true }
-    SmsieCollect("smsie_collect", true, true) { serial: String = "sha256:<serialKey>", backup_dir: String = "<backup folder>", confirm_complete: Option<bool> = false }
-    RestoreRun("restore_run", true, true) { serial: String = "sha256:<serialKey>", dir: String = "<backup folder>", items: Vec<String> = json!(["dcim"]) }
-    SmsieRestoreStage("smsie_restore_stage", true, true) { serial: String = "sha256:<serialKey>", dir: String = "<backup folder>", items: Vec<String> = json!(["sms", "calllog"]) }
-    SmsieRestoreFinish("smsie_restore_finish", true, true) { serial: String = "sha256:<serialKey>" }
+    FastbootLock("fastboot_lock", true, cfg!(feature = "fastboot-write"), false) { confirm: bool = true, partition: String = "init_boot", stock_path: String = "<stock image>", expected_serial: String = "sha256:<serialKey>" }
+    FastbootReboot("fastboot_reboot", true, cfg!(feature = "fastboot-write"), false) { target: String = "os", expected_serial: String = "sha256:<serialKey>" }
+    RelockGateCheck("relock_gate_check", false, true, true) { partition: String = "init_boot", stock_path: String = "<stock image>", device_key: Option<String> = Value::Null }
+    FlashHistoryArchive("flash_history_archive", false, true, true) { confirm: bool = false }
+    EfsValidatePresets("efs_validate_presets", false, true, true) { preset_dirs: Vec<String> = json!(["<approved balance preset directory>"]) }
+    EfsDiagOpen("efs_diag_open", true, cfg!(feature = "efs-write"), false) { serial: String = "sha256:<serialKey>" }
+    EfsPreflight("efs_preflight", true, cfg!(feature = "efs-write"), false) { port: String = "COM<number>" }
+    EfsSnapshot("efs_snapshot", true, cfg!(feature = "efs-write"), false) { port: String = "COM<number>", preset_dir: String = "<approved balance preset>", dest: String = "<new snapshot folder>" }
+    EfsUpload("efs_upload", true, cfg!(feature = "efs-write"), false) { port: String = "COM<number>", preset_dir: String = "<approved balance preset>" }
+    EfsVerify("efs_verify", true, cfg!(feature = "efs-write"), false) { port: String = "COM<number>", preset_dir: String = "<approved balance preset>" }
+    EfsRollback("efs_rollback", true, cfg!(feature = "efs-write"), false) { port: String = "COM<number>", snapshot: String = "<complete snapshot folder>" }
+    VoltePropsSet("volte_props_set", true, cfg!(feature = "efs-write"), false) { serial: String = "sha256:<serialKey>" }
+    BackupPrepare("backup_prepare", false, true, false) { serial: String = "sha256:<serialKey>", dest: String = "<existing backup parent>" }
+    BackupRun("backup_run", false, true, false) { serial: String = "sha256:<serialKey>", items: Vec<String> = json!(["dcim"]), dest: String = "<existing backup parent>", resume_dir: Option<String> = Value::Null, run_id: String = "backup-test-1" }
+    BackupManifestCheck("backup_manifest_check", false, true, true) { dir: String = "<backup folder>" }
+    ContactsRestoreFinish("contacts_restore_finish", true, true, false) { serial: String = "sha256:<serialKey>", dir: String = "<backup folder>" }
+    ContactsRestoreCheck("contacts_restore_check", false, true, false) { serial: String = "sha256:<serialKey>", dir: String = "<backup folder>" }
+    SmsiePrepare("smsie_prepare", true, true, false) { serial: String = "sha256:<serialKey>", download: bool = true }
+    SmsieCollect("smsie_collect", true, true, false) { serial: String = "sha256:<serialKey>", backup_dir: String = "<backup folder>", confirm_complete: Option<bool> = false }
+    RestoreRun("restore_run", true, true, false) { serial: String = "sha256:<serialKey>", dir: String = "<backup folder>", items: Vec<String> = json!(["dcim"]) }
+    SmsieRestoreStage("smsie_restore_stage", true, true, false) { serial: String = "sha256:<serialKey>", dir: String = "<backup folder>", items: Vec<String> = json!(["sms", "calllog"]) }
+    SmsieRestoreFinish("smsie_restore_finish", true, true, false) { serial: String = "sha256:<serialKey>" }
 }
 
 fn camel(s: &str) -> String {
@@ -151,6 +154,7 @@ fn packed<T: serde::Serialize, E: serde::Serialize>(result: Result<T, E>) -> Res
 async fn dispatch(req: Request, events: Events) -> Result<Value, Value> {
     use crate::{adb, backup, boot_image, efs, env, fastboot, firmware, magisk, usbmode};
     match req {
+        Request::EngineCapabilities {} => Ok(crate::env::engine_capabilities()),
         Request::AdbStatus {} => packed(adb::adb_status().await),
         Request::DeviceList {} => packed(adb::device_list().await),
         Request::UsbModes {} => packed(usbmode::usb_modes().await),
@@ -280,6 +284,9 @@ async fn dispatch(req: Request, events: Events) -> Result<Value, Value> {
         Request::ContactsRestoreCheck { serial, dir } => {
             packed(backup::contacts_restore_check(Some(serial), dir).await)
         }
+        Request::ContactsRestoreFinish { serial, dir } => {
+            packed(backup::contacts_restore_finish(Some(serial), dir).await)
+        }
         Request::SmsiePrepare { serial, download } => {
             packed(backup::smsie_prepare(Some(serial), download).await)
         }
@@ -320,6 +327,8 @@ impl Redactor {
                             .as_str()
                             .filter(|s| !s.is_empty() && !s.starts_with("sha256:"))
                         {
+                            self.secrets.push(s.to_owned());
+                            let s = s.trim();
                             self.secrets.push(s.to_owned());
                             if let Some(code) =
                                 s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))
@@ -391,6 +400,7 @@ fn private_key(key: &str) -> bool {
 }
 
 fn unlock_secret(value: &str) -> bool {
+    let value = value.trim();
     let value = value
         .strip_prefix("0x")
         .or_else(|| value.strip_prefix("0X"))
@@ -508,21 +518,6 @@ fn build_info() -> Value {
 
 /// 폰 데이터가 초기화되는 단계(언락·리락). GUI는 enforceBackupGate로 막는다.
 const WIPING_COMMANDS: &[&str] = &["fastboot_unlock", "fastboot_lock"];
-
-/// 기기에 연결하지 않는 명령 — GUI 앱이 떠 있어도 실행할 수 있다
-fn pc_only(command: &str) -> bool {
-    matches!(
-        command,
-        "env_check"
-            | "efs_tool_check"
-            | "firmware_dir_check"
-            | "magisk_prepare"
-            | "relock_gate_check"
-            | "flash_history_archive"
-            | "efs_validate_presets"
-            | "backup_manifest_check"
-    )
-}
 
 /// 초기화 단계의 백업 선행 조건 — 완결된 백업(backup_manifest_check의 complete) 또는 백업 없이 진행한다는 명시.
 /// GUI의 enforceBackupGate와 같은 판정(같은 엔진의 매니페스트 재검사)을 쓴다.
@@ -700,17 +695,26 @@ async fn run(
     if let Some(gate) = backup {
         record["backupGate"] = gate;
     }
+    let event_file = std::fs::File::create(dir.join("events.jsonl")).map_err(|e| e.to_string())?;
     write_record(&record_path, &record)?;
     let mut redactor = Redactor::default();
     redactor.learn(&value);
     let log = Arc::new(Mutex::new(RunLog {
-        file: std::fs::File::create(dir.join("events.jsonl")).map_err(|e| e.to_string())?,
+        file: event_file,
         redactor,
         io_error: None,
     }));
-    log.lock()
-        .map_err(|_| "로그 잠금 실패")?
-        .emit(json!({"type":"started","record":record}))?;
+    if let Err(error) = log
+        .lock()
+        .map_err(|_| "로그 잠금 실패".to_string())
+        .and_then(|mut log| log.emit(json!({"type":"started","record":record})))
+    {
+        record["status"] = json!("failed");
+        record["finishedAt"] = json!(now());
+        record["logError"] = json!(error);
+        write_record(&record_path, &record)?;
+        return Err(error);
+    }
     let output = log.clone();
     let events = Events::callback(move |name, payload| {
         output
@@ -776,6 +780,19 @@ async fn run(
 }
 
 fn outcome_ok(command: &str, value: &Value) -> bool {
+    if matches!(command, "backup_run" | "backup_manifest_check")
+        && value.get("complete") != Some(&json!(true))
+    {
+        return false;
+    }
+    if command == "smsie_collect"
+        && (value.get("ready") != Some(&json!(true))
+            || value
+                .get("summary")
+                .is_some_and(|s| s.get("complete") != Some(&json!(true))))
+    {
+        return false;
+    }
     for key in ["errors", "failures"] {
         if value
             .get(key)
@@ -797,10 +814,18 @@ fn history(data_dir: &Path) -> Result<Value, String> {
     let mut result = Vec::new();
     for entry in std::fs::read_dir(runs).map_err(|e| e.to_string())? {
         let path = entry.map_err(|e| e.to_string())?.path().join("record.json");
-        if let Some(bytes) = crate::storage::read_bounded(&path, MAX_RECORD)? {
-            let record: Value =
-                serde_json::from_slice(&bytes).map_err(|_| "실행 기록 형식 오류")?;
+        let read = crate::storage::read_bounded(&path, MAX_RECORD).and_then(|bytes| {
+            bytes
+                .map(|bytes| {
+                    serde_json::from_slice::<Value>(&bytes)
+                        .map_err(|_| "실행 기록 형식 오류".to_string())
+                })
+                .transpose()
+        });
+        if let Ok(Some(record)) = &read {
             result.push(json!({"command":record["command"],"step":record["step"],"status":record["status"],"startedAt":record["startedAt"],"finishedAt":record["finishedAt"],"recordPath":path}));
+        } else if let Err(error) = read {
+            result.push(json!({"status":"corrupt","recordPath":path,"error":error}));
         }
     }
     result.sort_by(|a, b| a["startedAt"].as_str().cmp(&b["startedAt"].as_str()));
@@ -952,6 +977,44 @@ pub fn main_entry(args: impl Iterator<Item = OsString>) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incomplete_semantic_results_and_corrupt_receipts_are_visible() {
+        assert!(!outcome_ok(
+            "backup_run",
+            &json!({"complete":false,"errors":[]})
+        ));
+        assert!(!outcome_ok("smsie_collect", &json!({"ready":false})));
+        assert!(!outcome_ok(
+            "smsie_collect",
+            &json!({"ready":true,"summary":{"complete":false}})
+        ));
+        let root = tempfile::tempdir().unwrap();
+        let bad = root.path().join("dev-runs/bad");
+        std::fs::create_dir_all(&bad).unwrap();
+        std::fs::write(bad.join("record.json"), b"broken").unwrap();
+        let good = root.path().join("dev-runs/good");
+        std::fs::create_dir(&good).unwrap();
+        std::fs::write(
+            good.join("record.json"),
+            br#"{"command":"tool_check","status":"done"}"#,
+        )
+        .unwrap();
+        let records = history(root.path()).unwrap();
+        assert_eq!(records.as_array().unwrap().len(), 2);
+        assert!(records
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["status"] == "corrupt"));
+        let mut redactor = Redactor::default();
+        redactor.learn(&json!({"code":" 0X1234567890abcdef "}));
+        assert!(!redactor
+            .clean(&json!("error code=1234567890ABCDEF"))
+            .to_string()
+            .contains("1234567890ABCDEF"));
+    }
+
     #[test]
     fn fastboot_target_must_match_the_adb_serial_the_app_would_send() {
         let dir = tempfile::tempdir().unwrap();

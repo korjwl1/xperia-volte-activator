@@ -267,6 +267,25 @@ pub async fn contacts_restore_check(
     crate::tasks::blocking("연락처 확인", work).await
 }
 
+/// Import has been acknowledged and counted before deleting the fixed phone-side temporary.
+#[tauri::command]
+pub async fn contacts_restore_finish(serial: Option<String>, dir: String) -> Result<(), String> {
+    let operation = Operation::acquire()?;
+    crate::tasks::blocking("연락처 임시 파일 정리", move || {
+        let _operation = operation;
+        let dir = PathBuf::from(dir);
+        crate::adb::with_first_device(&serial, |dev| {
+            verify::verify_device(dev, &model::load_manifest(&dir)?)?;
+            let (saved, current) = contacts::restore_check(dev, &dir)?;
+            if current < saved {
+                return Err("연락처 가져오기가 완료되지 않았습니다".into());
+            }
+            contacts::finish_restore_contacts(dev)
+        })
+    })
+    .await
+}
+
 /// run_id를 주면 그 실행만(시작 전이면 시작 즉시) 취소, 없으면 지금 실행 중인 백업을 취소
 #[tauri::command]
 pub async fn backup_cancel(run_id: Option<String>) -> Result<(), String> {
@@ -411,9 +430,7 @@ fn collect_smsie_backup(
     let selected: Vec<String> = manifest
         .items
         .iter()
-        .filter(|item| {
-            item.kind == model::ItemKind::SmsIe && item.status != model::ItemStatus::Skipped
-        })
+        .filter(|item| item.kind == model::ItemKind::SmsIe && manifest.is_selected(item))
         .map(|item| item.id.clone())
         .collect();
     let selected_ids: Vec<&str> = selected.iter().map(String::as_str).collect();
@@ -530,6 +547,7 @@ pub async fn smsie_restore_stage(
             Some(smsie::download_apk(&cache)?)
         };
         crate::adb::with_first_device(&serial, |dev| {
+            verify::verify_device(dev, &model::load_manifest(&backup_dir)?)?;
             smsie::restore_stage(dev, &backup_dir, &items, &state_dir, apk.as_ref())
         })
     };

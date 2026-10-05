@@ -49,7 +49,24 @@ pub fn write_target(root: &Path, relative: &str) -> Result<PathBuf, String> {
     Ok(target)
 }
 
+/// Archive names are validated without assuming every member will be extracted to sdcard.
+pub fn archive_relative(remote: &str) -> Result<&str, String> {
+    let relative = remote
+        .strip_prefix('/')
+        .ok_or("기기 절대 경로가 아닙니다")?;
+    if relative.is_empty()
+        || relative.contains('\0')
+        || relative
+            .split('/')
+            .any(|p| p.is_empty() || p == "." || p == "..")
+    {
+        return Err("잘못된 기기 아카이브 경로입니다".into());
+    }
+    Ok(relative)
+}
+
 pub fn sdcard_relative(remote: &str) -> Result<String, String> {
+    archive_relative(remote)?;
     let relative = remote
         .strip_prefix("/sdcard/")
         .ok_or("sdcard 밖의 복구 대상입니다")?;

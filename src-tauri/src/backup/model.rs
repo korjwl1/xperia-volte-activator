@@ -29,7 +29,7 @@ pub enum ItemStatus {
     Done,
     /// 부분 완료 — 오류 또는 누락 존재(완결 게이트 통과 불가)
     Partial,
-    /// 선택에서 빠짐
+    /// 구형 기록의 선택 해제. 새 기록은 excluded_items로 선택을 분리한다.
     Skipped,
 }
 
@@ -123,6 +123,9 @@ pub struct Manifest {
     pub firmware: String,
     pub android: String,
     pub items: Vec<ItemRecord>,
+    /// Current backup selection; exclusion never destroys a completed restore receipt.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excluded_items: Vec<String>,
 }
 
 impl Manifest {
@@ -138,17 +141,14 @@ impl Manifest {
             firmware: firmware.to_string(),
             android: android.to_string(),
             items: Vec::new(),
+            excluded_items: Vec::new(),
         }
     }
 
     /// 전체 완결 여부 — "전수 열거 완료 + 오류 0"(§6-2). 파괴 단계 게이트의 입력.
     /// skipped 항목은 판정에서 제외(선택하지 않은 것은 완결에 포함하지 않는다).
     pub fn complete(&self) -> bool {
-        let selected: Vec<_> = self
-            .items
-            .iter()
-            .filter(|i| i.status != ItemStatus::Skipped)
-            .collect();
+        let selected: Vec<_> = self.items.iter().filter(|i| self.is_selected(i)).collect();
         !selected.is_empty()
             && selected.iter().all(|i| {
                 i.status == ItemStatus::Done
@@ -161,6 +161,7 @@ impl Manifest {
     pub fn error_summary(&self) -> Vec<String> {
         self.items
             .iter()
+            .filter(|i| self.is_selected(i))
             .filter_map(|i| match i.status {
                 ItemStatus::Partial => Some(match i.errors.first() {
                     Some(e) => format!("{}: {e}", i.id),
@@ -173,11 +174,23 @@ impl Manifest {
     }
 
     pub fn total_files(&self) -> u64 {
-        self.items.iter().map(|i| i.files as u64).sum()
+        self.items
+            .iter()
+            .filter(|i| self.is_selected(i))
+            .map(|i| i.files as u64)
+            .sum()
     }
 
     pub fn total_bytes(&self) -> u64 {
-        self.items.iter().map(|i| i.bytes).sum()
+        self.items
+            .iter()
+            .filter(|i| self.is_selected(i))
+            .map(|i| i.bytes)
+            .sum()
+    }
+
+    pub fn is_selected(&self, item: &ItemRecord) -> bool {
+        item.status != ItemStatus::Skipped && !self.excluded_items.contains(&item.id)
     }
 
     pub fn record(&mut self, rec: ItemRecord) {
@@ -229,7 +242,7 @@ impl From<&Manifest> for BackupSummary {
             items: m
                 .items
                 .iter()
-                .filter(|i| i.status != ItemStatus::Skipped)
+                .filter(|i| m.is_selected(i))
                 .map(|i| ItemBrief {
                     id: i.id.clone(),
                     status: status_str(i.status),
@@ -261,9 +274,32 @@ pub fn save_manifest_atomic(manifest: &Manifest, dir: &std::path::Path) -> Resul
 pub fn load_manifest(dir: &std::path::Path) -> Result<Manifest, String> {
     let path = dir.join("manifest.json");
     let raw = std::fs::read_to_string(&path).map_err(|e| format!("manifest 읽기 실패: {e}"))?;
-    let m: Manifest = serde_json::from_str(&raw).map_err(|e| format!("manifest 해석 실패: {e}"))?;
+    let mut m: Manifest =
+        serde_json::from_str(&raw).map_err(|e| format!("manifest 해석 실패: {e}"))?;
     if m.version != MANIFEST_VERSION {
         return Err(format!("지원하지 않는 manifest 버전: {}", m.version));
+    }
+    // The old selection logic overwrote Done with Skipped. Recover only snapshots
+    // with per-file evidence; never recollect a verified contact/SMS snapshot after a wipe.
+    let mut recovered = Vec::new();
+    for item in &mut m.items {
+        if item.status == ItemStatus::Skipped
+            && item.errors.is_empty()
+            && !item.entries.is_empty()
+            && item
+                .entries
+                .iter()
+                .all(|e| e.error.is_none() && e.sha256.is_some())
+        {
+            item.status = ItemStatus::Done;
+            recovered.push(item.id.clone());
+            if !m.excluded_items.contains(&item.id) {
+                m.excluded_items.push(item.id.clone());
+            }
+        }
+    }
+    if !recovered.is_empty() {
+        super::verify::verify_selected(dir, &mut m, &recovered);
     }
     Ok(m)
 }

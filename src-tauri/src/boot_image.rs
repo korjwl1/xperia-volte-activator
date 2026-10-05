@@ -242,6 +242,21 @@ pub(crate) fn save_device_check(
     )
 }
 
+static OBSERVED_FIRMWARE: std::sync::Mutex<
+    Option<std::collections::HashMap<PathBuf, (String, bool)>>,
+> = std::sync::Mutex::new(None);
+
+pub(crate) fn observe_physical_firmware(
+    dir: &Path,
+    serial: &str,
+    fingerprint: &str,
+) -> Result<(), String> {
+    if serial.trim().is_empty() {
+        return Ok(());
+    }
+    observe_firmware(dir, &sha256(serial.trim().as_bytes()), fingerprint)
+}
+
 pub(crate) fn observe_firmware(
     dir: &Path,
     device_key: &str,
@@ -256,10 +271,21 @@ pub(crate) fn observe_firmware(
     // Validate the key before constructing a filename from it.
     check_path(dir, device_key, &"0".repeat(64))?;
     let value = serde_json::to_vec(fingerprint).map_err(|e| e.to_string())?;
-    if crate::storage::read_bounded(&path, 64 * 1024)?.as_deref() != Some(value.as_slice()) {
-        crate::storage::atomic_write(&path, &value)?;
+    let result = (|| {
+        if crate::storage::read_bounded(&path, 64 * 1024)?.as_deref() != Some(value.as_slice()) {
+            crate::storage::atomic_write(&path, &value)?;
+        }
+        Ok(())
+    })();
+    OBSERVED_FIRMWARE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_default()
+        .insert(path.clone(), (fingerprint.into(), result.is_ok()));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&path);
     }
-    Ok(())
+    result
 }
 
 /// A supplied hash alone is not evidence that this image matched this phone's firmware.
@@ -272,6 +298,18 @@ pub(crate) fn require_device_check(
     stock_only: bool,
 ) -> Result<(), String> {
     let origin = load_origin(path, image, "")?;
+    let observed_path = dir
+        .join("image-checks")
+        .join(format!("{}-firmware.json", device_key.to_ascii_lowercase()));
+    if OBSERVED_FIRMWARE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(&observed_path))
+        .is_some_and(|(fp, saved)| !saved || fp != &origin.fingerprint)
+    {
+        return Err("현재 펌웨어 관찰과 이미지 출처가 다르거나 관찰 기록을 저장하지 못했습니다 — OS에서 다시 대조하세요".into());
+    }
     check_fits_partition(image, partition)?;
     if origin.partition != partition || (stock_only && origin.source_sha256.is_some()) {
         return Err("현재 요청에 맞는 순정 이미지 출처가 아닙니다".into());
@@ -358,6 +396,29 @@ pub async fn boot_image_check(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn firmware_observation_uses_physical_identity_and_storage_failure_invalidates_proof() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stock.img");
+        let image = test_image(8192, 0x41);
+        let key = sha256(b"TEST-SERIAL");
+        save_with_origin(&path, &image, "init_boot", "Sony/current").unwrap();
+        let origin = load_origin(&path, &image, "").unwrap();
+        save_device_check(dir.path(), &key, &origin).unwrap();
+        observe_physical_firmware(dir.path(), " TEST-SERIAL ", "Sony/updated").unwrap();
+        assert!(require_device_check(dir.path(), &key, &path, &image, "init_boot", true).is_err());
+        save_device_check(dir.path(), &key, &origin).unwrap();
+        let stamp = dir
+            .path()
+            .join("image-checks")
+            .join(format!("{key}-firmware.json"));
+        std::fs::remove_file(&stamp).unwrap();
+        std::fs::create_dir(&stamp).unwrap();
+        assert!(observe_physical_firmware(dir.path(), "TEST-SERIAL", "Sony/current").is_err());
+        assert!(require_device_check(dir.path(), &key, &path, &image, "init_boot", true).is_err());
+    }
+
     use crate::backup::fake_device::FakeADBDevice;
 
     #[test]

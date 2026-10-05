@@ -112,3 +112,7 @@ fastboot 명령의 `expectedSerial`은 `device_list`의 `serialKey`(ADB serial)�
 사본 해시는 현재 파일에서 `Get-FileHash src-tauri/target/dev-cli/xva-dev*.exe -Algorithm SHA256`로 확인한다. 이전 코드의 해시를 현재 빌드의 것으로 사용하지 않는다.
 
 입력 스키마/feature·실행 옵션/비밀값 마스킹/검증 실패 판정/재시도 이력/공통 이벤트/프로세스 잠금 단위 테스트와, 실제 CLI 실행 파일의 기기 무관 명령·입력 거부·프로세스 재시작 후 기록 조회 통합 테스트를 수행한다. 실제 기기 동작은 `device-test-checklist.md`에서만 체크한다.
+
+2026-10-06: 명령 카탈로그의 pcOnly는 요청 정의에서 함께 생성한다. engine_capabilities는 폰을 조회하지 않고 현재 Cargo 쓰기 기능을 반환한다. 이벤트 파일을 준비한 뒤 running 기록을 남기며 초기 로그 오류는 failed로 확정한다. history는 손상된 개별 기록을 corrupt 행으로 표시하고 정상 기록을 계속 반환한다. backup_run/backup_manifest_check의 complete:false, smsie_collect의 ready:false 또는 미완결 summary는 성공 종료로 취급하지 않는다. contacts_restore_finish는 수동 가져오기 확인 후 같은 기기·연락처 수를 재검사하고 고정 임시 VCF만 지운다.
+
+`xva-dev-readonly.exe`라는 사본 이름은 부트/EFS Cargo 쓰기 기능을 제외한 빌드를 뜻한다. 일반 파일·문자 복원은 Cargo 기능과 별개이므로 이 빌드에서도 명시적인 --allow-device-write를 주면 실행할 수 있다. 명령별 enabledInBuild와 requiresDeviceWrite를 기준으로 판단한다.

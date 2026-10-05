@@ -24,6 +24,7 @@ beforeEach(() => {
   Object.assign(flags, originalFlags);
   Object.assign(api, originalApi, {
     journalSave: async () => true, runGuard: async () => true,
+    engineCapabilities: async () => ok({ fastbootWrite: true, rootWrite: true, efsWrite: true }),
     efsConfiguration: async () => ok(configured),
     efsValidatePresets: async () => ok(null),
     efsDiagOpen: async () => ok(null),
@@ -556,13 +557,14 @@ test("completion recheck updates communication only, invalidating changed SIM pr
   assert.deepEqual(w.callChecks, []); assert.equal(fileCheck.status, "done");
 });
 
-test("late diagnostic replies cannot replace a newer observation or a changed target selection", async () => {
+test("overlapping diagnostics share one observation and changed targets reject stale replies", async () => {
   const w = wizard("final-verify"); w.device = diagnosticDevice(w);
   const old = deferred(); api.deviceList = () => old.promise;
   const waiting = w.refreshCommunication();
   api.deviceList = async () => [];
+  const overlapping = w.refreshCommunication();
+  old.resolve([w.device]); assert.equal(await waiting, true); assert.equal(await overlapping, true);
   await w.refreshCommunication();
-  old.resolve([w.device]); assert.equal(await waiting, false);
   assert.equal(w.communicationLatest.outcome, "disconnected");
   const changed = deferred(); api.deviceList = () => changed.promise;
   const stale = w.refreshCommunication(); w.volteConfig.sims[0].carrier = "KT";
@@ -629,4 +631,12 @@ test("changed baseband on resume invalidates detailed communication proof but pr
   assert.equal(w.runSteps[0].status, "done"); assert.equal(w.runSteps[1].status, "pending");
   assert.equal(w.imsVerified, false); assert.equal(w.callVerified, false);
   assert.equal(w.communicationLatest, null); assert.deepEqual(w.callChecks, []);
+});
+
+
+test("unknown step names and missing build features stop a live run before writes", async () => {
+  assert.match(executionPlanProblem(["typo-step"], liveFlags), /typo-step/);
+  const w = wizard("efs"); w.begin = () => assert.fail("device engines must not start");
+  api.engineCapabilities = async () => ok({ fastbootWrite: false, rootWrite: false, efsWrite: false });
+  w.resumeRun(); await settled(w); assert.match(w.stepError, /efs-write/);
 });
