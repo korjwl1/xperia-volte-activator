@@ -408,11 +408,13 @@ struct ImsVoice {
 impl ImsVoice {
     /// "on" = 셀룰러 IMS 음성(VoLTE) / "wifi" = Wi-Fi 통화로만 등록 / "off" / "unknown"
     fn volte(&self) -> &'static str {
-        match self.voice {
-            Some(true) if self.wlan == Some(true) => "wifi",
-            Some(true) => "on",
-            Some(false) => "off",
-            None => "unknown",
+        // Voice capability is not proof of current registration. A stale registered
+        // log must not turn an explicitly unregistered/registering phone into success.
+        match (self.reg_state, self.voice, self.wlan) {
+            (Some(0), _, _) | (_, Some(false), _) => "off",
+            (Some(2), Some(true), Some(true)) => "wifi",
+            (Some(2), Some(true), Some(false)) => "on",
+            _ => "unknown",
         }
     }
 }
@@ -1332,7 +1334,7 @@ __GBACKUP__\n";
                 mPhoneId=1\n";
         let m = parse_ims_voice(raw);
         assert_eq!(m[&1].volte(), "off");
-        assert_eq!(m[&2].volte(), "on");
+        assert_eq!(m[&2].volte(), "unknown"); // capability alone cannot prove registration
         assert!(parse_ims_voice("").is_empty());
     }
 
@@ -1353,6 +1355,18 @@ __GBACKUP__\n";
             "21:10:00.000000 - handleImsRegistered: onImsMmTelConnected imsRadioTech=WWAN",
         );
         assert_eq!(parse_ims_voice(&cellular)[&2].volte(), "on");
+    }
+
+    #[test]
+    fn ims_capability_and_old_radio_logs_cannot_prove_current_registration() {
+        let dump = "mPhoneId=0\nmMmTelCapabilities=MmTel Capabilities - [Voice: true]\nhandleImsRegistered: imsRadioTech=WWAN\n";
+        for (state, expected) in [(0, "off"), (1, "unknown"), (2, "on"), (-1, "unknown")] {
+            let raw = format!("{dump}mImsMmTelRegistrationState = {state}\n");
+            assert_eq!(parse_ims_voice(&raw)[&1].volte(), expected);
+        }
+        assert_eq!(parse_ims_voice(dump)[&1].volte(), "unknown");
+        let unknown_radio = "mPhoneId=0\nmMmTelCapabilities=MmTel Capabilities - [Voice: true]\nmImsMmTelRegistrationState = 2\n";
+        assert_eq!(parse_ims_voice(unknown_radio)[&1].volte(), "unknown");
     }
 
     /// 실기기(XQ-DQ44) getprop — 슬롯 1 비어 있음, 슬롯 2 eSIM SKT

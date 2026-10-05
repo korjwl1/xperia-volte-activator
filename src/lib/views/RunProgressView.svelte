@@ -320,29 +320,32 @@
         {/if}
         {#if (wizard.manualCurrent.id === "ims-check" || wizard.manualCurrent.id === "ims-precheck") && wizard.imsSims.length > 0}
           <div class="rounded-lg border divide-y">
-            {#each wizard.imsSims.filter((s) => s.carrier) as sim (sim.slot)}
+            {#each wizard.imsSims.filter((s) => !wizard.hasPatchTarget || wizard.volteConfig.sims.some(t => t.slot === s.slot && t.carrier !== null)) as sim (sim.slot)}
               <div class="flex items-center gap-2.5 px-3 py-2 text-sm">
                 {#if sim.volte === "on"}<CircleCheck size={15} class="text-success shrink-0" />{:else}<LoaderCircle size={15} class="animate-spin text-muted-foreground shrink-0" />{/if}
-                <span class="flex-1">SIM{sim.slot} · {sim.carrier}</span>
+                <span class="flex-1">SIM{sim.slot} · {sim.carrier || "SIM·통신사 확인 불가"}</span>
                 <span class="text-[11px] {sim.volte === 'on' ? 'text-success' : 'text-muted-foreground'}">
-                  {sim.volte === "on" ? "VoLTE 활성화" : sim.volte === "wifi" ? "Wi-Fi 통화만 — Wi-Fi를 끄고 확인" : sim.volte === "off" ? "VoLTE 비활성화" : "확인 불가"}
+                  {sim.volte === "on" ? "IMS 음성 등록 확인" : sim.volte === "wifi" ? "Wi-Fi 통화만 — Wi-Fi를 끄고 확인" : sim.volte === "off" ? "VoLTE 비활성화" : "확인 불가"}
                 </span>
               </div>
             {/each}
           </div>
         {/if}
-        {#if wizard.manualCurrent.id === "ims-precheck"}
+        {#if wizard.manualCurrent.id === "ims-precheck" || wizard.manualCurrent.id === "ims-check"}
           <label class="flex items-start gap-2.5 rounded-lg border px-3 py-2.5 cursor-pointer {wizard.callAck ? 'border-primary/40 bg-primary/5' : ''}">
             <Checkbox class="mt-0.5" checked={wizard.callAck} onCheckedChange={(v: boolean | "indeterminate") => (wizard.callAck = v === true)} />
             <span class="text-[12.5px]">
-              실제로 전화를 걸고 받아 통화되는 것을 확인했습니다
-              <span class="block text-[11px] text-muted-foreground">문자·MMS·5G 데이터는 따로 확인해 주세요</span>
+              대상 슬롯 모두에서 실제 발신·수신을 확인했습니다
+              <span class="block text-[11px] text-muted-foreground">{wizard.manualCurrent.id === "ims-check" ? "선택 사항 — 확인하지 않았다면 통화 미확인으로 마무리합니다. " : ""}문자·MMS·5G 데이터는 따로 확인해 주세요</span>
             </span>
           </label>
         {/if}
         {#if wizard.manualWatching}
           <div class="flex items-center gap-2 rounded-lg bg-primary/5 px-3 py-2 text-[12px] text-primary">
-            <LoaderCircle size={13} class="animate-spin shrink-0" />{wizard.manualWatching} 자동 감지 중 — 감지되면 바로 다음 단계로 진행합니다
+            <LoaderCircle size={13} class="animate-spin shrink-0" />
+            {wizard.manualCurrent.id === "ims-check"
+              ? wizard.imsRegistered ? "IMS 등록 확인됨 — 통화 확인 여부를 선택하고 마무리하세요" : "IMS 등록 확인 중 — SIM 없이도 통신 확인을 생략하고 마무리할 수 있습니다"
+              : `${wizard.manualWatching} 자동 감지 중 — 감지되면 바로 다음 단계로 진행합니다`}
           </div>
         {/if}
         {#if wizard.manualCheckError}
@@ -356,7 +359,7 @@
               ? "입력을 마치면 다음 단계로 진행됩니다"
               : wizard.manualVerifiable
                 ? wizard.manualWatching
-                  ? "감지되면 자동으로 진행합니다 — [확인하고 진행]으로 바로 확인할 수도 있습니다"
+                  ? wizard.manualCurrent.id === "ims-check" ? "파일 기록과 실제 통신은 별도로 확인합니다" : "감지되면 자동으로 진행합니다 — [확인하고 진행]으로 바로 확인할 수도 있습니다"
                   : "폰에서 마친 뒤 [확인하고 진행]을 누르면 확인 후 진행합니다"
                 : "완료하면 다음 단계로 진행됩니다"}
           </span>
@@ -373,8 +376,8 @@
             {#if wizard.manualCurrent.id === "ims-precheck" && wizard.manualCheckError}
               <Button variant="outline" onclick={() => wizard.repatch()}>다시 패치</Button>
             {/if}
-            {#if wizard.manualCurrent.id === "ims-check" && wizard.manualCheckError}
-              <Button variant="outline" onclick={() => wizard.finishWithoutIms()}>확인 없이 마무리</Button>
+            {#if wizard.manualCurrent.id === "ims-check" || wizard.manualCurrent.id === "ims-precheck"}
+              <Button variant="outline" disabled={wizard.manualChecking} onclick={() => wizard.finishWithoutIms()}>{wizard.manualCurrent.id === "ims-check" ? "통신 확인 없이 마무리" : "통신 확인 생략하고 계속"}</Button>
             {/if}
             <Button disabled={!wizard.manualInputReady || wizard.manualChecking} onclick={() => wizard.confirmManual()}>
               {#if wizard.manualChecking}<LoaderCircle size={14} class="mr-1 animate-spin" />확인 중…{:else}{wizard.manualCurrent.input ? "입력 완료" : wizard.manualVerifiable ? "확인하고 진행" : "다음"}{/if}

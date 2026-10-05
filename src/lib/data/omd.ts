@@ -29,13 +29,13 @@ export interface OmdCarrier {
   notes: { text: string; source?: string }[];
 }
 
-export const OMD_CHECKED = "2026-10-03";
+export const OMD_CHECKED = "2026-10-05";
 
 const CAFE = (id: number) => `https://cafe.naver.com/x1smart/${id}`;
 
 /** 공통 안내 — 카드 위 설명 */
 export const omdCommonGuide =
-  "통신사 고객센터(114)에 외산폰 VoLTE(OMD) 등록을 요청하세요. 실제 SIM 구성(물리 SIM·eSIM, 슬롯)과 등록할 IMEI를 그대로 알려 주면 됩니다.";
+  "OMD 변경이 필요한 망에서는 등록 조건과 SIM 이동을 패치 전에 정리하세요. KT LTE와 LG U+는 별도 변경이 필요하지 않을 수 있습니다. 고객센터에는 실제 SIM 구성과 등록할 IMEI를 알려 주세요. OMD 등록은 EFS 파일 기록 자체의 필수 조건이 아닙니다.";
 
 export const omdDisclaimer = `아래 코드는 소니 사용자모임 카페의 안내·해결 사례 기준(${OMD_CHECKED} 확인)이며 통신사 공식 보증이 아닙니다. 회선·전산 상태에 따라 다를 수 있으니 고객센터에서 확인해 주세요.`;
 
@@ -43,7 +43,7 @@ export const omdInfo: OmdCarrier[] = [
   {
     carrier: "SKT",
     label: "SKT",
-    summary: "요금제와 관계없이 OMD DEFAULT 5G 계열 권장",
+    summary: "필요한 등록·SIM 이동은 패치 전에 완료 — OMD DEFAULT 5G 계열 권장",
     codes: [
       { code: "OMD DEFAULT 5G", net: "5G", sim: "물리 SIM", role: "기본", aliases: ["OMD-DEFAULT_5G"], source: CAFE(617140) },
       { code: "OMD DEFAULT 5G ESIM", net: "5G", sim: "eSIM", role: "기본", source: CAFE(617140) },
@@ -72,18 +72,19 @@ export const omdInfo: OmdCarrier[] = [
   {
     carrier: "KT",
     label: "KT",
-    summary: "LTE는 SONY-XPR-TAC, 5G는 물리 SIM·eSIM 코드가 다름",
+    summary: "LTE는 기본 OMD로도 VoLTE 가능 — 5G는 별도 등록과 APN 확인",
     codes: [
-      { code: "SONY-XPR-TAC", net: "LTE", sim: "공통", role: "기본", when: "LTE 사용 또는 아직 패치하기 전", source: CAFE(617140) },
+      { code: "SONY-XPR-TAC", net: "LTE", sim: "공통", role: "대안", when: "LTE·미패치 상태에서 변경이 필요한 경우 — 기본 OMD로 정상 사용 중이면 변경 필수 아님", source: CAFE(617140) },
       { code: "PTA-TYPE5G", net: "5G", sim: "물리 SIM", role: "기본", when: "패치 완료 후 (APN도 함께 확인)", source: CAFE(617140) },
-      { code: "PTA-DS-5G", net: "5G", sim: "eSIM", role: "기본", when: "물리 SIM 코드와 바꿔 쓰지 않음", source: CAFE(617140) },
+      { code: "PTA-DS-5G", net: "5G", sim: "eSIM", role: "기본", when: "패치 완료 후 — 물리 SIM 코드와 바꿔 쓰지 않음", source: CAFE(617140) },
     ],
     simPlacement: "등록할 IMEI의 슬롯에 SIM을 둔 채 등록합니다",
     notes: [
       {
         text: "기본 OMD 상태에서도 LTE VoLTE는 막히지 않고 5G를 쓸 때 등록이 필요하다는 안내와 사례가 있습니다 — 회선마다 다를 수 있어 고객센터 확인",
-        source: CAFE(601876),
+        source: CAFE(617140),
       },
+      { text: "미패치 상태에서 5G 코드로 먼저 바꾸면 데이터까지 3G로 전환될 수 있습니다. 패치까지 시간이 남으면 LTE 상태를 유지하고, 패치 완료와 5G 등록·APN 설정을 맞춰 진행하세요", source: CAFE(607152) },
       { text: "예전 안내의 PTA-VoLTE는 최신 안내에서 SONY-XPR-TAC로 바뀌었습니다 (예전 코드의 무효 여부는 미확인)" },
     ],
   },
@@ -102,6 +103,6 @@ export const omdInfo: OmdCarrier[] = [
         source: CAFE(614300),
       },
     ],
-    notes: [{ text: "통화·5G가 안 될 때 전산 등록 상태를 고객센터에 확인해 주세요", source: CAFE(612332) }],
+    notes: [{ text: "OMD 등록을 공통 필수 단계로 진행하지 않습니다. 통화·5G가 안 될 때 전산 등록 상태를 고객센터에 확인해 주세요", source: CAFE(612332) }],
   },
 ];

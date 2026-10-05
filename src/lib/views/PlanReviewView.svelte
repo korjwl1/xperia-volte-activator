@@ -10,6 +10,7 @@
   import { simIssue, type BackupItem } from "$lib/types";
   import { stepHazard } from "$lib/domain/plan";
   import { REAL_STEPS } from "$lib/data/runMode";
+  import { patchProcedureProblem } from "$lib/data/devices";
   import EfsSetup from "$lib/components/EfsSetup.svelte";
 
   // 선택 상태·실측 결과는 스토어에 보관 — 이전/다음으로 오가도 유지 (기기가 바뀔 때만 초기화)
@@ -19,7 +20,8 @@
   let showPathAlert = $state(false);
   let pathAlertTimer: ReturnType<typeof setTimeout> | undefined;
   let efsNeedsSave = $state(true);
-  const efsBlocked = $derived(REAL_STEPS.efs && wizard.hasPatchTarget && efsNeedsSave);
+  const procedureProblem = $derived(patchProcedureProblem(wizard.device?.model ?? "", wizard.volteConfig.sims.flatMap(s => s.carrier ? [s.carrier] : [])));
+  const efsBlocked = $derived(REAL_STEPS.efs && wizard.hasPatchTarget && (efsNeedsSave || procedureProblem !== null));
   $effect(() => () => clearTimeout(pathAlertTimer));
 
   const bootloaderKnown = $derived(wizard.device?.bootloader === "locked" || wizard.device?.bootloader === "unlocked");
@@ -364,14 +366,19 @@
         {/each}
         </TooltipProvider>
       </div>
+      {#if procedureProblem}
+        <div class="shrink-0 border-t bg-warning-container/40 px-4 py-3 text-[12px] text-warning">
+          {procedureProblem}
+        </div>
+      {/if}
       {#if simProblems.length > 0}
         <div class="shrink-0 border-t bg-warning-container/40 px-4 py-3 space-y-1">
           <div class="flex items-center gap-1.5 text-[12px] font-semibold text-warning">
             <TriangleAlert size={13} class="shrink-0" />{simProblems.map((p) => `SIM${p.slot} ${p.issue}`).join(" · ")}
           </div>
           <p class="text-[11px] leading-relaxed text-muted-foreground">
-            SIM 없이 패치하면 처음 SIM을 넣을 때 프로파일이 바뀌어 패치가 풀릴 수 있습니다. 사용할 SIM을 넣고 진행하는 것을 권장합니다.
-            {wizard.opts.relock ? "리락 전 통신 확인을 할 수 없어 리락 단계로 넘어갈 수 없습니다." : ""}
+            SIM 유무와 관계없이 선택한 통신사·슬롯으로 기록합니다. SIM이 없어도 파일 기록 검증은 가능하지만 통신은 미확인으로 남습니다. 나중에 SIM을 넣거나 바꾸면 프로파일이 다시 적용되어 재패치가 필요할 수 있습니다.
+            {wizard.opts.relock ? "통신 확인을 생략해도 리락 자체의 순정 부트 체인 검증은 생략되지 않습니다." : ""}
           </p>
         </div>
       {/if}

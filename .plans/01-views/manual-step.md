@@ -10,7 +10,7 @@ RunProgress 실행 중 폰 측 조작이 필요한 지점(§12)에서 모달로 
 |---|---|---|
 | mode-wait | 부트로더(fastboot) 모드 | usb_modes에서 fastboot 인터페이스 감지 → 자동 진행 |
 | flash-mode | 플래시 모드(전원 끄고 볼륨 아래 + USB) | usb_modes에서 flashmode 감지 → 자동 진행 |
-| ims-check | 최종 VoLTE 확인 | device_list 슬롯별 IMS 음성 등록(on) → 자동 진행 |
+| ims-check | 최종 통신 확인 | 등록 상태 표시만 갱신. 실제 발신·수신 체크는 선택 사항이며 사용자 마무리 버튼으로 진행 |
 | (magisk-patch) | — | 사용하지 않음: 루팅은 자동 패치 |
 | usb-debug | 폰에서 USB 디버깅 허용 | 단계 도달 시 같은 기기가 adb "device"면 안내 없이 진행, 아니면 안내 + 2초 폴링 → 연결되면 자동 진행 |
 | su-grant | Magisk 루트 권한 허용 | `su -c id` 재시도 |
@@ -21,7 +21,7 @@ RunProgress 실행 중 폰 측 조작이 필요한 지점(§12)에서 모달로 
 
 ## 인터랙션
 - 단계별 안내 카드(번호 스텝) + [폰에서 완료했어요] 수동 ack 버튼
-- 자동 감지 성공 시 모달 자동 해제 (mock: 타이머)
+- 자동 감지 성공 시 모달 자동 해제. 최종 ims-check는 자동 해제하지 않고 통화 확인 여부를 선택해 마무리한다.
 
 
 ## 그림 안내 (사용자 지시 2026-10-03)
@@ -33,7 +33,7 @@ RunProgress 실행 중 폰 측 조작이 필요한 지점(§12)에서 모달로 
   - 물리 조작(버튼·케이블): Codex(GPT 이미지 생성)로 제작, 지원 페이지풍 플랫 일러스트, 글자 없음
   - 강조 테두리는 이미지에 굽지 않고 테마 색(--primary)으로 CSS에서 그림 → 다크/라이트 공통
 - 현재 적용: oem-toggle(빌드 번호 → 개발자 옵션 → OEM 잠금 해제 → USB 디버깅), flash-mode(일러스트 1장), usb-debug(빌드 번호 → USB 디버깅 → PC 연결·허용)
-- 최종 VoLTE 확인(ims-check)은 앱이 IMS 등록으로 자동 판정하므로 그림 안내 없음
+- 최종 VoLTE 확인(ims-check)은 등록 상태를 표시하고 사용자가 마무리한다. 그림 안내 없음.
 
 
 ## 수동 단계 완료 = 실제 확인 (사용자 지시 2026-10-03)
@@ -45,7 +45,7 @@ RunProgress 실행 중 폰 측 조작이 필요한 지점(§12)에서 모달로 
   | usb-debug | 같은 기기가 adb device 상태 |
   | mode-wait / flash-mode | usb_modes에 fastboot / flashmode |
   | su-grant | root_check (su -c id = uid=0) |
-  | ims-check | 패치한 슬롯이 모두 IMS 음성 등록. 실패 시 [확인 없이 마무리] 허용 — SIM 없이 미리 패치하는 경우 등, 작업은 이미 끝난 상태 (완료 화면에 "VoLTE 등록은 확인하지 못했습니다" 안내) |
+  | ims-check | 대상 슬롯 IMS 등록과 실제 통화 확인을 구분. 통화 체크는 선택 사항. [통신 확인 없이 마무리]는 처음부터 사용 가능하며 SIM 없음·등록 미확인으로 파일 기록 결과를 실패 처리하지 않음 |
   | unlock-code | 형식(16자리 16진수)만 — 실제 백엔드는 fastboot가 거부하면 그 단계에서 멈추고 다시 입력받음. 목 모드(REAL_STEPS.fastboot 꺼짐)에서는 빈 입력란에 예시값 0x1234567890ABCDEF를 채운다(입력한 값은 덮어쓰지 않음) |
   | firmware(직접 지정) | firmware_dir_check: SIN 후보 하나와 같은 폴더 update.xml 지문 필수, raw IMG를 캐시에 추출. 실제 기록 전에 boot_image_check로 현재 기기 펌웨어 지문 대조 |
   | backup-notice | 동의 체크(확인 대상 아님) |

@@ -2,6 +2,7 @@
 //! Every phone operation (including reads/setup) is behind default-disabled efs-write.
 pub mod config;
 mod device;
+mod diag;
 mod engine;
 mod error;
 mod hdlc;
@@ -268,8 +269,8 @@ pub async fn efs_diag_open(serial: String) -> Result<()> {
         ));
     }
     tauri::async_runtime::spawn_blocking(move || {
-        if owner.cancel.load(Ordering::Acquire){return Err(Error::new("cancelled","DIAG switch","Cancelled"));}
-        crate::adb::with_first_device(&Some(serial),|dev|crate::adb::shell(dev,"su -c setprop sys.usb.config diag,diag_mdm,diag_mdm2,qdss,qdss_mdm,serial_cdev,dpl,rmnet,adb").map(|_|())).map_err(|e|Error::io("DIAG switch",e))
+        crate::adb::with_first_device(&Some(serial), |dev| diag::open(dev, &owner.cancel))
+            .map_err(|message| Error::new(if owner.cancel.load(Ordering::Acquire) { "cancelled" } else { "io" }, "DIAG switch", message))
     }).await.map_err(|e|Error::io("DIAG worker",e))?
 }
 #[tauri::command]

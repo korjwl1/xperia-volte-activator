@@ -219,7 +219,7 @@ invoke('efs_resolve_preset', { folder, configuration?: EfsConfiguration }) → s
 // manifest의 ./util/SonyEFS/... → 설정 루트의 절대 경로. 폴더 이름과 그 이름의 고정 해시를 함께 확인.
 // configuration 생략 시 앱 설정 사용, 지정 시 검증된 실행별 설정 사용. PC 작업만 수행.
 invoke('efs_validate_presets', { presetDirs }) → void       // 최대 2개 전체 선택의 공유 EFS/NV 내용·mode/type 충돌 검사, 기기 접근 없음
-invoke('efs_diag_open', { serial }) → void                 // 선택 Sony ADB serial의 DIAG setprop (기본 게이트 차단)
+invoke('efs_diag_open', { serial }) → void                 // 선택 기기 모델 조회 → Mark IV persist.usb.eng=1 설정·리드백 → 공통 DIAG 설정. 셸 종료 상태 검사, SIM 조회 없음. 기본 게이트 차단
 invoke('efs_preflight', { port }) → EfsPreflight            // hello/query/설정 응답 확인; USB 토폴로지·속도·전원 실측을 주장하지 않음
 invoke('efs_snapshot', { port, presetDir, dest }) → EfsSnapshotResult // 변경 대상 전수 before-image, mode/type/times·전체 128 B NV
 invoke('efs_upload', { port, presetDir }) → EfsUploadResult  // 슬롯당 1회; written/skipped/warnings, 오류는 즉시 Err
@@ -292,7 +292,7 @@ invoke('journal_save', { key, data }) → void        // <앱 데이터>/journal
 invoke('journal_load', { key }) → string | null     // 끝나지 않은 작업 기록 JSON
 invoke('journal_archive', { key, tag: 'done'|'discarded' }) → void  // <key>.<tag>.json으로 보관(마지막 1개, 디버깅용)
 // key = SHA-256(모델|시리얼) 앞 16바이트 hex — 파일 이름에 시리얼을 그대로 쓰지 않음, Rust에서 16~64자 hex만 허용
-// data = RunJournal (types.ts): 선택 옵션·계획·단계별 상태/로그(단계당 최근 300줄)·멈춘 사유. 언락 코드·IMEI 없음
+// data = RunJournal (types.ts): 선택 옵션·계획·단계별 상태/로그(단계당 최근 300줄)·멈춘 사유. optional imsUnverified/imsVerified/callVerified boolean으로 등록·사용자 통화 확인 구분. 언락 코드·IMEI 없음
 // 저장/보관은 프런트 직렬 큐, Rust 디스크 I/O는 blocking. JSON 저장 검사, 저장/로드 모두 8MiB 상한.
 // 로드한 디스크 JSON은 domain/journal.ts에서 옵션·SIM·계획/실행 목록·인덱스·상태 등을 검사한 후 재개.
 ```

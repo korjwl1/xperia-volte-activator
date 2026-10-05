@@ -291,6 +291,8 @@ export interface RunStep {
   logs: string[];
   /** 완료한 수동 개입 수 (PlanStep.manual 기준) */
   manualDone: number;
+  /** 사용자가 통신 확인을 생략했는지 — 파일 기록 결과와 독립적인 선택 */
+  communicationSkipped?: boolean;
   /** 세부 작업 체크포인트 — 이어서 진행 시 끝낸 세부 작업은 건너뛴다 */
   sub?: { list: string[]; done: number };
 }
@@ -320,6 +322,10 @@ export interface RunJournal {
   firmwareDir: string;
   /** 최종 VoLTE 확인을 생략하고 마무리했는지 */
   imsUnverified?: boolean;
+  /** 최종 단계에서 실제 기기 IMS 등록을 확인했는지 (이전 기록은 미확인) */
+  imsVerified?: boolean;
+  /** 사용자가 최종 단계에서 대상 슬롯의 실제 발신·수신을 확인했는지 */
+  callVerified?: boolean;
   /** 작업 시작 때의 SIM 구성 — 이어서 진행할 때 바뀌었으면 통신 확인을 다시 */
   sims?: { slot: 1 | 2; carrier: string | null; state: string }[];
   /** 명시적으로 멈춘 경우의 사유 (없으면 진행 중 앱 종료·연결 끊김으로 본다) */

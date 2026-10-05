@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { before, beforeEach, after, test } from "node:test";
 import { createServer } from "vite";
 
-let server, Wizard, api, flags, transport, originalApi, originalFlags, originalInvoke, buildPlan;
+let server, Wizard, api, flags, transport, originalApi, originalFlags, originalInvoke, buildPlan, bootPartition, decodeJournal;
 const configured = { port: "COM9", presetRoot: "C:/bundle", snapshotRoot: "C:/snapshots" };
 const ok = value => ({ ok: true, value });
 const warning = { code: "nvPrefixVerification", target: "NV 71", message: "Only explicit bytes verified" };
@@ -13,6 +13,8 @@ before(async () => {
   ({ REAL_STEPS: flags } = await server.ssrLoadModule("/src/lib/data/runMode.ts"));
   ({ transport } = await server.ssrLoadModule("/src/lib/api/transport.ts"));
   ({ buildPlan } = await server.ssrLoadModule("/src/lib/domain/plan.ts"));
+  ({ bootPartition } = await server.ssrLoadModule("/src/lib/data/devices.ts"));
+  ({ decodeJournal } = await server.ssrLoadModule("/src/lib/domain/journal.ts"));
   originalApi = { ...api }; originalFlags = { ...flags }; originalInvoke = transport.invoke;
 });
 beforeEach(() => {
@@ -122,6 +124,153 @@ test("native upload snapshots each slot before two passes and dispatches only on
   assert.notEqual(calls[0][1], calls[3][1]);
   assert.equal(w.runSteps[0].status, "done");
   assert.ok(w.runSteps[0].logs.some(line => line.includes("nvPrefixVerification")));
+});
+
+test("absent or differently provisioned SIMs never override or block the selected write target", async () => {
+  for (const sims of [[], [{ slot: 1, state: "ABSENT", carrier: null }], [{ slot: 1, state: "LOADED", carrier: "KT", plmn: "45008" }]]) {
+    let queries = 0;
+    const writes = [];
+    api.deviceList = async () => { queries++; return []; };
+    api.efsSnapshot = async () => ok({ path: "snapshot", warnings: [] });
+    api.efsUpload = async folder => { writes.push(folder); return ok({ errors: [], filesSeen: 82, planned: 82, skipped: 0, warnings: [] }); };
+    const w = wizard("efs");
+    w.device.sims = sims;
+    w.volteConfig.sims = [{ slot: 1, carrier: "SKT" }, { slot: 2, carrier: null }];
+    w.tick(); await settled(w);
+    assert.equal(w.runSteps[0].status, "done");
+    assert.equal(writes.length, 2);
+    assert.ok(writes.every(folder => folder.endsWith("XPERIAsSKT1")));
+    assert.deepEqual(w.volteConfig.sims, [{ slot: 1, carrier: "SKT" }, { slot: 2, carrier: null }]);
+    assert.equal(queries, 0);
+  }
+});
+
+test("missing model procedures stop before local configuration, DIAG, snapshots or writes", async () => {
+  for (const [model, carrier] of [["XQ-AT72", "SKT"], ["XQ-AS72", "KT"], ["XQ-CT72", "KT"], ["XQ-CQ72", "LGU"]]) {
+    for (const id of ["efs-input", "efs-preflight", "efs"]) {
+      let touched = 0;
+      api.efsConfiguration = api.efsDiagOpen = api.efsSnapshot = api.efsUpload = async () => { touched++; return ok(configured); };
+      const w = wizard(id); w.device.model = model;
+      w.volteConfig.sims = [{ slot: 1, carrier }, { slot: 2, carrier: null }];
+      w.tick(); await settled(w);
+      assert.equal(w.runSteps[0].status, "failed", model + "/" + id);
+      assert.equal(touched, 0);
+    }
+  }
+});
+
+test("Mark IV SKT retains the native procedure and PRO-I uses the boot partition", async () => {
+  const w = wizard("efs-preflight"); w.device.model = "XQ-CT72";
+  w.volteConfig.sims = [{ slot: 1, carrier: "SKT" }, { slot: 2, carrier: null }];
+  w.tick(); await settled(w);
+  assert.equal(w.runSteps[0].status, "done");
+  assert.equal(bootPartition("XQ-BE72"), "boot");
+  assert.equal(bootPartition("XQ-DQ44"), "init_boot");
+});
+
+test("final IMS polling observes registration without automatically completing the prompt", async () => {
+  const previousInterval = globalThis.setInterval, previousClear = globalThis.clearInterval;
+  let poll;
+  globalThis.setInterval = callback => { poll = callback; return 1; };
+  globalThis.clearInterval = () => {};
+  const w = wizard("final-verify");
+  w.device.sims = [{ slot: 1, state: "LOADED", carrier: "SKT", volte: "on" }, { slot: 2, state: "LOADED", carrier: "SKT", volte: "on" }];
+  api.deviceList = async () => [w.device];
+  try {
+    await w.openManual(w.runSteps[0], "ims-check");
+    await new Promise(resolve => setImmediate(resolve));
+    await poll();
+    assert.equal(w.manualCurrent.id, "ims-check");
+    assert.equal(w.runSteps[0].manualDone, 0);
+    assert.equal(w.imsRegistered, true);
+    assert.equal(w.imsVerified, false);
+    assert.equal(w.callVerified, false);
+    await w.confirmManual();
+    assert.equal(w.imsVerified, true);
+    assert.equal(w.callVerified, false);
+    assert.equal(w.manualCurrent, null);
+  } finally {
+    w.stopWatch(); globalThis.setInterval = previousInterval; globalThis.clearInterval = previousClear;
+  }
+});
+
+test("final confirmation records user call verification separately from IMS", async () => {
+  const w = wizard("final-verify");
+  w.device.sims = [{ slot: 1, volte: "on" }, { slot: 2, volte: "on" }];
+  api.deviceList = async () => [w.device];
+  w.manualCurrent = { id: "ims-check" }; w.callAck = true;
+  await w.confirmManual();
+  assert.equal(w.imsVerified, true);
+  assert.equal(w.callVerified, true);
+  assert.equal(w.imsUnverified, false);
+});
+
+test("no SIM can finish communication checking immediately without losing file verification", () => {
+  const w = wizard("final-verify");
+  const verified = { id: "verify", status: "done" };
+  w.runSteps.push(verified);
+  w.manualCurrent = { id: "ims-check" };
+  w.finishWithoutIms();
+  assert.equal(w.manualCurrent, null);
+  assert.equal(w.imsUnverified, true);
+  assert.equal(w.imsVerified, false);
+  assert.equal(w.callVerified, false);
+  assert.equal(verified.status, "done");
+  assert.equal(w.runSteps[0].manualDone, 1);
+});
+
+test("skipping the pre-unroot network check does not block device work or authorize relock", async () => {
+  const w = wizard("comm-check");
+  w.device.sims = [];
+  w.manualCurrent = { id: "ims-precheck" };
+  w.finishWithoutIms();
+  assert.equal(w.runSteps[0].communicationSkipped, true);
+  api.deviceList = async () => { assert.fail("skipped network check must not query SIMs"); };
+  await w.runRealCommCheck(w.runSteps[0]);
+  assert.equal(w.runSteps[0].status, "done");
+  assert.equal(w.imsVerified, false);
+  assert.equal(w.callVerified, false);
+  assert.equal(w.imsUnverified, false);
+  const relock = wizard("relock");
+  flags.fastboot = true;
+  let writes = 0;
+  api.fastbootRelock = async () => { writes++; return ok(null); };
+  relock.tick(); await settled(relock);
+  assert.equal(writes, 0);
+  assert.equal(relock.runSteps[0].status, "failed");
+});
+
+test("late IMS confirmation cannot mark a restarted session as verified", async () => {
+  const pending = deferred();
+  const w = wizard("final-verify");
+  w.manualCurrent = { id: "ims-check" }; w.callAck = true;
+  api.deviceList = () => pending.promise;
+  const confirming = w.confirmManual();
+  w.restart();
+  pending.resolve([{ ...w.device, state: "device", serial: "TEST-SERIAL", sims: [{ slot: 1, volte: "on" }, { slot: 2, volte: "on" }] }]);
+  await confirming;
+  assert.equal(w.imsVerified, false);
+  assert.equal(w.callVerified, false);
+});
+
+test("legacy or changed-SIM journals recheck communication without rewriting user selection or file checks", () => {
+  for (const changedSim of [false, true]) {
+    const w = wizard("final-verify");
+    w.device.sims = [{ slot: 1, carrier: "KT", state: "LOADED" }];
+    const config = { sims: [{ slot: 1, carrier: "SKT" }, { slot: 2, carrier: null }], firmware: null, bootloaderAction: null };
+    const steps = ["verify", "final-verify"].map(id => ({ id, kind: id === "verify" ? "verify" : "final-verify", title: id, desc: "", risk: "safe", wipe: false, estSec: 1, optional: false, enabled: true, ...(id === "final-verify" ? { manual: ["ims-check"] } : {}) }));
+    const journal = { version: 1, model: w.device.model, productName: "Xperia", serialMasked: "TEST", startedAt: "", updatedAt: "", backupPath: "", firmwareDir: "", config, opts: { unroot: false, relock: false, restore: false }, backupItems: [], steps, runSteps: steps.map(s => ({ id: s.id, title: s.title, status: "done", progress: 1, logs: [], manualDone: s.manual?.length ?? 0 })), cursor: 2, firmware: null, stop: null,
+      ...(changedSim ? { sims: [{ slot: 1, carrier: "SKT", state: "LOADED" }], imsVerified: true, callVerified: true } : {}) };
+    assert.ok(decodeJournal(JSON.stringify(journal)));
+    assert.equal(decodeJournal(JSON.stringify({ ...journal, callVerified: "true" })), null);
+    w.pendingJournal = journal;
+    w.resumeJournal();
+    assert.equal(w.runSteps[0].status, "done");
+    assert.equal(w.runSteps[1].status, "pending");
+    assert.equal(w.imsVerified, false);
+    assert.equal(w.callVerified, false);
+    assert.deepEqual(w.volteConfig.sims, config.sims);
+  }
 });
 
 test("VoLTE settings and IMS confirmation stages survive wrapper replacement", async () => {

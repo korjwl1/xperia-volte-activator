@@ -20,7 +20,7 @@ export function decodeJournal(raw: string): RunJournal | null {
         || !Array.isArray(value.steps) || !Array.isArray(value.runSteps) || value.runSteps.length === 0 || value.steps.length > 100
         || value.cursor > value.runSteps.length || (value.backupDir !== undefined && !text(value.backupDir))
         || (value.patchedImage !== undefined && !text(value.patchedImage))
-        || (value.imsUnverified !== undefined && typeof value.imsUnverified !== "boolean")) return null;
+        || ["imsUnverified", "imsVerified", "callVerified"].some(key => value[key] !== undefined && typeof value[key] !== "boolean")) return null;
     const config = value.config;
     if (!object(config) || !Array.isArray(config.sims) || config.sims.length !== 2
         || !(config.firmware === null || text(config.firmware))
@@ -44,6 +44,7 @@ export function decodeJournal(raw: string): RunJournal | null {
           || !text(step.status) || !statuses.has(step.status) || !integer(step.manualDone)
           || typeof step.progress !== "number" || !Number.isFinite(step.progress) || step.progress < 0 || step.progress > 1
           || !texts(step.logs) || step.logs.length > 300
+          || (step.communicationSkipped !== undefined && typeof step.communicationSkipped !== "boolean")
           || step.manualDone > ((definitions.get(step.id as string)?.manual as string[] | undefined)?.length ?? 0)) return null;
       if (step.sub !== undefined && (!object(step.sub) || !texts(step.sub.list)
           || !integer(step.sub.done) || step.sub.done > step.sub.list.length)) return null;

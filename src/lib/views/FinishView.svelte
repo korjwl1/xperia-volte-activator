@@ -29,7 +29,12 @@
   // VoLTE 패치를 실제로 진행했는지 — 직접 확인 안내 표시
   const patched = $derived(wizard.runSteps.some((s) => s.id === "efs" && s.status === "done"));
   // 실패는 없지만 통신을 확인하지 못한 종료는 "성공"과 구분
-  const unverified = $derived(allOk && wizard.imsUnverified);
+  const communicationTask = $derived(wizard.runSteps.some(s => s.id === "final-verify") || patched);
+  const fileVerified = $derived(wizard.runSteps.some(s => s.id === "verify" && s.status === "done"));
+  const unverified = $derived(allOk && communicationTask && (!wizard.imsVerified || !wizard.callVerified));
+  const resultTitle = $derived(unverified
+    ? `${patched && fileVerified ? "패치 완료" : "작업 종료"} · ${wizard.imsVerified ? "통화 미확인" : "통신 미확인"}`
+    : allOk ? "완료" : "일부 실패");
 </script>
 
 <div class="flex-1 overflow-y-auto flex">
@@ -45,10 +50,10 @@
             <CircleX size={40} class="text-destructive" />
           {/if}
         </div>
-        <h1 class="text-2xl font-bold">{unverified ? "작업 종료 · 통신 미검증" : allOk ? "완료" : "일부 실패"}</h1>
+        <h1 class="text-2xl font-bold">{resultTitle}</h1>
         <p class="text-sm text-muted-foreground">
           {unverified
-            ? "작업은 끝났지만 VoLTE 통화는 확인하지 못했습니다"
+            ? "기록 작업과 실제 통신의 확인 결과를 구분해 표시합니다"
             : allOk
               ? "모든 작업이 성공적으로 완료되었습니다"
               : `${failed}개 단계에서 오류가 발생했습니다`}
@@ -61,13 +66,14 @@
       </CardContent>
     </Card>
 
-    {#if wizard.imsUnverified}
+    {#if communicationTask}
       <Card class="elev-1">
-        <CardContent class="py-4 text-[13px]">
-          <div class="font-medium">VoLTE 등록은 확인하지 못했습니다</div>
-          <div class="text-[12px] text-muted-foreground">
-            SIM을 넣고 재부팅한 뒤 VoLTE가 켜지는지 확인해 주세요. SIM 없이 패치한 경우 처음 SIM을 넣을 때 프로파일이 바뀌어 패치가 풀릴 수 있어, 그때는 다시 패치해야 합니다.
-          </div>
+        <CardContent class="py-4 text-[13px] space-y-2">
+          <div class="font-medium">확인 결과</div>
+          {#if patched}<div class="flex justify-between gap-3"><span>파일·NV 기록 검증</span><span class={fileVerified ? "text-success" : "text-warning"}>{fileVerified ? "리드백 일치" : "미확인"}</span></div>{/if}
+          <div class="flex justify-between gap-3"><span>셀룰러 IMS 음성 등록</span><span class={wizard.imsVerified ? "text-success" : "text-warning"}>{wizard.imsVerified ? "확인" : "미확인"}</span></div>
+          <div class="flex justify-between gap-3"><span>실제 발신·수신</span><span class={wizard.callVerified ? "text-success" : "text-warning"}>{wizard.callVerified ? "사용자 확인" : "미확인"}</span></div>
+          <p class="text-[12px] text-muted-foreground">문자·MMS·5G 데이터·로밍은 별도로 확인해 주세요. 나중에 SIM을 넣거나 바꾸면 프로파일이 다시 적용되어 재패치가 필요할 수 있습니다.</p>
         </CardContent>
       </Card>
     {/if}

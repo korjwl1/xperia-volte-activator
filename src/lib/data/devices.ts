@@ -4,7 +4,7 @@
 
 const INIT_BOOT_PREFIXES = ["XQ-DQ", "XQ-DE", "XQ-EC"]; // 1 V, 5 V, 1 VI
 // 1 IV, 5 IV, 10 IV, 1 II, 5 II, 1 III, 5 III, 10 V, 10 VI (원본 root(): "10 VI 이하는 boot")
-const BOOT_PREFIXES = ["XQ-CT", "XQ-CQ", "XQ-CC", "XQ-AT", "XQ-AS", "XQ-BC", "XQ-BQ", "XQ-DC", "XQ-ES"];
+const BOOT_PREFIXES = ["XQ-CT", "XQ-CQ", "XQ-CC", "XQ-AT", "XQ-AS", "XQ-BC", "XQ-BQ", "XQ-BE", "XQ-DC", "XQ-ES"];
 
 /** 루팅/언루팅 대상 파티션 — 루팅과 언루팅이 같은 표를 쓴다 */
 export function bootPartition(model: string): "init_boot" | "boot" | null {
@@ -48,4 +48,16 @@ const MODEL_SUPPORT: [string, ModelSupport][] = [
 export function modelSupport(model: string): ModelSupport {
   const hit = MODEL_SUPPORT.find(([p]) => model.startsWith(p));
   return hit ? hit[1] : { name: model, level: "지원 미확인", notes: ["이 앱에서 확인된 패치 절차가 없는 기종입니다"] };
+}
+
+/** SIM detection never changes the user's targets. These restrictions concern missing model procedures only. */
+export function patchProcedureProblem(model: string, carriers: readonly string[]): string | null {
+  if (!carriers.length) return null;
+  if (["XQ-AT", "XQ-AS"].some(prefix => model.startsWith(prefix))) {
+    return "Mark II에 필요한 PDC 고정 작업을 이 앱에서 수행하지 못해 자동 패치를 지원하지 않습니다";
+  }
+  if (["XQ-CT", "XQ-CQ"].some(prefix => model.startsWith(prefix)) && carriers.some(c => c === "KT" || c === "LGU")) {
+    return "Mark IV의 KT·LG U+ 패치에는 별도 모뎀 작업이 필요합니다. 이 앱은 모뎀 교체·선행 조건 검증을 지원하지 않아 자동 패치를 진행할 수 없습니다";
+  }
+  return null;
 }

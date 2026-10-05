@@ -2,7 +2,7 @@
 import type { FirmwareDirInfo, AppItem, FirmwareResult, FirmwareVersions, SettingsOverview, SimInfo, BackupGroup, DeviceStatus, EnvCheckItem, ManualId, ManualPrompt, PlanStep, RunJournal, RunStep, VolteConfig } from "$lib/types";
 import { api } from "$lib/api";
 import { LINKS, maskSecret } from "$lib/data/links";
-import { bootPartition } from "$lib/data/devices";
+import { bootPartition, patchProcedureProblem } from "$lib/data/devices";
 import { mockBackupGroups } from "$lib/mock/apps";
 import { bootloaderOnly, buildPlan, stepHazard, updateTarget, type PlanOptions } from "$lib/domain/plan";
 import { firmwareUpdateProblems } from "$lib/domain/verify";
@@ -85,19 +85,20 @@ const MANUAL_TEXT: Record<ManualId, Omit<ManualPrompt, "id">> = {
     ],
   },
   "ims-precheck": {
-    title: "리락 전 통신 확인",
+    title: "언루팅·리락 전 통신 확인",
     steps: [
       "재부팅 후 통신사 신호가 잡히면 앱이 VoLTE(IMS) 등록을 확인합니다",
       "다른 전화로 실제로 걸고 받아 통화가 되는지 확인해 주세요 — 리락한 뒤에는 다시 고치려면 초기화가 한 번 더 필요합니다",
       "통화가 안 되면 [다시 패치]로 VoLTE 적용부터 다시 진행할 수 있습니다",
+      "SIM이 없거나 지금 확인하지 않을 경우 통신 확인을 생략하고 계속할 수 있습니다. 파일 기록 결과는 유지됩니다",
     ],
   },
   "ims-check": {
     title: "최종 VoLTE 확인",
     steps: [
       "폰이 완전히 부팅되고 통신사 신호를 잡을 때까지 기다립니다 (2~3분)",
-      "앱이 IMS(VoLTE) 등록 상태를 자동으로 확인합니다 — 등록되면 바로 다음 단계로 진행됩니다",
-      "직접 확인하려면: 전화 앱 → *#*#4636#*#* → 휴대전화 정보 → IMS 서비스 상태",
+      "앱이 IMS(VoLTE) 등록 상태를 확인합니다. 대상 슬롯으로 실제 발신·수신을 확인했다면 아래 항목에 체크해 주세요",
+      "SIM이 없거나 통화 확인을 하지 않을 경우 [통신 확인 없이 마무리]를 누르세요 — 파일 기록 결과와 통신 확인 결과는 따로 표시됩니다",
     ],
   },
   "smsie-export": {
@@ -266,6 +267,9 @@ export class Wizard {
     this.manualSetupState = "idle";
     this.backupNoticeAck = false;
     this.callAck = false;
+    this.imsVerified = false;
+    this.callVerified = false;
+    this.imsUnverified = false;
     this.oemUnknownAck = false;
     this.stepError = "";
     this.stopInfo = null;
@@ -559,6 +563,8 @@ export class Wizard {
     this.firmwareState = j.firmware ? "done" : "idle";
     this.firmwareDir = j.firmwareDir;
     this.imsUnverified = j.imsUnverified ?? false;
+    this.imsVerified = j.imsVerified ?? false;
+    this.callVerified = j.callVerified ?? false;
     // 직접 지정한 폴더는 그사이 바뀌었을 수 있으므로 다시 검사
     this.firmwareDirInfo = null;
     if (j.firmwareDir) void this.setFirmwareDir(j.firmwareDir);
@@ -584,13 +590,18 @@ export class Wizard {
       prep.manualDone = 0;
     }
     // SIM을 바꿨으면 이전 통신 확인 결과를 재사용하지 않는다
-    if (this.simChangedSince(j)) {
+    const simChanged = this.simChangedSince(j);
+    const legacyCommunication = j.imsVerified === undefined || j.callVerified === undefined;
+    if (simChanged || legacyCommunication) {
+      this.imsVerified = false;
+      this.callVerified = false;
       for (const st of runSteps) {
-        if ((st.id === "comm-check" || st.id === "final-verify") && st.status === "done") {
+        if ((st.id === "final-verify" || (simChanged && st.id === "comm-check")) && st.status === "done") {
           st.status = "pending";
           st.progress = 0;
           st.manualDone = 0;
-          this.log(st, "[재개] 작업 시작 때와 SIM 구성이 달라 통신 확인을 다시 진행합니다");
+          st.communicationSkipped = false;
+          this.log(st, simChanged ? "[재개] SIM 구성이 달라 통신 확인을 다시 진행합니다 — 패치 대상 선택은 유지합니다" : "[재개] 이전 기록에 최종 통신 확인 결과가 없어 다시 확인합니다");
         }
       }
     }
@@ -642,6 +653,8 @@ export class Wizard {
       firmware: this.firmware ? { ...this.firmware } : null,
       firmwareDir: this.firmwareDir,
       imsUnverified: this.imsUnverified,
+      imsVerified: this.imsVerified,
+      callVerified: this.callVerified,
       sims: this.journalSims,
       stop: this.stopInfo,
     };
@@ -990,7 +1003,8 @@ export class Wizard {
     const gen = this.runGen;
     const list = await api.deviceList();
     const d = list?.find((x) => x.state === "device" && x.serial === this.device?.serial);
-    if (!d || gen !== this.runGen) return false;
+    if (gen !== this.runGen) return false;
+    if (!d) { this.imsSims = []; return false; }
     this.imsSims = d.sims;
     const targets = this.volteConfig.sims.filter((s) => s.carrier !== null).map((s) => s.slot);
     const slots = targets.length > 0 ? targets : d.sims.filter((s) => s.carrier).map((s) => s.slot);
@@ -999,6 +1013,12 @@ export class Wizard {
 
   /** 최종 확인 중 표시할 슬롯별 VoLTE 상태 */
   imsSims: SimInfo[] = $state([]);
+  /** 표시용 상태. 대상은 감지한 통신사가 아니라 사용자의 슬롯 선택이다. */
+  get imsRegistered(): boolean {
+    const targets = this.volteConfig.sims.filter(s => s.carrier !== null).map(s => s.slot);
+    const slots = targets.length ? targets : this.imsSims.filter(s => s.carrier).map(s => s.slot);
+    return slots.length > 0 && slots.every(slot => this.imsSims.find(s => s.slot === slot)?.volte === "on");
+  }
 
   /** 자동 감지 중인 항목 설명 (모달에 표시) */
   manualWatching = $state("");
@@ -1006,13 +1026,13 @@ export class Wizard {
   private watchGeneration = 0;
 
   /** 자동 감지: 조건이 충족될 때까지 주기적으로 확인 → 충족되면 자동 진행 (수동 [완료]도 가능) */
-  private watchManual(cur: RunStep, id: ManualId, label: string, check: () => Promise<boolean>, everyMs: number) {
+  private watchManual(cur: RunStep, id: ManualId, label: string, check: () => Promise<boolean>, everyMs: number, autoAdvance = true) {
     this.stopWatch();
     this.manualWatching = label;
     const watch = this.watchGeneration;
     const gen = this.runGen;
     let busy = false;
-    this.watchTimer = setInterval(async () => {
+    const poll = async () => {
       if (watch !== this.watchGeneration) return;
       if (this.manualCurrent?.id !== id || gen !== this.runGen) return this.stopWatch();
       if (busy) return;
@@ -1020,7 +1040,7 @@ export class Wizard {
       try {
         const ok = await check();
         if (watch !== this.watchGeneration || gen !== this.runGen || this.manualCurrent?.id !== id) return; // 그사이 중단·진행됨
-        if (ok) {
+        if (ok && autoAdvance) {
           this.stopWatch();
           this.log(cur, `[감지] ${label} — 자동으로 진행합니다`);
           this.ackManual();
@@ -1030,7 +1050,9 @@ export class Wizard {
       } finally {
         busy = false;
       }
-    }, everyMs);
+    };
+    this.watchTimer = setInterval(poll, everyMs);
+    if (!autoAdvance) void poll();
   }
 
   private stopWatch() {
@@ -1087,7 +1109,12 @@ export class Wizard {
     if (id === "usb-debug") this.watchManual(cur, id, "USB 디버깅 연결 확인", () => this.usbDebugReady(), 2000);
     if (id === "mode-wait") this.watchManual(cur, id, "부트로더(fastboot) 모드 진입 확인", () => this.usbModeIs("fastboot"), 1500);
     if (id === "flash-mode") this.watchManual(cur, id, "플래시 모드 진입 확인", () => this.usbModeIs("flashmode"), 1500);
-    if (id === "ims-check") this.watchManual(cur, id, "VoLTE(IMS) 등록 확인", () => this.imsReady(), 5000);
+    if (id === "ims-check") {
+      this.imsVerified = false;
+      this.callVerified = false;
+      this.imsUnverified = false;
+      this.watchManual(cur, id, "VoLTE(IMS) 등록 확인", () => this.imsReady(), 5000, false);
+    }
     if (id === "su-grant")
       this.watchManual(
         cur,
@@ -1319,6 +1346,8 @@ export class Wizard {
   manualSetupState = $state<LoadState>("idle");
   /** 리락 전 통신 확인 — 실제 발신·수신을 확인했다는 체크 */
   callAck = $state(false);
+  imsVerified = $state(false);
+  callVerified = $state(false);
   /** 언락 조건 중 "확인 불가" 항목을 폰에서 직접 켰다고 확인 */
   oemUnknownAck = $state(false);
   firmwareDirInfo: FirmwareDirInfo | null = $state(null);
@@ -1457,6 +1486,12 @@ export class Wizard {
         void this.persist(true);
         return;
       }
+      if (m.id === "ims-check") {
+        this.imsVerified = true;
+        this.callVerified = this.callAck;
+        this.imsUnverified = false;
+        this.log(this.runSteps[this.cursor], this.callVerified ? "[확인] IMS 등록 및 사용자 발신·수신 확인" : "[확인] IMS 등록 확인 — 실제 통화는 미확인");
+      }
       this.stopWatch();
       this.ackManual();
     } finally {
@@ -1472,12 +1507,20 @@ export class Wizard {
     this.ackManual(true);
   }
 
-  /** 최종 VoLTE 확인 없이 마무리 — SIM 없이 미리 패치한 경우 등 (작업 자체는 모두 끝난 상태) */
+  /** 통신 확인 생략 — SIM 상태로 파일 작업·언루팅을 차단하지 않는다. 리락 자체의 검증 게이트는 별도다. */
   finishWithoutIms() {
-    if (this.manualCurrent?.id !== "ims-check") return;
-    this.imsUnverified = true;
+    const id = this.manualCurrent?.id;
+    if (id !== "ims-check" && id !== "ims-precheck") return;
+    const cur = this.runSteps[this.cursor];
+    if (!cur) return;
+    cur.communicationSkipped = true;
+    if (id === "ims-check") {
+      this.imsUnverified = true;
+      this.imsVerified = false;
+      this.callVerified = this.callAck;
+    }
     void this.persist(true);
-    this.log(this.runSteps[this.cursor], "[확인 생략] VoLTE 등록을 확인하지 못한 채 마무리했습니다 — 통신 미검증. SIM을 넣으면 프로파일이 바뀌어 재패치가 필요할 수 있습니다");
+    this.log(this.runSteps[this.cursor], "[확인 생략] IMS 등록 미확인으로 마무리합니다 — 파일 기록 검증 결과는 유지됩니다. SIM을 넣거나 바꾸면 재패치가 필요할 수 있습니다");
     this.stopWatch();
     this.ackManual(true);
   }
@@ -1723,6 +1766,12 @@ export class Wizard {
   /** 통신 확인 — ims-precheck 수동 개입 + imsReady 자동 판정 */
   private async runRealCommCheck(cur: RunStep) {
     const gen = this.runGen;
+    if (cur.communicationSkipped) {
+      this.log(cur, "[미확인] 사용자 선택으로 통신 확인을 생략합니다 — 파일 기록·리드백 결과는 유지됩니다");
+      cur.progress = 1;
+      this.stepDone(cur);
+      return;
+    }
     cur.progress = 0.5;
     // imsReady 호출 — IMS 등록 + 슬롯별 상태 표시
     const ready = await this.imsReady();
@@ -1741,6 +1790,8 @@ export class Wizard {
 
   /** PC 입력만 검사. 언락·루팅 전에 실행하고, 각 EFS 단계에서도 다시 검사한다. */
   private async validatedEfsInputs(gen: number): Promise<EfsConfiguration | null> {
+    const problem = patchProcedureProblem(this.device?.model ?? "", this.volteConfig.sims.flatMap(s => s.carrier ? [s.carrier] : []));
+    if (problem) { this.failStep(problem); return null; }
     const cfg = this.efsRunConfiguration ? { ok: true as const, value: this.efsRunConfiguration } : await api.efsConfiguration();
     if (gen !== this.runGen) return null;
     if (!cfg.ok) { this.failStep(cfg.error); return null; }
@@ -1804,7 +1855,7 @@ export class Wizard {
         if (!diag.ok) return this.failStep(diag.error);
         const r = await api.efsPreflight(cfg);
         if (gen !== this.runGen) return;
-        if (!r.ok) return this.failStep(r.error);
+        if (!r.ok) return this.failStep(`${r.error} — DIAG 드라이버와 지정한 COM을 확인하세요. 포트가 나타나지 않으면 폰의 USB 모드를 MTP로 바꾼 뒤 충전 모드로 되돌리고 다시 시도하세요`);
         for (const line of r.value.log) this.log(cur, line);
         for (const w of r.value.warnings) this.log(cur, `[경고/setup] ${w}`);
         if (r.value.errors.length) return this.failStep(r.value.errors.join(" / "));
@@ -2279,6 +2330,7 @@ export class Wizard {
     cur.status = "pending";
     cur.progress = 0;
     cur.manualDone = 0;
+    cur.communicationSkipped = false;
     cur.sub = undefined;
     this.clearRuntimeManuals(cur.id);
     this.log(cur, "[재시도] 이 단계를 처음부터 다시 진행합니다");
@@ -2297,6 +2349,7 @@ export class Wizard {
       st.status = "pending";
       st.progress = 0;
       st.manualDone = 0;
+      st.communicationSkipped = false;
       st.sub = undefined;
       this.clearRuntimeManuals(st.id);
     }

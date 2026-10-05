@@ -44,3 +44,5 @@ DeviceStatus += state:'device'|'unauthorized'|'offline'|'usb'…,  SimInfo += st
 - 패치 계획에 `efs-input`(기기 접근 전 설정·프리셋 확인)을 먼저 포함한다. `efs-preflight`의 수동 안내는 `su-grant`이며 세부 작업은 DIAG 전환·프로토콜 초기화·응답 확인. EFS 설정 화면은 mock 기본 모드에서 숨긴다.
 - EFS facade의 설정 기반 메서드는 선택적 실행별 `EfsConfiguration` 인자를 받는다. 이를 지정하면 이후 PC 설정 변경이 해당 실행의 COM·프리셋·스냅샷 루트를 바꾸지 않는다.
 - `EfsToolCheck`는 `deviceExecution`·`rootExecution`·`fastbootExecution`을 반환한다. 브라우저 mock은 모두 false, Rust는 각각 Cargo 쓰기 feature의 컴파일 여부를 반환한다.
+
+- RunJournal v1 optional imsVerified/callVerified boolean 추가. 잘못된 타입은 거부, 이전 기록은 최종 통신 확인 재실행. 시뮬레이션의 단계 완료만으로 실제 IMS·통화 확인 플래그를 세우지 않는다.
