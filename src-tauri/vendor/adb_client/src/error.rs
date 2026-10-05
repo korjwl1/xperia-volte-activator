@@ -3,6 +3,10 @@ use thiserror::Error;
 /// Custom Result type thrown by this crate.
 pub type Result<T> = std::result::Result<T, RustADBError>;
 
+/// [xvolte patch] USB·TCP 직접 연결에서 공개 키를 보낸 뒤 기기 응답이 없을 때(폰에 USB 디버깅 허용 창이 떠 있음)
+/// `ADBRequestFailed`에 담기는 고정 문구 — 호출부가 일반 시간 초과와 구분한다.
+pub const UNAUTHORIZED_MARKER: &str = "device unauthorized: waiting for USB debugging approval";
+
 /// Represents all error types that can be thrown by the crate.
 #[derive(Error, Debug)]
 pub enum RustADBError {

@@ -190,23 +190,43 @@ fn download(asset: &ReleaseAsset) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-/// 준비 단계에서 받은 APK를 한 번 읽어 해시·서명 핀·구조를 모두 이 바이트로 확인한다.
-/// 패치는 돌려준 바이트를 그대로 써서 확인 후 바꿔치기 틈을 없앤다.
+/// 준비 단계(magisk_prepare)가 GitHub 다이제스트·서명 핀을 확인해 앱 데이터 magisk/ 캐시에 저장한 APK만 쓴다.
+/// 호출부가 넘긴 경로·해시만으로는 신뢰하지 않는다(서명 인증서 블록은 복사할 수 있다) — 캐시 폴더 안의
+/// Magisk-v*.apk여야 하고, 저장 때 기록한 다이제스트(sidecar)·넘긴 해시·파일 내용·서명 핀이 모두 맞아야 한다.
+/// 확인한 바이트를 그대로 돌려줘 패치가 같은 바이트를 쓴다(확인 후 바꿔치기 틈 제거).
 fn load_verified_apk(path: &std::path::Path, expected: &str) -> Result<Vec<u8>, String> {
-    load_verified_apk_pinned(path, expected, apk_verify::MAGISK_CERT_SHA256)
+    let dir = app_paths::data_dir()
+        .map(|d| d.join("magisk"))
+        .ok_or("앱 데이터 폴더를 확인할 수 없습니다")?;
+    load_verified_apk_in(&dir, path, expected, apk_verify::MAGISK_CERT_SHA256)
 }
 
-fn load_verified_apk_pinned(
+fn load_verified_apk_in(
+    cache_dir: &std::path::Path,
     path: &std::path::Path,
     expected: &str,
     pins: &[&str],
 ) -> Result<Vec<u8>, String> {
-    let bytes = crate::storage::read_bounded(path, MAX_APK as usize)?
-        .ok_or("Magisk APK 파일이 없습니다")?;
-    if !apk_verify::sha256_hex(&bytes).eq_ignore_ascii_case(expected) {
-        return Err("Magisk APK가 사전 준비 후 변경됐습니다 — 해시가 일치하지 않습니다".into());
+    const PREPARE_AGAIN: &str = "루팅 준비를 다시 진행해 주세요";
+    let dir = cache_dir
+        .canonicalize()
+        .map_err(|_| format!("Magisk 캐시 폴더가 없습니다 — {PREPARE_AGAIN}"))?;
+    let file = path
+        .canonicalize()
+        .map_err(|_| format!("Magisk APK 파일이 없습니다 — {PREPARE_AGAIN}"))?;
+    let named = file
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(is_magisk_apk_name);
+    if file.parent() != Some(dir.as_path()) || !named {
+        return Err(format!(
+            "준비 단계에서 받은 Magisk APK가 아닙니다 — {PREPARE_AGAIN}"
+        ));
     }
-    apk_verify::check_pins(&bytes, pins)?;
+    let (bytes, _) = apk_verify::load_cached(&file, Some(expected), pins, MAX_APK as usize)
+        .ok_or_else(|| {
+            format!("Magisk APK가 준비 단계에서 확인한 파일과 다릅니다(다이제스트·해시·서명 불일치) — {PREPARE_AGAIN}")
+        })?;
     validate_apk(&bytes)?;
     Ok(bytes)
 }
@@ -228,7 +248,7 @@ pub struct MagiskPatchRequest {
 }
 
 /// 부트 패치 — 스테이징 → boot_patch.sh → 검증 → pull → 정리 (전 과정 adb).
-/// partition은 결과 파일명에만 쓴다(기기 측 이미지명은 고정) — boot|init_boot 등 계약 파티션명.
+/// partition은 순정 이미지 종류·출처 기록 대조에 쓴다(기기 측 이미지명은 고정). 결과는 앱 데이터 magisk/patched-<sha256>.img.
 #[tauri::command]
 pub async fn magisk_patch(
     app: tauri::AppHandle,
@@ -257,26 +277,31 @@ pub async fn magisk_patch(
                 .into(),
         );
     }
-    if !matches!(partition.as_str(), "boot" | "init_boot") {
-        return Err("부트 파티션 이름이 올바르지 않습니다".into());
-    }
-    // 결과는 항상 앱 데이터 폴더(쓰기 보장) — 파티션명 기반 고정 경로(사용자 파일명 미사용)
-    let out = app_paths::data_dir()
-        .map(|d| d.join("magisk").join(format!("{partition}-patched.img")))
+    crate::boot_image::validate_partition(&partition)?;
+    // 결과는 항상 앱 데이터 magisk 폴더(쓰기 보장) — 파일명은 결과 해시(사용자 파일명 미사용)
+    let out_dir = app_paths::data_dir()
+        .map(|d| d.join("magisk"))
         .ok_or("앱 데이터 폴더를 확인할 수 없습니다")?;
     let operation = crate::device_io::WriteOperation::acquire()?;
     let work = move || {
         let _operation = operation;
         // 기기 연결을 잡기 전에 검증 — 검증한 바이트를 그대로 패치에 쓴다
         let apk_bytes = load_verified_apk(&apk, &apk_sha256)?;
+        // 순정 이미지: 대상 파티션 종류와 맞는지, 추출 때 기록한 펌웨어 지문(넘겨받은 지문은 기록과 같아야 함)
+        let stock = crate::boot_image::read(&image)?;
+        crate::boot_image::check_fits_partition(&stock, &partition)?;
+        let origin = crate::boot_image::load_origin(&image, &stock, &fingerprint)?;
+        if origin.partition != partition {
+            return Err("순정 이미지의 파티션이 요청과 다릅니다".into());
+        }
         adb::with_first_device(&serial, move |dev| {
-            crate::boot_image::verify_fingerprint(dev, &fingerprint)?;
+            crate::boot_image::verify_fingerprint(dev, &origin.fingerprint)?;
             let mut outcome_logs: Vec<String> = vec![];
             let r = patch::run_patch(
                 dev,
                 &apk_bytes,
                 &image,
-                &out,
+                &out_dir,
                 Some(&image_sha256),
                 &mut |line| {
                     outcome_logs.push(line.clone());
@@ -387,9 +412,9 @@ mod tests {
     }
 
     #[test]
-    fn cache_integrity_pin_and_explicit_identity_are_required() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("Magisk.apk");
+    fn only_the_prepared_cache_apk_is_trusted() {
+        let cache = tempfile::tempdir().unwrap();
+        let path = cache.path().join("Magisk-v30.7.apk");
         let zip = crate::firmware::tests::build_zip(
             &patch::APK_ENTRIES
                 .iter()
@@ -399,21 +424,27 @@ mod tests {
         let cert = b"topjohnwu-test-cert";
         let pin = apk_verify::sha256_hex(cert);
         let bytes = apk_verify::tests::sign_zip(&zip, cert);
-        std::fs::write(&path, &bytes).unwrap();
         let sha = crate::boot_image::sha256(&bytes);
+        std::fs::write(&path, &bytes).unwrap();
+        // 준비 단계의 다이제스트 기록(sidecar)이 없으면 해시가 맞아도 거부
+        assert!(load_verified_apk_in(cache.path(), &path, &sha, &[&pin]).is_err());
+        apk_verify::store_verified(&path, &bytes, &sha).unwrap();
         assert_eq!(
-            load_verified_apk_pinned(&path, &sha, &[&pin]).unwrap(),
+            load_verified_apk_in(cache.path(), &path, &sha, &[&pin]).unwrap(),
             bytes
         );
-        // 해시 불일치·다른 서명자·실제 핀(테스트 인증서는 공식이 아님)
-        assert!(load_verified_apk_pinned(&path, &"f".repeat(64), &[&pin]).is_err());
-        assert!(load_verified_apk_pinned(&path, &sha, &[&"0".repeat(64)]).is_err());
-        assert!(load_verified_apk(&path, &sha).is_err());
-        // 서명 블록 없는 APK는 해시가 맞아도 거부
+        // 해시 불일치·다른 서명자
+        assert!(load_verified_apk_in(cache.path(), &path, &"f".repeat(64), &[&pin]).is_err());
+        assert!(load_verified_apk_in(cache.path(), &path, &sha, &[&"0".repeat(64)]).is_err());
+        // 캐시 폴더 밖의 같은 파일(호출부가 임의 경로를 넘긴 경우)
+        let elsewhere = tempfile::tempdir().unwrap();
+        let outside = elsewhere.path().join("Magisk-v30.7.apk");
+        std::fs::write(&outside, &bytes).unwrap();
+        apk_verify::store_verified(&outside, &bytes, &sha).unwrap();
+        assert!(load_verified_apk_in(cache.path(), &outside, &sha, &[&pin]).is_err());
+        // 기록 뒤 파일이 바뀐 경우
         std::fs::write(&path, &zip).unwrap();
-        assert!(
-            load_verified_apk_pinned(&path, &crate::boot_image::sha256(&zip), &[&pin]).is_err()
-        );
+        assert!(load_verified_apk_in(cache.path(), &path, &sha, &[&pin]).is_err());
         assert!(validate_apk(b"broken").is_err());
         assert!(require_serial(&None).is_err());
         assert!(require_serial(&Some(" ".into())).is_err());

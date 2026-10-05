@@ -1,15 +1,17 @@
-//! 읽기 전용 기기 질의 — `adb_client` 크레이트로 ADB 프로토콜 직접 통신.
+//! 기기 연결 선택과 ADB 읽기 질의 — `adb_client` 크레이트로 ADB 프로토콜 직접 통신.
 //! - 1순위: 실행 중인 adb 서버(localhost:5037)에 연결 — Android Studio 등이 띄운 서버 재사용
 //! - 2순위: USB 직접 연결 — 서버가 없을 때 크레이트가 프로토콜을 직접 구현해 통신
 //!
 //! adb 바이너리 설치/경로 탐색이 필요 없다.
-//! 규칙: 기기·PC에 영향을 주는(쓰기·설치·삭제·플래시) 명령은 이 모듈에 작성 금지.
+//! 역할: 연결 선택(`with_first_device`)은 모든 엔진(백업·복원·루팅 등)이 함께 쓰는 공용 통로다.
+//! 이 모듈의 Tauri 명령은 읽기 질의와 설정 화면 열기(값 변경 없음)뿐이며, 기기 변경 명령은 각 엔진 모듈에 둔다.
+//! USB 직접 연결용 인증 키는 앱 데이터 폴더에 한 번 만든다(사용자 승인 2026-10-02).
 
 use crate::tasks::guarded;
 use adb_client::server::ADBServer;
 use adb_client::server_device::ADBServerDevice;
 use adb_client::usb::{find_all_connected_adb_devices, ADBUSBDevice};
-use adb_client::ADBDeviceExt;
+use adb_client::{ADBDeviceExt, RustADBError, UNAUTHORIZED_MARKER};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -111,6 +113,18 @@ fn sony_usb_adb_devices() -> Result<Vec<adb_client::usb::ADBDeviceInfo>, String>
         .collect())
 }
 
+/// USB 직접 연결에서 폰의 "USB 디버깅 허용" 창이 아직 승인되지 않은 상태
+const USB_UNAUTHORIZED: &str =
+    "폰에서 USB 디버깅 허용을 기다리는 중입니다 — 폰 화면에서 허용을 눌러 주세요";
+
+/// 연결 실패를 사용자 문구로 — 허용 대기(공개 키 전송 후 무응답)는 일반 실패와 구분한다
+fn usb_open_error(e: RustADBError) -> String {
+    match e {
+        RustADBError::ADBRequestFailed(m) if m == UNAUTHORIZED_MARKER => USB_UNAUTHORIZED.into(),
+        other => format!("기기 연결 실패: {other}"),
+    }
+}
+
 fn open_usb() -> Result<ADBUSBDevice, String> {
     let devices = sony_usb_adb_devices()?;
     if devices.is_empty() {
@@ -121,29 +135,44 @@ fn open_usb() -> Result<ADBUSBDevice, String> {
     }
     let info = &devices[0];
     ADBUSBDevice::new_with_custom_private_key(info.vendor_id, info.product_id, adb_key_path()?)
-        .map_err(|e| format!("기기 연결 실패: {e}"))
+        .map_err(usb_open_error)
 }
 
+/// 보관 중인 연결을 쓰거나 새로 연다. 보관 연결은 재부팅·케이블 재연결 뒤 끊겨 있을 수 있으므로
+/// 가벼운 명령으로 살아 있는지 확인하고, 실패하면 버리고 한 번 다시 연다(작업 자체는 아직 실행 전).
 fn ensure_usb(guard: &mut MutexGuard<'static, Option<ADBUSBDevice>>) -> Result<(), String> {
-    if guard.is_none() {
-        **guard = Some(open_usb()?);
+    if let Some(dev) = guard.as_mut() {
+        if crate::device_io::shell(dev, "true").is_ok() {
+            return Ok(());
+        }
+        eprintln!("[rust] 보관된 USB 연결이 끊어져 다시 연결합니다");
+        **guard = None;
     }
+    **guard = Some(open_usb()?);
     Ok(())
 }
 
-/// 실행 중인 adb 서버가 보고한 기기 목록 (준비 안 된 기기 포함).
-/// - 서버 미실행 → None (USB 직접 연결로 폴백, 서버를 새로 띄우지 않음)
-/// - 서버 실행 중 → Some(목록) (서버가 USB를 점유 중이므로 USB 폴백 금지)
-fn server_devices() -> Option<Vec<ServerEntry>> {
+/// adb 서버 상태 — 실행 중이 아니면 USB 직접 연결로, 응답 오류면 오류를 그대로 알린다
+/// (서버가 USB 인터페이스를 점유하므로 서버 실행 중 USB 직접 연결 폴백은 실패한다)
+enum Server {
+    NotRunning,
+    Failed(String),
+    Devices(Vec<ServerEntry>),
+}
+
+/// 실행 중인 adb 서버가 보고한 기기 목록 (준비 안 된 기기 포함). 서버를 새로 띄우지 않는다.
+fn server_devices() -> Server {
     if !server_reachable() {
-        return None;
+        return Server::NotRunning;
     }
     let mut server = ADBServer::new_from_path(SERVER_ADDR, Some(NO_ADB_BINARY.into()));
     let list = match server.devices() {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("[rust] adb 서버 응답 오류(USB 직접 연결로 전환): {e}");
-            return None;
+            eprintln!("[rust] adb 서버 응답 오류: {e}");
+            return Server::Failed(format!(
+                "실행 중인 adb 서버가 응답하지 않습니다 — adb 서버를 종료하거나 다시 시작해 주세요 ({e})"
+            ));
         }
     };
     let entries: Vec<ServerEntry> = list
@@ -158,10 +187,8 @@ fn server_devices() -> Option<Vec<ServerEntry>> {
         .map(|d| format!("{}={}", mask_serial(&d.serial), d.state))
         .collect();
     eprintln!("[rust] adb 서버 기기: {}", summary.join(", "));
-    Some(entries)
+    Server::Devices(entries)
 }
-
-// ── 타임아웃 보장 실행 ──
 
 // ── 셸 실행 ──
 
@@ -169,31 +196,36 @@ pub(crate) fn shell(dev: &mut dyn ADBDeviceExt, cmd: &str) -> Result<String, Str
     crate::device_io::shell(dev, cmd)
 }
 
-/// 서버 모드 우선, 없으면 USB 직접 연결로 실행. 오류 시 연결만 버리고 작업을 재실행하지 않는다.
+/// 서버 모드 우선, 없으면 USB 직접 연결로 실행. `f`는 많아야 한 번 실행하며,
+/// 오류가 나면 USB 연결만 버리고 작업을 재실행하지 않는다(쓰기 작업 중복 방지).
 pub(crate) fn with_first_device<T>(
     serial: &Option<String>,
-    mut f: impl FnMut(&mut dyn ADBDeviceExt) -> Result<T, String>,
+    f: impl FnOnce(&mut dyn ADBDeviceExt) -> Result<T, String>,
 ) -> Result<T, String> {
     let wanted = serial.as_deref().filter(|s| !s.is_empty());
 
     // 1) adb 서버 모드 — serial 지정 시 정확히 일치하는 기기만, 미지정 시 준비된 기기가 1대일 때만
-    if let Some(devs) = server_devices() {
-        let ready: Vec<&ServerEntry> = devs.iter().filter(|d| d.ready()).collect();
-        let entry = match wanted {
-            Some(s) => *ready
-                .iter()
-                .find(|d| d.serial == s)
-                .ok_or("지정한 기기를 찾을 수 없습니다")?,
-            None if ready.len() > 1 => return Err("여러 대의 기기가 연결되어 있습니다".into()),
-            None => *ready.first().ok_or("연결된 기기가 없습니다")?,
-        };
-        let mut device = entry.handle();
-        let manufacturer = shell(&mut device, "getprop ro.product.manufacturer")
-            .map_err(|e| scrub_serial(e, &entry.serial))?;
-        if !manufacturer.trim().eq_ignore_ascii_case("sony") {
-            return Err("Sony 기기만 작업할 수 있습니다".into());
+    match server_devices() {
+        Server::Failed(e) => return Err(e),
+        Server::Devices(devs) => {
+            let ready: Vec<&ServerEntry> = devs.iter().filter(|d| d.ready()).collect();
+            let entry = match wanted {
+                Some(s) => *ready
+                    .iter()
+                    .find(|d| d.serial == s)
+                    .ok_or("지정한 기기를 찾을 수 없습니다")?,
+                None if ready.len() > 1 => return Err("여러 대의 기기가 연결되어 있습니다".into()),
+                None => *ready.first().ok_or("연결된 기기가 없습니다")?,
+            };
+            let mut device = entry.handle();
+            let manufacturer = shell(&mut device, "getprop ro.product.manufacturer")
+                .map_err(|e| scrub_serial(e, &entry.serial))?;
+            if !manufacturer.trim().eq_ignore_ascii_case("sony") {
+                return Err("Sony 기기만 작업할 수 있습니다".into());
+            }
+            return f(&mut device).map_err(|e| scrub_serial(e, &entry.serial));
         }
-        return f(&mut device).map_err(|e| scrub_serial(e, &entry.serial));
+        Server::NotRunning => {}
     }
 
     // 2) USB 직접 연결 — 기기 구분 수단이 없으므로 1대일 때만, serial 지정 시 연결 후 일치 확인
@@ -205,26 +237,30 @@ pub(crate) fn with_first_device<T>(
         return Err("여러 대의 기기가 연결되어 있습니다".into());
     }
     let mut guard = lock_usb(Duration::from_secs(30))?;
-    let mut run = |guard: &mut MutexGuard<'static, Option<ADBUSBDevice>>| -> Result<T, String> {
-        ensure_usb(guard)?;
-        let dev = guard.as_mut().expect("연결 보장됨");
-        if let Some(s) = wanted {
-            let actual = shell(dev, "getprop ro.serialno")?;
-            if actual.trim() != s {
-                return Err("지정한 기기를 찾을 수 없습니다".into());
-            }
-        }
-        f(dev)
-    };
-    let first = run(&mut guard);
-    if first.is_err() {
+    let result = run_usb(&mut guard, wanted, f);
+    if result.is_err() {
         *guard = None;
     }
-    let result = first;
     result.map_err(|e| match wanted {
         Some(s) => scrub_serial(e, s),
         None => e,
     })
+}
+
+fn run_usb<T>(
+    guard: &mut MutexGuard<'static, Option<ADBUSBDevice>>,
+    wanted: Option<&str>,
+    f: impl FnOnce(&mut dyn ADBDeviceExt) -> Result<T, String>,
+) -> Result<T, String> {
+    ensure_usb(guard)?;
+    let dev = guard.as_mut().ok_or("기기 연결을 확인할 수 없습니다")?;
+    if let Some(s) = wanted {
+        let actual = shell(dev, "getprop ro.serialno")?;
+        if actual.trim() != s {
+            return Err("지정한 기기를 찾을 수 없습니다".into());
+        }
+    }
+    f(dev)
 }
 
 // ── adb 설치/연결 상태 ──
@@ -239,16 +275,26 @@ pub struct AdbStatus {
 }
 
 fn status_work() -> AdbStatus {
-    // 서버 모드: 서버 도달 가능하면 그대로 사용
-    if let Some(devs) = server_devices() {
-        return AdbStatus {
-            available: true,
-            mode: "adb-server".into(),
-            detail: Some(format!(
-                "준비된 기기 {}대",
-                devs.iter().filter(|d| d.ready()).count()
-            )),
-        };
+    // 서버 모드: 서버 도달 가능하면 그대로 사용(응답 오류는 USB로 대신하지 않고 알린다)
+    match server_devices() {
+        Server::Devices(devs) => {
+            return AdbStatus {
+                available: true,
+                mode: "adb-server".into(),
+                detail: Some(format!(
+                    "준비된 기기 {}대",
+                    devs.iter().filter(|d| d.ready()).count()
+                )),
+            }
+        }
+        Server::Failed(e) => {
+            return AdbStatus {
+                available: false,
+                mode: "adb-server".into(),
+                detail: Some(e),
+            }
+        }
+        Server::NotRunning => {}
     }
     // USB 직접 연결 수단 점검 — device_list와 같은 기준(Sony 기기만)으로 센다
     match sony_usb_adb_devices() {
@@ -570,7 +616,8 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
          dumpsys isub | sed -n '/^Active subscriptions:/,/^All subscriptions:/p' \
            | grep -oE 'simSlotIndex=-?[0-9]+ portIndex=-?[0-9]+ isEmbedded=[01]' || true; echo __IMS__; \
          dumpsys activity service com.android.phone/.TelephonyDebugService \
-           | grep -E 'mPhoneId=|mMmTelCapabilities=|mImsMmTelRegistrationState|handleImsRegistered' || true; echo __DEV__;          settings get global development_settings_enabled; settings get global adb_enabled",
+           | grep -E 'mPhoneId=|mMmTelCapabilities=|mImsMmTelRegistrationState|handleImsRegistered' || true; echo __DEV__; \
+         settings get global development_settings_enabled; settings get global adb_enabled",
     )?;
     let (props_raw, rest) = raw.split_once("__SU__").unwrap_or((&raw, ""));
     // su 구간은 두 표식이 모두 있어야 유효(없으면 루팅 판별 불가)
@@ -715,14 +762,20 @@ fn placeholder(state: &str, serial: String, serial_masked: String, name: &str) -
 
 fn device_list_work() -> Result<Vec<DeviceOut>, String> {
     // 1) adb 서버 모드 — 준비된 기기는 상태 조회, 미승인/오프라인 기기는 상태만
-    if let Some(devs) = server_devices() {
+    let devs = match server_devices() {
+        Server::Failed(e) => return Err(e),
+        Server::Devices(devs) => Some(devs),
+        Server::NotRunning => None,
+    };
+    if let Some(devs) = devs {
         let mut out = Vec::with_capacity(devs.len());
-        // 미승인 기기는 제조사를 알 수 없음 → PC에 Sony USB 장치가 있을 때만 안내 대상으로
-        let sony_usb = crate::usbmode::sony_usb_present();
+        // 미승인 기기는 제조사를 알 수 없음 → PC에 Sony USB 장치가 있을 때만 안내 대상으로.
+        // USB 장치 검색은 준비 안 된 기기가 있을 때만 한 번(매 폴링마다 디스크립터를 읽지 않게)
+        let mut sony_usb: Option<bool> = None;
         let mut failed = 0usize;
         for entry in &devs {
             if !entry.ready() {
-                if sony_usb {
+                if *sony_usb.get_or_insert_with(crate::usbmode::sony_usb_present) {
                     out.push(placeholder(
                         &entry.state,
                         entry.serial.clone(),
@@ -790,19 +843,26 @@ fn device_list_work() -> Result<Vec<DeviceOut>, String> {
             .collect());
     }
     let mut guard = lock_usb(Duration::from_secs(30))?;
-    ensure_usb(&mut guard)?;
-    let first = device_status(guard.as_mut().expect("연결 보장됨"), "");
-    let result = match first {
-        Ok(d) => Ok(if d.sony { vec![d] } else { vec![] }),
-        Err(e) => {
-            // 커넥션 오류 가능성 → 재연결 후 1회 재시도
-            eprintln!("[rust] USB 기기 상태 읽기 실패, 재연결 시도: {e}");
-            *guard = None;
-            ensure_usb(&mut guard)?;
-            let d = device_status(guard.as_mut().expect("재연결 보장됨"), "")?;
-            Ok(if d.sony { vec![d] } else { vec![] })
+    // 보관 연결이 끊겼으면 ensure_usb가 다시 연다(읽기 전용 질의라 상태 조회 실패 시 연결만 버린다)
+    match ensure_usb(&mut guard) {
+        Ok(()) => {}
+        // 서버 모드처럼 "USB 디버깅 허용 대기" 안내를 보여 주도록 자리표시 항목으로 돌려준다
+        Err(e) if e == USB_UNAUTHORIZED => {
+            eprintln!("[rust] device_list(usb) -> USB 디버깅 허용 대기");
+            return Ok(vec![placeholder(
+                "unauthorized",
+                "usb-0".into(),
+                "USB #1".into(),
+                "Xperia",
+            )]);
         }
-    };
+        Err(e) => return Err(e),
+    }
+    let dev = guard.as_mut().ok_or("기기 연결을 확인할 수 없습니다")?;
+    let result = device_status(dev, "").map(|d| if d.sony { vec![d] } else { vec![] });
+    if result.is_err() {
+        *guard = None;
+    }
     if let Ok(list) = &result {
         eprintln!("[rust] device_list(usb) -> {} device(s)", list.len());
     }
@@ -1236,6 +1296,15 @@ pub async fn settings_overview(serial: Option<String>) -> Result<SettingsOvervie
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn usb_approval_wait_is_reported_as_unauthorized() {
+        use super::*;
+        let waiting = usb_open_error(RustADBError::ADBRequestFailed(UNAUTHORIZED_MARKER.into()));
+        assert_eq!(waiting, USB_UNAUTHORIZED);
+        let other = usb_open_error(RustADBError::ADBRequestFailed("closed".into()));
+        assert!(other.starts_with("기기 연결 실패"));
+    }
+
     /// 실기기(XQ-DQ44) 출력 기반
     #[test]
     fn parse_settings_overview_real_sample() {

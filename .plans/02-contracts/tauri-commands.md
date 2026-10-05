@@ -1,18 +1,21 @@
 # 02 — Tauri command 계약 (프론트 ↔ 백엔드)
 
-status: 진행 중 — 읽기 전용 구현 (`adb_status`, `device_list`, `storage_sizes`, `app_flags`: `src-tauri/src/adb.rs` / `disk_free`: `host.rs`). 나머지는 mock/계약만.
+status: 구현 — 등록된 명령 전체는 `src-tauri/src/lib.rs`. 기기·PC에 쓰는 명령도 구현돼 있지만 Cargo 쓰기 기능(`fastboot-write`·`root-write` 등)과 프론트 `REAL_STEPS` 게이트 뒤에 있고 기본은 모두 꺼져 있다. 실기기 미검증 항목은 `../04-engine/device-test-checklist.md`.
 
 규칙: 프론트는 `src/lib/api/` facade로만 호출한다. command 이름/인자/반환은 이 문서가 단일 진실 공급원이다.
 이벤트 스트림은 Tauri `emit` → facade의 콜백/스토어로 전달된다.
-**구현 원칙(AGENTS.md 현재 단계)**: 기기·PC에 영향 주는(쓰기·설치·삭제·플래시) 명령은 작성 금지. 읽기 전용만 구현.
+**구현 원칙**: 기기·PC에 영향 주는 명령(쓰기·설치·삭제·플래시)은 쓰기 기능 빌드 + `REAL_STEPS`가 모두 켜졌을 때만 실행된다. 읽기 명령은 항상 동작한다.
 **기기 통신 구현체**: `adb_client` 크레이트(ADB 프로토콜 순수 Rust) — 1순위 이미 실행 중인 adb 서버(5037, TCP 포트 확인으로만 판단) 재사용, 2순위 USB 직접 연결. adb 바이너리 설치/경로 탐색 불필요.
   - adb_client는 로컬 서버 연결 시 `adb start-server`를 실행하므로, 존재하지 않는 adb 경로를 넘겨 바이너리 실행을 차단한다(서버를 새로 띄우지 않음).
 
 ## device (M1)
 
 ```ts
-invoke('adb_status') → AdbStatus                   // ✅ 구현: 연결 수단 점검 { available, mode: "adb-server"|"usb-direct"|"none", detail }
+invoke('adb_status') → AdbStatus                   // ✅ 구현: 연결 수단 점검 { available, mode: "adb-server"
+//   adb 서버가 응답 오류를 내면 { available: false, mode: "adb-server", detail: <오류> } — USB 직접 연결로 넘어가지 않는다|"usb-direct"|"none", detail }
 invoke('device_list') → DeviceStatus[]            // ✅ 구현: adb_client 연결 + getprop 덤프 + which su + dumpsys isub + TelephonyDebugService (읽기 전용)
+//   USB 직접 연결에서 USB 디버깅 허용 대기 중이면 오류 대신 state "unauthorized" 자리표시 1개(serial "usb-0", serialMasked "USB #1").
+//   adb 서버가 응답 오류를 내면 USB로 넘어가지 않고 오류. 재사용하던 USB 연결이 끊겼으면(재부팅·재연결) 한 번 다시 연결
 //   - Xperia 전용(사용자 지시 2026-10-03): ro.product.manufacturer가 Sony가 아닌 기기는 목록에서 제외, USB 직접 연결은 VID 0x0FCE만,
 //     미승인 기기는 PC에 Sony USB 장치가 있을 때만 표시
 //   - state: "device"(준비) / "unauthorized"(USB 디버깅 허용 대기) / "offline" … — 준비 안 된 기기도 상태만 담아 반환
@@ -75,7 +78,9 @@ invoke('firmware_versions', { serial? }) → { model, installed, supported, vers
 // ✅ 구현: match/v2의 버전 목록 중 설치된 버전 이상만(최신순). 지원 기종 표에 없으면 supported=false
 invoke('firmware_fetch', { serial?, partition: 'init_boot'|'boot', version?, dest? }) → { partition, path, version, fingerprint, imageBytes, downloadedBytes }
 // dest: 저장 위치(사용자가 고른 폴더, 생략 시 앱 데이터 폴더) — <dest>/<model>_<version>/<partition>.img
-// 받기 전에 여유 공간 확인(.sin 크기 + 16 MiB), 부족하면 "NO_SPACE|<사유>" 오류 → 프론트는 다른 위치 선택 팝업
+// 받기 전에 여유 공간 확인(.sin 크기 + 16 MiB), 부족하면 "NO_SPACE
+// 추출 이미지 옆에 출처 기록 <이미지>.json(partition, fingerprint, sha256) 저장, 이미지 종류가 파티션과 맞지 않으면 거부.
+// 네트워크 작업이라 기기 질의 상한을 쓰지 않는다. 300초 초과 시 "펌웨어 받기 시간 초과 — 네트워크 연결을 확인한 뒤 다시 시도해 주세요"(작업 스레드는 취소되지 않음)|<사유>" 오류 → 프론트는 다른 위치 선택 팝업
 // version 생략 = 설치된 버전(지문 완전 일치) / 지정 = 설치된 버전보다 새 버전만(지문 앞부분 기기·지역 일치 + 대상 버전 포함)
 // ✅ 구현(src-tauri/src/firmware.rs): Sony 배포 서버 match/v2 → APP_SW 청크 → ZIP 끝부분 Range로 목록 → update.xml 지문 = ro.build.fingerprint 확인
 //   → <partition>_*.sin만 Range로 받아 inflate·CRC → tar의 .000(ANDROID!) → 앱 데이터 폴더 firmware/<model>_<ver>/<partition>.img
@@ -105,13 +110,17 @@ Magisk 자동 패치 (사용자 조작 없음) — 2026-10-03 XQ-DQ44 / Android 
 invoke('magisk_prepare') → { version, apkPath, sha256 }
 //   GitHub releases(topjohnwu/Magisk latest)에서 Magisk-v<ver>.apk 다운로드 → 앱 데이터 캐시(재사용)
 //   기기 무관·준비 단계 — 게이트 밖(firmware_fetch와 같은 성격)
-invoke('boot_image_check', { serial, path, fingerprint }) → string // 현재 ADB 기기의 펌웨어 지문 대조 + 이미지 SHA-256
+invoke('boot_image_check', { serial, path, fingerprint }) → string // 이미지 SHA-256
+//   이미지 옆 출처 기록(<이미지>.json)이 필요 — 없거나 sha가 다르면 "펌웨어를 다시 받아 주세요"로 거부.
+//   기기와 대조하는 지문은 기록의 값. 넘겨받은 fingerprint는 비어 있거나 기록과 같아야 한다. 이미지 종류·파티션도 검사
 invoke('magisk_patch', { request: { serial, apkPath, imagePath, partition, imageSha256, fingerprint, apkSha256 } }) → { path, origSha256, patchedSha256, bytes, log: string[] }
 //   위 검증 절차 2~5: 페이로드 추출(zip) → push/chmod → boot_patch.sh(종료 코드 판정) →
 //   new-boot.img 검증(ANDROID! 매직 · 원본/2 ≤ 크기 ≤ 원본 · 해시 ≠ 원본) → pull → 작업 폴더 정리(고정 경로만)
 //   기기 측 이미지명은 고정 boot.img — 로컬 파일명은 셸에 넣지 않는다(§12.5). 결과는 앱 데이터 magisk/patched-<sha256>.img
+//   apkPath는 magisk_prepare가 돌려준 캐시 경로여야 한다(앱 데이터 magisk/ 안, GitHub 다이제스트 기록·apkSha256·서명 핀 일치) — 아니면 "루팅 준비를 다시 진행해 주세요".
+//   imagePath는 출처 기록이 필요하고 기록의 partition이 요청과 같아야 한다. fingerprint는 기록과 같거나 비어 있어야 한다.
 //   이벤트 'magisk:log': string — 스크립트 출력·진행
-invoke('magisk_install', { serial, apkPath, apkSha256 }) → void // 필수 ZIP 항목·CRC·예상 해시 확인 후 adb install
+invoke('magisk_install', { serial, apkPath, apkSha256 }) → void // apkPath 캐시 조건(magisk_patch와 같음)·필수 ZIP 항목·CRC·해시·서명 핀 확인 후 adb install
 invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb reboot — fastboot_reboot의 adb 짝
 // 기록은 fastboot_flash 재사용. expectedSerial과 패치 결과 expectedSha256을 함께 전달한다.
 // 검증(절차 7)은 기존 root_check + su-grant 수동 개입 재사용
@@ -129,6 +138,7 @@ invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb r
 
 ```ts
 invoke('disk_free', { path }) → number   // ✅ 구현(src-tauri/src/host.rs): 경로가 속한 드라이브 여유 바이트, 경로 없음 → 에러
+//   15초 제한 — 넘으면 "여유 공간 조회 시간 초과 — 드라이브 연결 상태를 확인해 주세요"
 // 폴더 선택: @tauri-apps/plugin-dialog open({ directory: true }) — capability dialog:allow-open
 ```
 
@@ -157,6 +167,8 @@ invoke('relock_gate_check', { partition, stockPath, deviceKey? }) → { ok, reas
 //   기기 키 필수. 이력 없음·손상·슬롯 누락·최신 미완료는 실패. 진단 정상이어도 ok=false(리락 차단).
 invoke('fastboot_flash', { partition, path, confirm, expectedSerial, expectedSha256 }) → void
 //   partition은 boot·init_boot만(그 외 파티션은 직접 호출도 거부). 전송 버퍼 해시 대조, 부트 이미지 형식·크기 검사.
+//   이미지 종류가 파티션과 맞아야 한다(init_boot = 헤더 v4·커널 없음, boot = 커널 있음). 빈 expectedSha256은 거부.
+//   응답 대기는 응답 1건 전체 기준: 일반 10초, getvar:all 30초, 언락·flash·본문 확인 300초, DATA 전송 전체 600초.
 //   양쪽 슬롯 존재 확인 → download/flash → 기기별·슬롯별 이력. flash·언락 응답은 최대 300초 대기(기기 작업 중 10초로 끊지 않음).
 invoke('fastboot_reboot', { target: 'os'|'bootloader', expectedSerial }) → void
 //   언락·기록·재부팅은 fastboot serialno == expectedSerial 확인 후에만 실행한다.
@@ -307,6 +319,7 @@ invoke('run_guard', { active: boolean, reason?: string }) → void
 // 프론트: begin() 시 켬, complete/중단·오류(markStop)/창 닫기/처음으로 시 끔. 폰 확인 대기 중에는 유지
 // 단, 기기 쓰기 엔진이 아직 진행 중이면 끄지 않고 그 엔진이 끝날 때 끈다
 // 메인 창 스레드의 실제 적용/상태 확인 결과까지 기다리고 실패 시 보호 상태를 해제한다.
+// 종료 가로채기(창 서브클래스)가 설치되지 않은 환경에서 active=true는 오류(보호되지 않는데 켜졌다고 보고하지 않음).
 ```
 
 ## 수동 확인·PC 준비
@@ -316,6 +329,7 @@ invoke('root_check', { serial? }) → boolean            // su -c id 결과에 u
 invoke('firmware_dir_check', { dir, partition }) → { file, path, fingerprint, imageBytes }
 // PC 폴더(한 단계 하위 포함)의 SIN 후보는 정확히 하나여야 한다. 같은 폴더 update.xml의 지문 필수.
 // SIN을 raw IMG로 PC 캐시에 원자 추출한다. path가 패치·기록 입력이며 file은 표시용 SIN 이름이다.
+// 추출 이미지 옆에 출처 기록 <이미지>.json(partition, fingerprint, sha256)을 함께 저장한다. 이미지 종류가 파티션과 맞지 않으면 거부.
 ```
 
 ## 점검 반영 (Codex gpt-6.1-sol 리뷰, 2026-10-03)
@@ -342,3 +356,9 @@ invoke('firmware_dir_check', { dir, partition }) → { file, path, fingerprint, 
 invoke('backup_prepare', { serial?, dest }) → string            // 지정 폴더 아래 backup-<시각>-<모델> 생성, 절대 경로 — 진행 기록에 먼저 저장 후 backup_run(resumeDir)
 invoke('contacts_restore_check', { serial?, dir }) → { backedUp, onDevice }  // 연락처 가져오기 확인(폰은 목록 조회만)
 ```
+
+## 보안 설정 (2026-10-05)
+
+- capability: 외부 열기는 `opener:allow-open-url`의 `https://*`만(이전 `opener:default`의 http·mailto·tel·폴더 열기 제외), `dialog:allow-open`, `core:window:allow-destroy`.
+- CSP(tauri.conf.json): 운영 `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost …`, 개발용 `devCsp`는 HMR·인라인 스크립트 허용.
+  release 실행 파일에서 첫 화면·OMD 화면이 CSP 위반·콘솔 오류 없이 동작함을 WebView2 원격 디버깅으로 확인(2026-10-05).

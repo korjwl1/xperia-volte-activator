@@ -109,12 +109,12 @@ fn with_device<T>(
 pub async fn fastboot_getvar(
     app: tauri::AppHandle,
 ) -> Result<std::collections::HashMap<String, String>, String> {
+    // 읽기 전용이지만 fastboot USB 인터페이스를 독점하므로 기기 작업 실행권을 함께 쓴다
     let operation = crate::device_io::WriteOperation::acquire()?;
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::tasks::blocking("fastboot 조회", move || {
         with_device(operation, app, None, |mut d| d.getvar_all())
     })
     .await
-    .map_err(|e| format!("프로브 스레드 오류: {e}"))?
 }
 
 fn normalize_unlock_code(raw: &str) -> Result<String, String> {
@@ -141,7 +141,7 @@ pub async fn fastboot_unlock(
     let code = normalize_unlock_code(&code)?;
     let secret = code.clone();
     let operation = crate::device_io::WriteOperation::acquire()?;
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::tasks::blocking("부트로더 언락", move || {
         with_device(operation, app, Some(secret), move |mut d| {
             ensure_target(&mut d, &expected_serial)?;
             d.ensure_bootloader()?;
@@ -156,7 +156,6 @@ pub async fn fastboot_unlock(
         })
     })
     .await
-    .map_err(|e| format!("언락 스레드 오류: {e}"))?
 }
 
 /// 순정 출처·AVB·전체 부트 체인 검증 전까지 실제 리락은 차단한다.
@@ -197,14 +196,9 @@ pub async fn relock_gate_check(
     .await
 }
 
-/// 이 도구가 기록하는 파티션은 부트 이미지 두 가지뿐이다(루팅·언루팅). 슬롯 접미사 없이 받는다.
-/// 그 외 파티션(abl·xbl·vbmeta 등)은 잘못 기록하면 복구할 수 없으므로 직접 호출도 거부한다.
+/// 이 도구가 기록하는 파티션은 부트 이미지 두 가지뿐이다(공통 규칙: boot_image::validate_partition)
 fn validate_base_partition(partition: &str) -> Result<(), String> {
-    if matches!(partition, "boot" | "init_boot") {
-        Ok(())
-    } else {
-        Err("지원하는 파티션은 boot·init_boot뿐입니다(슬롯 접미사 없이)".into())
-    }
+    crate::boot_image::validate_partition(partition)
 }
 
 #[tauri::command]
@@ -221,9 +215,14 @@ pub async fn fastboot_flash(
         return Err("확인 없이는 실행하지 않습니다".into());
     }
     validate_base_partition(&partition)?;
+    if expected_sha256.trim().is_empty() {
+        return Err("기록할 이미지의 확인값(sha256)이 없습니다 — 기록하지 않습니다".into());
+    }
     let operation = crate::device_io::WriteOperation::acquire()?;
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::tasks::blocking("부트 이미지 기록", move || {
         let image = crate::boot_image::read(std::path::Path::new(&path))?;
+        // init_boot 이미지를 boot에(또는 반대로) 기록하면 부팅되지 않는다 — USB를 열기 전에 거부
+        crate::boot_image::check_fits_partition(&image, &partition)?;
         // 디스크 파일을 다시 읽지 않고 실제 전송할 버퍼를 해싱한다.
         let sha256 = crate::boot_image::sha256(&image);
         if !expected_sha256.eq_ignore_ascii_case(&sha256) {
@@ -279,7 +278,6 @@ pub async fn fastboot_flash(
         })
     })
     .await
-    .map_err(|e| format!("기록 스레드 오류: {e}"))?
 }
 
 #[tauri::command]
@@ -294,14 +292,13 @@ pub async fn fastboot_reboot(
         return Err(format!("알 수 없는 재부팅 대상: {target}"));
     }
     let operation = crate::device_io::WriteOperation::acquire()?;
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::tasks::blocking("fastboot 재부팅", move || {
         with_device(operation, app, None, move |mut d| {
             ensure_target(&mut d, &expected_serial)?;
             d.reboot(&target)
         })
     })
     .await
-    .map_err(|e| format!("재부팅 스레드 오류: {e}"))?
 }
 
 /// 작업을 시작한 기기인지 확인하고, 확인된 serialno(앞뒤 공백 제거)를 돌려준다.
@@ -335,7 +332,8 @@ fn record_flash_history(
         "bytes": bytes, "sha256": sha256, "status": status,
         "at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     });
-    writeln!(file, "{entry}")
+    // 한 줄을 한 번에 쓴다 — 여러 번 나눠 쓰다 중단되면 찢어진 줄이 이력 전체를 손상으로 만든다
+    file.write_all(format!("{entry}\n").as_bytes())
         .and_then(|_| file.sync_data())
         .map_err(|e| format!("플래시 이력 저장 실패: {e}"))
 }

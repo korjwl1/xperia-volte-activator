@@ -9,18 +9,23 @@ pub const FB_SUBCLASS: u8 = 0x42;
 pub const FB_PROTOCOL: u8 = 0x03;
 
 const SONY_VID: u16 = 0x0FCE;
-/// 응답 대기(초) — DATA 본문 전송 중에는 적용하지 않는다(§9-3 유한 처리)
+/// 응답 1건의 전체 대기(INFO 프레임이 와도 늘어나지 않는 총 시간, §9-3 유한 처리)
 pub const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+/// getvar:all — 정상 기기도 INFO 프레임을 수십 개 보내므로 일반 응답보다 길게
+pub const GETVAR_ALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// 기기가 오래 일하는 명령(언락 초기화·플래시 기록·본문 수신 확인)의 응답 대기.
 /// 10초 안에 끝나지 않아도 기기는 계속 진행하므로, 짧게 끊으면 성공을 실패로 기록하게 된다.
 pub const LONG_RESPONSE_TIMEOUT: Duration = Duration::from_secs(300);
+/// DATA 본문 전체 전송 상한(청크마다 최대 60초)
+pub const DATA_TRANSFER_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// 트레이트 — 명령 전송·응답 프레임 수신·데이터 본문 전송. 단위 테스트는 가짜로 대체.
 pub trait FastbootTransport {
     /// ASCII 명령 전송(≤64바이트)
     fn write_command(&mut self, cmd: &str) -> Result<(), String>;
     /// 응답 프레임 1개 수신 — 반환: (status 4바이트, 페이로드) 합친 원본 버퍼의 길이.
-    /// 버퍼는 최대 256바이트(fastboot 응답 상한). timeout은 프레임 1개당 대기 시간.
+    /// 버퍼는 최대 256바이트(fastboot 응답 상한). timeout은 이 프레임을 기다릴 남은 시간(응답 전체 상한에서 계산).
+    /// 0 미만·1ms 미만은 호출부가 보내지 않는다(libusb 0 = 무제한).
     fn read_frame(&mut self, buf: &mut [u8; 256], timeout: Duration) -> Result<usize, String>;
     /// DATA 본문 전송 — 호스트→기기 bulk OUT
     fn write_data(&mut self, data: &[u8]) -> Result<(), String>;
@@ -133,7 +138,10 @@ impl RusbTransport {
 
 impl FastbootTransport for RusbTransport {
     fn write_command(&mut self, cmd: &str) -> Result<(), String> {
-        if !cmd.is_ascii() || cmd.is_empty() || cmd.len() > 64 {
+        if cmd.is_empty() || !cmd.is_ascii() {
+            return Err("fastboot 명령이 비었거나 ASCII가 아닙니다".into());
+        }
+        if cmd.len() > 64 {
             return Err(format!("fastboot 명령이 너무 깁니다({}바이트)", cmd.len()));
         }
         let written = self
@@ -160,7 +168,7 @@ impl FastbootTransport for RusbTransport {
     fn write_data(&mut self, data: &[u8]) -> Result<(), String> {
         // 청크 단위 전송 — max-download-size 상한은 프로토콜 층에서 검사했다
         const CHUNK: usize = 512 * 1024; // fastboot 표준 max chunk
-        let deadline = Instant::now() + Duration::from_secs(600);
+        let deadline = Instant::now() + DATA_TRANSFER_TIMEOUT;
         for piece in data.chunks(CHUNK) {
             write_all_data(piece, |remaining| {
                 let time_left = deadline.saturating_duration_since(Instant::now());

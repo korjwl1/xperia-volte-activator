@@ -31,7 +31,7 @@ pub struct GateResult {
 }
 
 /// 리락 게이트 허용 부트 체인 파티션(기저명 — 슬롯 제외)
-const BOOT_CHAIN: &[&str] = &["boot", "init_boot"];
+const BOOT_CHAIN: &[&str] = &crate::boot_image::BOOT_PARTITIONS;
 
 fn valid_hash(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())

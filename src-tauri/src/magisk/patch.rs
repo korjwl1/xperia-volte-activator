@@ -129,7 +129,7 @@ pub fn run_patch(
     dev: &mut dyn ADBDeviceExt,
     apk: &[u8],
     image: &Path,
-    out_path: &Path,
+    out_dir: &Path,
     expected_sha256: Option<&str>,
     on_log: &mut dyn FnMut(String),
 ) -> Result<PatchOutcome, String> {
@@ -216,7 +216,8 @@ pub fn run_patch(
             ));
         }
         // 저장(atomic_write가 상위 폴더를 만든다)
-        let output = out_path.with_file_name(format!("patched-{patched_sha}.img"));
+        // 결과 이름은 내용 해시 — 같은 결과는 같은 파일, 다른 결과는 덮어쓰지 않는다(폴더는 atomic_write가 만든다)
+        let output = out_dir.join(format!("patched-{patched_sha}.img"));
         crate::storage::atomic_write(&output, &buf)
             .map_err(|e| format!("패치 결과 저장 실패: {e}"))?;
         Ok(PatchOutcome {
@@ -294,7 +295,7 @@ mod tests {
         let patched = image(4096, 0xBB);
         let f = fixture(&orig);
         let mut d = dev_ready(&patched);
-        let out = f.dir.path().join("patched.img");
+        let out = f.dir.path().join("out");
         let mut logs: Vec<String> = vec![];
         let r = run_patch(
             &mut d,
@@ -344,7 +345,7 @@ mod tests {
         let bad = b"NOTANDROID........".to_vec();
         let f = fixture(&orig);
         let mut d = dev_ready(&bad);
-        let out = f.dir.path().join("patched.img");
+        let out = f.dir.path().join("out");
         let err = run_patch(
             &mut d,
             &read(&f.apk).unwrap(),
@@ -367,7 +368,7 @@ mod tests {
         let orig = image(4096, 0x41);
         let f = fixture(&orig);
         let mut d = dev_ready(&orig); // 패치 결과 == 원본
-        let out = f.dir.path().join("patched.img");
+        let out = f.dir.path().join("out");
         let err = run_patch(
             &mut d,
             &read(&f.apk).unwrap(),
@@ -387,7 +388,7 @@ mod tests {
         patched.extend_from_slice(&[0xCC; 8192]);
         let f = fixture(&orig);
         let mut d = dev_ready(&patched);
-        let out = f.dir.path().join("patched.img");
+        let out = f.dir.path().join("out");
         let err = run_patch(
             &mut d,
             &read(&f.apk).unwrap(),
@@ -407,7 +408,7 @@ mod tests {
         let tiny = b"ANDROID!".to_vec();
         let f = fixture(&orig);
         let mut d = dev_ready(&tiny);
-        let out = f.dir.path().join("patched.img");
+        let out = f.dir.path().join("out");
         let err = run_patch(
             &mut d,
             &read(&f.apk).unwrap(),
@@ -441,7 +442,7 @@ mod tests {
         let image = dir.path().join("my boot;rm -rf .img"); // 위험한 로컬명
         std::fs::write(&image, &orig).unwrap();
         let mut d = dev_ready(&patched);
-        let out = dir.path().join("patched.img");
+        let out = dir.path().join("out");
         run_patch(
             &mut d,
             &read(&apk).unwrap(),
@@ -466,7 +467,7 @@ mod tests {
         let original = image(4096, 0x41);
         let fixture = fixture(&original);
         let mut device = dev_ready(&image(4096, 0xBB));
-        let output = fixture.dir.path().join("patched.img");
+        let output = fixture.dir.path().join("out");
         assert!(run_patch(
             &mut device,
             &read(&fixture.apk).unwrap(),
