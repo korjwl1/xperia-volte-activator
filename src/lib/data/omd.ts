@@ -66,7 +66,7 @@ export const omdInfo: OmdCarrier[] = [
         source: CAFE(617140),
       },
     ],
-    simPlacement: "등록할 IMEI 쪽 슬롯은 비우고, 반대 슬롯에 SIM을 둔 채 등록합니다 (다른 폰을 써도 됩니다)",
+    simPlacement: "카페의 물리 USIM 등록 안내는 등록할 IMEI 쪽 슬롯을 비우고 반대 슬롯이나 다른 폰을 사용하는 방식입니다. 필요한 이동은 패치 전에 마치고, eSIM은 고객센터 안내를 따르세요",
     notes: [{ text: "SIM을 다른 슬롯이나 폰으로 옮기면 기존 VoLTE 패치가 풀릴 수 있습니다", source: CAFE(609728) }],
   },
   {
@@ -78,14 +78,13 @@ export const omdInfo: OmdCarrier[] = [
       { code: "PTA-TYPE5G", net: "5G", sim: "물리 SIM", role: "기본", when: "패치 완료 후 (APN도 함께 확인)", source: CAFE(617140) },
       { code: "PTA-DS-5G", net: "5G", sim: "eSIM", role: "기본", when: "패치 완료 후 — 물리 SIM 코드와 바꿔 쓰지 않음", source: CAFE(617140) },
     ],
-    simPlacement: "등록할 IMEI의 슬롯에 SIM을 둔 채 등록합니다",
+    simPlacement: "카페의 물리 USIM 등록 안내는 등록할 IMEI의 슬롯에 SIM을 두는 방식입니다. eSIM은 고객센터 안내를 따르세요",
     notes: [
       {
         text: "기본 OMD 상태에서도 LTE VoLTE는 막히지 않고 5G를 쓸 때 등록이 필요하다는 안내와 사례가 있습니다 — 회선마다 다를 수 있어 고객센터 확인",
         source: CAFE(617140),
       },
       { text: "미패치 상태에서 5G 코드로 먼저 바꾸면 데이터까지 3G로 전환될 수 있습니다. 패치까지 시간이 남으면 LTE 상태를 유지하고, 패치 완료와 5G 등록·APN 설정을 맞춰 진행하세요", source: CAFE(607152) },
-      { text: "예전 안내의 PTA-VoLTE는 최신 안내에서 SONY-XPR-TAC로 바뀌었습니다 (예전 코드의 무효 여부는 미확인)" },
     ],
   },
   {
