@@ -8,12 +8,13 @@ export const mockDeviceStatus: DeviceStatus = {
   productName: "Xperia 1 V",
   firmware: "67.2.A.3.178",
   android: "15",
+  baseband: "모의 베이스밴드",
   mode: "android",
   bootloader: "locked",
   rooted: false,
   sims: [
-    { slot: 1, type: "physical", carrier: null, state: "ABSENT", volte: "unknown" },
-    { slot: 2, type: "esim", carrier: "SK Telecom", state: "LOADED", volte: "off" },
+    { slot: 1, type: "physical", carrier: null, state: "ABSENT", volte: "unknown", ims: { status: "no-sim", registration: "unknown", voice: null, sms: null, transport: "unknown", technology: "unknown" } },
+    { slot: 2, type: "esim", carrier: "SK Telecom", state: "LOADED", volte: "off", ims: { status: "not-registered", registration: "not-registered", voice: false, sms: false, transport: "unknown", technology: "unknown" } },
   ],
   prep: { developerOptions: true, usbDebugging: true, oemUnlockAllowed: true },
   usb: {

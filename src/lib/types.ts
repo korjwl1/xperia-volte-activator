@@ -5,14 +5,46 @@ export type DeviceMode = "android" | "bootloader-fastboot" | "fastbootd" | "flas
 
 export type TriState = boolean | "unknown";
 
+export interface ImsDiagnostic {
+  status: "no-sim" | "sim-not-ready" | "query-failed" | "unsupported-format" | "conflicting-evidence" | "not-registered" | "registering" | "voice-unavailable" | "registered" | "wifi-only" | "cross-sim" | "other-network" | "transport-unknown";
+  registration: "registered" | "registering" | "not-registered" | "unknown";
+  voice: boolean | null;
+  sms: boolean | null;
+  transport: "cellular" | "wifi" | "other" | "unknown";
+  technology: "lte" | "nr" | "iwlan" | "cross-sim" | "3g" | "unknown";
+}
+
+export interface CallCheck {
+  slot: 1 | 2;
+  outgoing: boolean;
+  incoming: boolean;
+  audio: boolean;
+  afterReboot: boolean;
+  afterIdle: boolean;
+}
+
+/** No raw dumps, device serials, subscriber identifiers or phone numbers. */
+export interface CommunicationSnapshot {
+  checkedAt: string;
+  outcome: "observed" | "query-failed" | "disconnected";
+  model: string;
+  firmware: string;
+  fingerprint: string;
+  android: string;
+  baseband: string;
+  sims: SimInfo[];
+  presets: { slot: 1 | 2; carrier: CarrierId; version: string; sha256: string }[];
+}
+
 export interface SimInfo {
   slot: 1 | 2;
   type: "physical" | "esim";
   carrier: string | null; // null = SIM 인식 안 됨 (state 참고)
   /** gsm.sim.state 원값: LOADED / ABSENT / PIN_REQUIRED / PUK_REQUIRED / NETWORK_LOCKED / NOT_READY / CARD_IO_ERROR … */
   state: string;
-  /** on = 셀룰러 IMS 음성(VoLTE) / wifi = Wi-Fi 통화로만 등록(VoLTE 아님) / off = 미등록 / unknown = 판별 불가 — *#*#4636#*#* IMS 상태와 같은 출처 */
+  /** on = 셀룰러 IMS 음성 준비 / wifi = Wi-Fi 통화 등록 / off = 미등록·음성 불가 / unknown = 판별 불가. LTE/NR 구분은 ims.technology, 실제 통화는 별도 확인. */
   volte: "on" | "wifi" | "off" | "unknown";
+  ims?: ImsDiagnostic;
   patchedWith?: string; // 어떤 통신사 프로파일이 적용됐는지 — DIAG 리드백(M5) 전까지 미제공
 }
 
@@ -32,6 +64,8 @@ export interface DeviceStatus {
   firmware: string;
   /** ro.build.fingerprint — 업데이트 확인용(백엔드 실측, mock에는 없을 수 있음) */
   fingerprint?: string;
+  baseband?: string;
+  observedAtMs?: number;
   android: string;
   mode: DeviceMode;
   bootloader: "locked" | "unlocked" | "unknown";
@@ -324,8 +358,9 @@ export interface RunJournal {
   imsUnverified?: boolean;
   /** 최종 단계에서 실제 기기 IMS 등록을 확인했는지 (이전 기록은 미확인) */
   imsVerified?: boolean;
-  /** 사용자가 최종 단계에서 대상 슬롯의 실제 발신·수신을 확인했는지 */
+  /** 사용자가 대상 슬롯 모두에서 실제 발신·수신·양방향 음성을 확인했는지 */
   callVerified?: boolean;
+  communication?: { before: CommunicationSnapshot | null; latest: CommunicationSnapshot | null; calls: CallCheck[] };
   /** 작업 시작 때의 SIM 구성 — 이어서 진행할 때 바뀌었으면 통신 확인을 다시 */
   sims?: { slot: 1 | 2; carrier: string | null; state: string }[];
   /** 명시적으로 멈춘 경우의 사유 (없으면 진행 중 앱 종료·연결 끊김으로 본다) */

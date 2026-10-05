@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CommunicationPanel from "$lib/components/CommunicationPanel.svelte";
   import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "$lib/components/ui/card";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
@@ -67,12 +68,13 @@
     </Card>
 
     {#if communicationTask}
+      <CommunicationPanel snapshot={wizard.communicationLatest} loading={wizard.communicationLoading} error={wizard.communicationError} slots={wizard.communicationSlots} calls={wizard.callChecks} showCalls onRefresh={() => void wizard.refreshCommunication()} onCallChange={(slot, item, checked) => wizard.setCallCheck(slot, item, checked)} />
       <Card class="elev-1">
         <CardContent class="py-4 text-[13px] space-y-2">
           <div class="font-medium">확인 결과</div>
           {#if patched}<div class="flex justify-between gap-3"><span>파일·NV 기록 검증</span><span class={fileVerified ? "text-success" : "text-warning"}>{fileVerified ? "리드백 일치" : "미확인"}</span></div>{/if}
           <div class="flex justify-between gap-3"><span>셀룰러 IMS 음성 등록</span><span class={wizard.imsVerified ? "text-success" : "text-warning"}>{wizard.imsVerified ? "확인" : "미확인"}</span></div>
-          <div class="flex justify-between gap-3"><span>실제 발신·수신</span><span class={wizard.callVerified ? "text-success" : "text-warning"}>{wizard.callVerified ? "사용자 확인" : "미확인"}</span></div>
+          <div class="flex justify-between gap-3"><span>발신·수신·양방향 음성</span><span class={wizard.callVerified ? "text-success" : "text-warning"}>{wizard.callVerified ? "대상 슬롯 모두 사용자 확인" : "미확인"}</span></div>
           <p class="text-[12px] text-muted-foreground">문자·MMS·5G 데이터·로밍은 별도로 확인해 주세요. 나중에 SIM을 넣거나 바꾸면 프로파일이 다시 적용되어 재패치가 필요할 수 있습니다.</p>
         </CardContent>
       </Card>

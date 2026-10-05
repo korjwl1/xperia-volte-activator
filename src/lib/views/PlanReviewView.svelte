@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CommunicationPanel from "$lib/components/CommunicationPanel.svelte";
   import { Button } from "$lib/components/ui/button";
   import OptionCard from "$lib/components/OptionCard.svelte";
   import OptionCategory from "$lib/components/OptionCategory.svelte";
@@ -326,6 +327,12 @@
               부트로더 상태를 확인할 수 없어 루팅 · VoLTE 적용만 진행됩니다
             </div>
           {/if}
+        {/if}
+        {#if wizard.hasPatchTarget}
+          <div class="mt-4">
+            <CommunicationPanel snapshot={wizard.communicationBefore} loading={wizard.communicationLoading} error={wizard.communicationError} slots={wizard.communicationSlots} onRefresh={() => void wizard.refreshCommunication("before")} />
+            <p class="mt-2 text-[11px] text-muted-foreground">실행 전 현재 통신을 확인할 수 있습니다. SIM·IMS 상태는 선택한 기록 대상을 바꾸거나 실행을 막지 않습니다.</p>
+          </div>
         {/if}
       </div>
     </div>

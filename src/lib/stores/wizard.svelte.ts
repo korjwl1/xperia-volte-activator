@@ -1,5 +1,5 @@
 // 위자드 상태 머신 + 실행 시뮬레이션 러너 (mock)
-import type { FirmwareDirInfo, AppItem, FirmwareResult, FirmwareVersions, SettingsOverview, SimInfo, BackupGroup, DeviceStatus, EnvCheckItem, ManualId, ManualPrompt, PlanStep, RunJournal, RunStep, VolteConfig } from "$lib/types";
+import type { CallCheck, CommunicationSnapshot, FirmwareDirInfo, AppItem, FirmwareResult, FirmwareVersions, SettingsOverview, SimInfo, BackupGroup, DeviceStatus, EnvCheckItem, ManualId, ManualPrompt, PlanStep, RunJournal, RunStep, VolteConfig } from "$lib/types";
 import { api } from "$lib/api";
 import { LINKS, maskSecret } from "$lib/data/links";
 import { bootPartition, patchProcedureProblem } from "$lib/data/devices";
@@ -12,6 +12,7 @@ import type { BackupProgress, BackupSummary, EfsConfiguration } from "$lib/types
 import { AsyncQueue } from "$lib/domain/asyncQueue";
 import { decodeJournal } from "$lib/domain/journal";
 import { waitUntil } from "$lib/domain/waitUntil";
+import { callsComplete, cellularReady, imsLabel, newCallCheck, type CallItem } from "$lib/domain/communication";
 
 /** 목 모드 언락 코드 예시값 — 16자리 16진수 형식만 맞춘 가짜 값(실전 fastboot에서는 채우지 않음) */
 const MOCK_UNLOCK_CODE = "0x1234567890ABCDEF";
@@ -97,7 +98,7 @@ const MANUAL_TEXT: Record<ManualId, Omit<ManualPrompt, "id">> = {
     title: "최종 VoLTE 확인",
     steps: [
       "폰이 완전히 부팅되고 통신사 신호를 잡을 때까지 기다립니다 (2~3분)",
-      "앱이 IMS(VoLTE) 등록 상태를 확인합니다. 대상 슬롯으로 실제 발신·수신을 확인했다면 아래 항목에 체크해 주세요",
+      "앱이 셀룰러 IMS 음성 등록 상태를 확인합니다. Wi-Fi를 잠시 끄고 대상 슬롯으로 발신·수신과 양쪽 목소리를 확인했다면 각각 체크해 주세요",
       "SIM이 없거나 통화 확인을 하지 않을 경우 [통신 확인 없이 마무리]를 누르세요 — 파일 기록 결과와 통신 확인 결과는 따로 표시됩니다",
     ],
   },
@@ -266,7 +267,12 @@ export class Wizard {
     this.manualCheckError = "";
     this.manualSetupState = "idle";
     this.backupNoticeAck = false;
-    this.callAck = false;
+    this.callChecks = [];
+    this.communicationReq++;
+    this.communicationLoading = false;
+    this.communicationError = "";
+    this.communicationLatest = null;
+    this.imsSims = [];
     this.imsVerified = false;
     this.callVerified = false;
     this.imsUnverified = false;
@@ -283,6 +289,7 @@ export class Wizard {
   private resetSession() {
     this.resetExecution();
     // 기기 쓰기가 아직 끝나지 않았으면 PC 보호는 그 작업이 끝날 때 해제된다(dispatchEngine)
+    this.communicationBefore = null;
     if (this.dangerBusy === 0) this.setGuard(false);
     this.steps = [];
     this.runSteps = [];
@@ -565,6 +572,9 @@ export class Wizard {
     this.imsUnverified = j.imsUnverified ?? false;
     this.imsVerified = j.imsVerified ?? false;
     this.callVerified = j.callVerified ?? false;
+    this.communicationBefore = j.communication?.before ?? null;
+    this.communicationLatest = j.communication?.latest ?? null;
+    this.callChecks = j.communication?.calls ?? [];
     // 직접 지정한 폴더는 그사이 바뀌었을 수 있으므로 다시 검사
     this.firmwareDirInfo = null;
     if (j.firmwareDir) void this.setFirmwareDir(j.firmwareDir);
@@ -591,17 +601,24 @@ export class Wizard {
     }
     // SIM을 바꿨으면 이전 통신 확인 결과를 재사용하지 않는다
     const simChanged = this.simChangedSince(j);
-    const legacyCommunication = j.imsVerified === undefined || j.callVerified === undefined;
-    if (simChanged || legacyCommunication) {
+    const lastCommunication = j.communication?.latest;
+    const firmwareChanged = lastCommunication && this.device && ["model", "firmware", "fingerprint", "baseband"].some(key => {
+      const field = key as "model" | "firmware" | "fingerprint" | "baseband";
+      return this.device?.[field] && this.device[field] !== lastCommunication[field];
+    });
+    const legacyCommunication = j.imsVerified === undefined || j.callVerified === undefined || j.communication === undefined;
+    if (simChanged || firmwareChanged || legacyCommunication) {
       this.imsVerified = false;
       this.callVerified = false;
+      this.callChecks = [];
+      this.communicationLatest = null;
       for (const st of runSteps) {
-        if ((st.id === "final-verify" || (simChanged && st.id === "comm-check")) && st.status === "done") {
+        if ((st.id === "final-verify" || ((simChanged || firmwareChanged) && st.id === "comm-check")) && st.status === "done") {
           st.status = "pending";
           st.progress = 0;
           st.manualDone = 0;
           st.communicationSkipped = false;
-          this.log(st, simChanged ? "[재개] SIM 구성이 달라 통신 확인을 다시 진행합니다 — 패치 대상 선택은 유지합니다" : "[재개] 이전 기록에 최종 통신 확인 결과가 없어 다시 확인합니다");
+          this.log(st, simChanged || firmwareChanged ? "[재개] SIM·펌웨어 구성이 달라 통신 확인을 다시 진행합니다 — 패치 대상 선택은 유지합니다" : "[재개] 이전 기록에 최종 통신 확인 결과가 없어 다시 확인합니다");
         }
       }
     }
@@ -655,11 +672,17 @@ export class Wizard {
       imsUnverified: this.imsUnverified,
       imsVerified: this.imsVerified,
       callVerified: this.callVerified,
+      communication: { before: this.communicationBefore ? $state.snapshot(this.communicationBefore) : null, latest: this.communicationLatest ? $state.snapshot(this.communicationLatest) : null, calls: $state.snapshot(this.callChecks) },
       sims: this.journalSims,
       stop: this.stopInfo,
     };
     const data = JSON.stringify(j);
-    return this.journalWrites.push(() => api.journalSave(key, data));
+    const completed = this.finished;
+    return this.journalWrites.push(async () => {
+      const saved = await api.journalSave(key, data);
+      // Post-completion checks update the completed record, never create a resumable run.
+      return saved && (!completed || await api.journalArchive(key, "done"));
+    });
   }
 
   // ── 작업 중 PC 보호 (절전·Windows 종료 방지) — 실행 중·폰 확인 대기 중에는 켜고, 끝나거나 멈추면 끈다
@@ -1000,24 +1023,85 @@ export class Wizard {
 
   /** VoLTE 패치 대상 슬롯이 모두 IMS 음성 등록(on)인지 — 최종 확인 자동 판정 */
   private async imsReady(): Promise<boolean> {
+    return this.refreshCommunication("latest");
+  }
+
+  communicationBefore: CommunicationSnapshot | null = $state(null);
+  communicationLatest: CommunicationSnapshot | null = $state(null);
+  communicationLoading = $state(false);
+  communicationError = $state("");
+  private communicationReq = 0;
+
+  /** Read-only observation. It never edits target selection or authorizes a device write. */
+  async refreshCommunication(phase: "before" | "latest" = "latest"): Promise<boolean> {
     const gen = this.runGen;
-    const list = await api.deviceList();
-    const d = list?.find((x) => x.state === "device" && x.serial === this.device?.serial);
-    if (gen !== this.runGen) return false;
-    if (!d) { this.imsSims = []; return false; }
-    this.imsSims = d.sims;
-    const targets = this.volteConfig.sims.filter((s) => s.carrier !== null).map((s) => s.slot);
-    const slots = targets.length > 0 ? targets : d.sims.filter((s) => s.carrier).map((s) => s.slot);
-    return slots.length > 0 && slots.every((slot) => d.sims.find((s) => s.slot === slot)?.volte === "on");
+    const req = ++this.communicationReq;
+    const selected = this.device;
+    const manual = this.manualCurrent;
+    const watch = this.watchGeneration;
+    const selection = JSON.stringify(this.volteConfig.sims);
+    const presets: CommunicationSnapshot["presets"] = this.volteConfig.sims.flatMap(s => {
+      const preset = s.carrier ? efsPreset(s.carrier, s.slot) : null;
+      return s.carrier && preset ? [{ slot: s.slot, carrier: s.carrier, version: EFS_PRESET_VERSION, sha256: preset.sha256 }] : [];
+    });
+    this.communicationLoading = true;
+    let list: DeviceStatus[] | null = null;
+    try { list = await api.deviceList(); } catch { /* report a read error below, never mock success */ }
+    const leftManual = manual && (manual.id === "ims-check" || manual.id === "ims-precheck") && (this.manualCurrent?.id !== manual.id || watch !== this.watchGeneration);
+    if (gen !== this.runGen || req !== this.communicationReq || leftManual || this.device?.serial !== selected?.serial || selection !== JSON.stringify(this.volteConfig.sims)) {
+      if (req === this.communicationReq) this.communicationLoading = false;
+      return false;
+    }
+    const d = selected ? list?.find(x => x.state === "device" && x.serial === selected.serial) : undefined;
+    this.imsSims = d?.sims ?? [];
+    this.communicationError = list === null ? "기기 상태 조회 실패 — 다시 확인해 주세요" : !d ? "선택한 기기가 연결되지 않았습니다" : "";
+    const metadata = d ?? selected;
+    const snapshot: CommunicationSnapshot = {
+      checkedAt: new Date().toISOString(), outcome: list === null ? "query-failed" : d ? "observed" : "disconnected",
+      model: metadata?.model ?? "", firmware: metadata?.firmware ?? "", fingerprint: metadata?.fingerprint ?? "",
+      android: metadata?.android ?? "", baseband: metadata?.baseband ?? "", presets,
+      sims: this.imsSims.map(s => ({ slot: s.slot, type: s.type, carrier: s.carrier, state: s.state, volte: s.volte, ...(s.ims ? { ims: { ...s.ims } } : {}) })),
+    };
+    if (phase === "before") this.communicationBefore = snapshot;
+    else {
+      const old = this.communicationLatest;
+      const changed = old && (old.fingerprint !== snapshot.fingerprint || old.baseband !== snapshot.baseband || JSON.stringify(old.presets) !== JSON.stringify(snapshot.presets) || JSON.stringify(old.sims.map(s => [s.slot, s.carrier, s.state])) !== JSON.stringify(snapshot.sims.map(s => [s.slot, s.carrier, s.state])));
+      this.communicationLatest = snapshot;
+      // A fresh failed or changed observation must not leave a green completion badge.
+      if (changed) { this.callChecks = []; this.callVerified = false; }
+      if (!this.imsRegistered) this.imsVerified = false;
+      if (this.finished) {
+        this.imsVerified = this.imsRegistered;
+        this.imsUnverified = !this.imsVerified;
+        this.callVerified = this.callAck;
+      }
+    }
+    this.communicationLoading = false;
+    if (this.finished) void this.persist(true);
+    return this.imsRegistered;
   }
 
   /** 최종 확인 중 표시할 슬롯별 VoLTE 상태 */
   imsSims: SimInfo[] = $state([]);
   /** 표시용 상태. 대상은 감지한 통신사가 아니라 사용자의 슬롯 선택이다. */
   get imsRegistered(): boolean {
-    const targets = this.volteConfig.sims.filter(s => s.carrier !== null).map(s => s.slot);
-    const slots = targets.length ? targets : this.imsSims.filter(s => s.carrier).map(s => s.slot);
-    return slots.length > 0 && slots.every(slot => this.imsSims.find(s => s.slot === slot)?.volte === "on");
+    const slots = this.communicationSlots;
+    return slots.length > 0 && slots.every(slot => cellularReady(this.imsSims.find(s => s.slot === slot)));
+  }
+
+  get communicationSlots(): (1 | 2)[] {
+    const selected = this.volteConfig.sims.filter(s => s.carrier !== null).map(s => s.slot);
+    return selected.length ? selected : (this.imsSims.length ? this.imsSims : this.device?.sims ?? []).filter(s => s.carrier).map(s => s.slot);
+  }
+
+  callChecks: CallCheck[] = $state([]);
+  get callAck(): boolean { return callsComplete(this.callChecks, this.communicationSlots); }
+  setCallCheck(slot: 1 | 2, item: CallItem, checked: boolean) {
+    if (!this.communicationSlots.includes(slot)) return;
+    const row = this.callChecks.find(c => c.slot === slot) ?? newCallCheck(slot);
+    this.callChecks = [...this.callChecks.filter(c => c.slot !== slot), { ...row, [item]: checked }].toSorted((a, b) => a.slot - b.slot);
+    if (this.finished) this.callVerified = this.callAck;
+    if (this.finished) void this.persist(true);
   }
 
   /** 자동 감지 중인 항목 설명 (모달에 표시) */
@@ -1100,7 +1184,7 @@ export class Wizard {
     }
     this.manualCheckError = "";
     this.oemUnknownAck = false;
-    this.callAck = false;
+    if (id === "ims-check" || id === "ims-precheck") this.callChecks = [];
     this.manualCurrent = { id, ...MANUAL_TEXT[id] };
     this.manualSetupState = "idle";
     this.onManualOpen(id);
@@ -1113,7 +1197,7 @@ export class Wizard {
       this.imsVerified = false;
       this.callVerified = false;
       this.imsUnverified = false;
-      this.watchManual(cur, id, "VoLTE(IMS) 등록 확인", () => this.imsReady(), 5000, false);
+      this.watchManual(cur, id, "셀룰러 IMS 음성 등록 확인", () => this.imsReady(), 5000, false);
     }
     if (id === "su-grant")
       this.watchManual(
@@ -1148,7 +1232,8 @@ export class Wizard {
       void api.openExternal(LINKS.unlock);
       void this.loadImei();
     } else if (id === "ims-precheck") {
-      void this.imsReady(); // 슬롯별 현재 상태 표시 (진행은 통화 확인 체크 후 [확인하고 진행])
+      const cur = this.runSteps[this.cursor];
+      if (cur) this.watchManual(cur, id, "셀룰러 IMS 음성 등록 확인", () => this.imsReady(), 5000, false);
     } else if (id === "oem-toggle") {
       // 폰에 해당 설정 화면을 바로 띄움 (개발자 옵션이 꺼져 있으면 휴대전화 정보 — 빌드번호 연타)
       void this.openPhoneSettings();
@@ -1345,7 +1430,6 @@ export class Wizard {
   manualCheckError = $state("");
   manualSetupState = $state<LoadState>("idle");
   /** 리락 전 통신 확인 — 실제 발신·수신을 확인했다는 체크 */
-  callAck = $state(false);
   imsVerified = $state(false);
   callVerified = $state(false);
   /** 언락 조건 중 "확인 불가" 항목을 폰에서 직접 켰다고 확인 */
@@ -1466,8 +1550,10 @@ export class Wizard {
   /** VoLTE(IMS) 등록 확인 — 등록되면 null, Wi-Fi 통화로만 잡혔거나 미등록이면 사유 (기기 조회는 한 번) */
   private async imsCheckError(notRegistered: string): Promise<string | null> {
     if (await this.imsReady()) return null;
-    if (this.imsSims.some((s) => s.volte === "wifi")) return "Wi-Fi 통화로만 등록되어 있습니다 — 폰의 Wi-Fi를 끄고 셀룰러 VoLTE로 등록되는지 확인해 주세요";
-    return notRegistered;
+    if (this.communicationError) return this.communicationError;
+    const slots = this.communicationSlots;
+    const missing = slots.filter(slot => !cellularReady(this.imsSims.find(s => s.slot === slot)));
+    return missing.length ? missing.map(slot => { const sim = this.imsSims.find(s => s.slot === slot); return `SIM${slot}: ${sim ? imsLabel(sim) : "SIM 상태 확인 불가"}`; }).join(" / ") : notRegistered;
   }
 
   /** [확인하고 진행] — 확인되면 진행, 아니면 사유 표시 */
@@ -2445,8 +2531,6 @@ export class Wizard {
     this.finished = true;
     this.setGuard(false);
     void this.persist(true);
-    const key = this.journalKey;
-    if (key) void this.journalWrites.push(() => api.journalArchive(key, "done"));
   }
 
   get overall(): number {

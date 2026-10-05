@@ -198,7 +198,8 @@ test("final confirmation records user call verification separately from IMS", as
   const w = wizard("final-verify");
   w.device.sims = [{ slot: 1, volte: "on" }, { slot: 2, volte: "on" }];
   api.deviceList = async () => [w.device];
-  w.manualCurrent = { id: "ims-check" }; w.callAck = true;
+  w.manualCurrent = { id: "ims-check" };
+  for (const slot of [1, 2]) for (const item of ["outgoing", "incoming", "audio"]) w.setCallCheck(slot, item, true);
   await w.confirmManual();
   assert.equal(w.imsVerified, true);
   assert.equal(w.callVerified, true);
@@ -243,7 +244,8 @@ test("skipping the pre-unroot network check does not block device work or author
 test("late IMS confirmation cannot mark a restarted session as verified", async () => {
   const pending = deferred();
   const w = wizard("final-verify");
-  w.manualCurrent = { id: "ims-check" }; w.callAck = true;
+  w.manualCurrent = { id: "ims-check" };
+  for (const slot of [1, 2]) for (const item of ["outgoing", "incoming", "audio"]) w.setCallCheck(slot, item, true);
   api.deviceList = () => pending.promise;
   const confirming = w.confirmManual();
   w.restart();
@@ -379,4 +381,153 @@ test("configured run keeps its original COM and preset root after settings chang
   assert.ok(used.length > 2);
   assert.ok(used.every(cfg => cfg.port === "COM9" && cfg.presetRoot === "C:/bundle"));
   assert.deepEqual(await w.validatedEfsInputs(w.runGen), configured);
+});
+
+const registeredSim = slot => ({ slot, type: "physical", carrier: "KT", state: "LOADED", volte: "on", ims: { status: "registered", registration: "registered", voice: true, sms: false, transport: "cellular", technology: "lte" } });
+function diagnosticDevice(w, sims = [registeredSim(1), registeredSim(2)]) {
+  return { ...w.device, productName: "Xperia", serialMasked: "TEST****", firmware: "test-fw", fingerprint: "test-build", android: "15", baseband: "test-modem", sims };
+}
+
+test("read-only preflight records metadata and selected preset without SIM overrides or identifiers", async () => {
+  const w = wizard("efs-input");
+  w.device = diagnosticDevice(w, [{ ...registeredSim(1), _plmn: "45008", subscriberId: "must-not-persist" }, { slot: 2, type: "esim", carrier: null, state: "ABSENT", volte: "unknown" }]);
+  w.volteConfig.sims = [{ slot: 1, carrier: "SKT" }, { slot: 2, carrier: null }];
+  api.deviceList = async () => [w.device];
+  const originalSelection = structuredClone(w.volteConfig);
+  assert.equal(await w.refreshCommunication("before"), true);
+  assert.equal(w.communicationBefore.baseband, "test-modem");
+  assert.equal(w.communicationBefore.presets[0].carrier, "SKT");
+  assert.match(w.communicationBefore.presets[0].sha256, /^[a-f0-9]{64}$/);
+  assert.equal(w.communicationBefore.sims[0].carrier, "KT");
+  assert.doesNotMatch(JSON.stringify(w.communicationBefore), /subscriberId|_plmn|TEST-SERIAL/);
+  assert.deepEqual(w.volteConfig, originalSelection);
+  const before = w.communicationBefore;
+  w.steps = []; w.prepareRun();
+  assert.deepEqual(w.communicationBefore, before);
+});
+
+test("enriched IMS read failures take precedence over old on flags and clear stale final badges", async () => {
+  const w = wizard("final-verify"); w.device = diagnosticDevice(w); w.finished = true;
+  api.deviceList = async () => [w.device];
+  assert.equal(await w.refreshCommunication(), true);
+  w.imsVerified = true;
+  api.deviceList = async () => [{ ...w.device, sims: [ { ...registeredSim(1), ims: { ...registeredSim(1).ims, status: "query-failed" } }, registeredSim(2) ] }];
+  assert.equal(await w.refreshCommunication(), false);
+  assert.equal(w.imsVerified, false);
+  api.deviceList = async () => { throw Error("read failed"); };
+  assert.equal(await w.refreshCommunication(), false);
+  assert.equal(w.communicationLatest.outcome, "query-failed");
+  assert.deepEqual(w.imsSims, []);
+  assert.match(w.communicationError, /조회 실패/);
+  assert.equal(w.imsVerified, false);
+});
+
+test("communication verdict uses selected slots, ignoring another slot's Wi-Fi registration", async () => {
+  const w = wizard("final-verify");
+  w.device = diagnosticDevice(w, [registeredSim(1), { ...registeredSim(2), volte: "wifi", ims: { ...registeredSim(2).ims, status: "wifi-only", transport: "wifi" } }]);
+  w.volteConfig.sims = [{ slot: 1, carrier: "SKT" }, { slot: 2, carrier: null }];
+  api.deviceList = async () => [w.device];
+  assert.equal(await w.refreshCommunication(), true);
+  w.volteConfig.sims[1].carrier = "SKT";
+  assert.equal(await w.refreshCommunication(), false);
+});
+
+test("slot call proof requires outgoing, incoming and two-way audio; reboot and idle stay independent", () => {
+  const w = wizard("final-verify");
+  for (const slot of [1, 2]) for (const item of ["outgoing", "incoming", "afterReboot", "afterIdle"]) w.setCallCheck(slot, item, true);
+  assert.equal(w.callAck, false);
+  w.setCallCheck(1, "audio", true); assert.equal(w.callAck, false);
+  w.setCallCheck(2, "audio", true); assert.equal(w.callAck, true);
+  w.setCallCheck(1, "afterIdle", false); assert.equal(w.callAck, true);
+  w.finished = true; w.setCallCheck(2, "incoming", false);
+  assert.equal(w.callVerified, false);
+});
+
+test("completion recheck updates communication only, invalidating changed SIM proof", async () => {
+  const w = wizard("final-verify"); w.finished = true; w.device = diagnosticDevice(w);
+  const fileCheck = { id: "verify", status: "done", logs: [] }; w.runSteps.push(fileCheck);
+  api.deviceList = async () => [w.device];
+  api.efsUpload = api.rootReboot = async () => assert.fail("read-only checks cannot write or reboot");
+  await w.refreshCommunication();
+  for (const slot of [1, 2]) for (const item of ["outgoing", "incoming", "audio"]) w.setCallCheck(slot, item, true);
+  assert.equal(w.callVerified, true);
+  api.deviceList = async () => [diagnosticDevice(w, [{ ...registeredSim(1), carrier: "SK Telecom" }, registeredSim(2)])];
+  await w.refreshCommunication();
+  assert.equal(w.imsVerified, true); assert.equal(w.callVerified, false);
+  assert.deepEqual(w.callChecks, []); assert.equal(fileCheck.status, "done");
+});
+
+test("late diagnostic replies cannot replace a newer observation or a changed target selection", async () => {
+  const w = wizard("final-verify"); w.device = diagnosticDevice(w);
+  const old = deferred(); api.deviceList = () => old.promise;
+  const waiting = w.refreshCommunication();
+  api.deviceList = async () => [];
+  await w.refreshCommunication();
+  old.resolve([w.device]); assert.equal(await waiting, false);
+  assert.equal(w.communicationLatest.outcome, "disconnected");
+  const changed = deferred(); api.deviceList = () => changed.promise;
+  const stale = w.refreshCommunication(); w.volteConfig.sims[0].carrier = "KT";
+  changed.resolve([w.device]); assert.equal(await stale, false);
+  assert.equal(w.communicationLatest.outcome, "disconnected");
+  assert.equal(w.communicationLoading, false);
+});
+
+test("completed diagnostics persist as archived records with validated slot evidence", async () => {
+  const w = wizard("final-verify"); w.device = diagnosticDevice(w);
+  w.journalKey = "test-key"; w.finished = true;
+  w.steps = [{ id: "final-verify", kind: "final-verify", title: "final", desc: "", risk: "safe", wipe: false, estSec: 1, optional: false, enabled: true }];
+  w.runSteps[0].status = "done";
+  const writes = [];
+  api.journalSave = async (_key, data) => { writes.push(["save", data]); return true; };
+  api.journalArchive = async () => { writes.push(["archive"]); return true; };
+  api.deviceList = async () => [w.device];
+  await w.refreshCommunication(); await w.persist(true);
+  assert.deepEqual(writes.map(x => x[0]), ["save", "archive", "save", "archive"]);
+  const journal = JSON.parse(writes[0][1]);
+  assert.ok(decodeJournal(JSON.stringify(journal)));
+  journal.communication.calls = [{ slot: 1, outgoing: true, incoming: true, audio: "true", afterReboot: false, afterIdle: false }];
+  assert.equal(decodeJournal(JSON.stringify(journal)), null);
+  journal.communication.calls[0].audio = true;
+  assert.ok(decodeJournal(JSON.stringify(journal)));
+  journal.communication.calls.push(journal.communication.calls[0]);
+  assert.equal(decodeJournal(JSON.stringify(journal)), null);
+  const before = writes.length; api.journalSave = async () => false;
+  assert.equal(await w.persist(true), false); assert.equal(writes.length, before);
+});
+
+test("a poll arriving after communication was skipped cannot turn the finish screen green", async () => {
+  const w = wizard("final-verify"); w.device = diagnosticDevice(w);
+  const pending = deferred(); api.deviceList = () => pending.promise;
+  w.manualCurrent = { id: "ims-check" };
+  const checking = w.refreshCommunication();
+  w.finishWithoutIms(); w.finished = true;
+  pending.resolve([w.device]);
+  assert.equal(await checking, false);
+  assert.equal(w.imsVerified, false); assert.equal(w.imsUnverified, true);
+  assert.equal(w.communicationLatest, null);
+});
+
+test("unroot-only communication uses freshly observed slots without inventing patch targets", async () => {
+  const w = wizard("comm-check"); w.device = diagnosticDevice(w, []);
+  w.volteConfig.sims = [{ slot: 1, carrier: null }, { slot: 2, carrier: null }];
+  api.deviceList = async () => [diagnosticDevice(w, [registeredSim(2)])];
+  assert.equal(await w.refreshCommunication(), true);
+  assert.deepEqual(w.communicationSlots, [2]);
+  for (const item of ["outgoing", "incoming", "audio"]) w.setCallCheck(2, item, true);
+  assert.equal(w.callAck, true);
+  assert.ok(w.volteConfig.sims.every(s => s.carrier === null));
+});
+
+test("changed baseband on resume invalidates detailed communication proof but preserves file checkpoints", async () => {
+  const w = wizard("final-verify"); w.device = diagnosticDevice(w); api.deviceList = async () => [w.device];
+  await w.refreshCommunication();
+  w.communicationLatest.baseband = "old-modem";
+  const steps = ["verify", "final-verify"].map(id => ({ id, kind: id === "verify" ? "verify" : "final-verify", title: id, desc: "", risk: "safe", wipe: false, estSec: 1, optional: false, enabled: true, ...(id === "final-verify" ? { manual: ["ims-check"] } : {}) }));
+  const journal = { version: 1, model: w.device.model, productName: "Xperia", serialMasked: "TEST", startedAt: "", updatedAt: "", backupPath: "", firmwareDir: "", config: { ...w.volteConfig }, opts: { unroot: false, relock: false, restore: false }, backupItems: [], steps, runSteps: steps.map(s => ({ id: s.id, title: s.title, status: "done", progress: 1, logs: [], manualDone: s.manual?.length ?? 0 })), cursor: 2, firmware: null, stop: null, imsVerified: true, callVerified: true,
+    communication: { before: null, latest: w.communicationLatest, calls: [1, 2].map(slot => ({ slot, outgoing: true, incoming: true, audio: true, afterReboot: false, afterIdle: false })) } };
+  assert.ok(decodeJournal(JSON.stringify(journal)));
+  w.pendingJournal = journal; w.resumeJournal();
+  assert.equal(w.runSteps[0].status, "done"); assert.equal(w.runSteps[1].status, "pending");
+  assert.equal(w.imsVerified, false); assert.equal(w.callVerified, false);
+  assert.equal(w.communicationLatest, null); assert.deepEqual(w.callChecks, []);
 });

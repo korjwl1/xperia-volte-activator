@@ -1,4 +1,5 @@
 import { MANUAL_IDS, STEP_KINDS, type RunJournal } from "$lib/types";
+import { CALL_ITEMS } from "$lib/domain/communication";
 
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === "string";
@@ -10,6 +11,39 @@ const kinds = new Set<string>(STEP_KINDS);
 const statuses = new Set(["pending", "running", "done", "failed", "skipped", "manual-wait"]);
 const carriers = new Set(["SKT", "KT", "LGU", "LGU_V"]);
 
+function diagnostic(value: unknown): boolean {
+  if (!object(value)) return false;
+  return ["no-sim", "sim-not-ready", "query-failed", "unsupported-format", "conflicting-evidence", "not-registered", "registering", "voice-unavailable", "registered", "wifi-only", "cross-sim", "other-network", "transport-unknown"].includes(value.status as string)
+    && ["registered", "registering", "not-registered", "unknown"].includes(value.registration as string)
+    && ["voice", "sms"].every(key => value[key] === null || typeof value[key] === "boolean")
+    && ["cellular", "wifi", "other", "unknown"].includes(value.transport as string)
+    && ["lte", "nr", "iwlan", "cross-sim", "3g", "unknown"].includes(value.technology as string);
+}
+
+function snapshot(value: unknown): boolean {
+  if (value === null) return true;
+  if (!object(value) || !["checkedAt", "model", "firmware", "fingerprint", "android", "baseband"].every(key => text(value[key]) && (value[key] as string).length <= 1024)
+      || !Number.isFinite(Date.parse(value.checkedAt as string))
+      || !["observed", "query-failed", "disconnected"].includes(value.outcome as string)
+      || !Array.isArray(value.sims) || value.sims.length > 2 || !Array.isArray(value.presets) || value.presets.length > 2) return false;
+  const sims = value.sims;
+  const presets = value.presets;
+  return sims.every(sim => object(sim) && [1, 2].includes(sim.slot as number)
+      && ["physical", "esim"].includes(sim.type as string) && (sim.carrier === null || text(sim.carrier)) && text(sim.state)
+      && ["on", "off", "wifi", "unknown"].includes(sim.volte as string) && (sim.ims === undefined || diagnostic(sim.ims)))
+    && new Set(sims.map(s => s.slot)).size === sims.length
+    && presets.every(p => object(p) && [1, 2].includes(p.slot as number) && carriers.has(p.carrier as string)
+      && text(p.version) && text(p.sha256) && /^[a-f0-9]{64}$/.test(p.sha256))
+    && new Set(presets.map(p => p.slot)).size === presets.length;
+}
+
+function communication(value: unknown): boolean {
+  if (value === undefined) return true; // old journals reopen final confirmation
+  if (!object(value) || !snapshot(value.before) || !snapshot(value.latest) || !Array.isArray(value.calls) || value.calls.length > 2) return false;
+  return value.calls.every(c => object(c) && [1, 2].includes(c.slot as number) && CALL_ITEMS.every(item => typeof c[item.id] === "boolean"))
+    && new Set(value.calls.map(c => c.slot)).size === value.calls.length;
+}
+
 /** 디스크 JSON은 외부 입력이다. resume가 읽는 구조와 인덱스를 검사한다. */
 export function decodeJournal(raw: string): RunJournal | null {
   try {
@@ -20,7 +54,8 @@ export function decodeJournal(raw: string): RunJournal | null {
         || !Array.isArray(value.steps) || !Array.isArray(value.runSteps) || value.runSteps.length === 0 || value.steps.length > 100
         || value.cursor > value.runSteps.length || (value.backupDir !== undefined && !text(value.backupDir))
         || (value.patchedImage !== undefined && !text(value.patchedImage))
-        || ["imsUnverified", "imsVerified", "callVerified"].some(key => value[key] !== undefined && typeof value[key] !== "boolean")) return null;
+        || ["imsUnverified", "imsVerified", "callVerified"].some(key => value[key] !== undefined && typeof value[key] !== "boolean")
+        || !communication(value.communication)) return null;
     const config = value.config;
     if (!object(config) || !Array.isArray(config.sims) || config.sims.length !== 2
         || !(config.firmware === null || text(config.firmware))

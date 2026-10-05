@@ -7,6 +7,7 @@
 //! 이 모듈의 Tauri 명령은 읽기 질의와 설정 화면 열기(값 변경 없음)뿐이며, 기기 변경 명령은 각 엔진 모듈에 둔다.
 //! USB 직접 연결용 인증 키는 앱 데이터 폴더에 한 번 만든다(사용자 승인 2026-10-02).
 
+use crate::ims::{diagnostics as ims_diagnostics, parse_ims_voice, ImsDiagnostic};
 use crate::tasks::guarded;
 use adb_client::server::ADBServer;
 use adb_client::server_device::ADBServerDevice;
@@ -440,69 +441,6 @@ pub(crate) fn parse_getprop(out: &str) -> HashMap<String, String> {
     map
 }
 
-/// 슬롯별 IMS 음성 상태
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
-struct ImsVoice {
-    /// MmTel 음성 기능 (Voice: true/false)
-    voice: Option<bool>,
-    /// mImsMmTelRegistrationState (0 미등록 / 1 등록 중 / 2 등록됨)
-    reg_state: Option<i32>,
-    /// 마지막 등록의 전송 방식 — WWAN(셀룰러, VoLTE) / WLAN(Wi-Fi 통화)
-    wlan: Option<bool>,
-}
-
-impl ImsVoice {
-    /// "on" = 셀룰러 IMS 음성(VoLTE) / "wifi" = Wi-Fi 통화로만 등록 / "off" / "unknown"
-    fn volte(&self) -> &'static str {
-        // Voice capability is not proof of current registration. A stale registered
-        // log must not turn an explicitly unregistered/registering phone into success.
-        match (self.reg_state, self.voice, self.wlan) {
-            (Some(0), _, _) | (_, Some(false), _) => "off",
-            (Some(2), Some(true), Some(true)) => "wifi",
-            (Some(2), Some(true), Some(false)) => "on",
-            _ => "unknown",
-        }
-    }
-}
-
-/// TelephonyDebugService 덤프(필터링)에서 슬롯별 IMS 음성 상태.
-/// 전화 앱 *#*#4636#*#* 휴대전화 정보의 IMS 상태와 같은 출처. phoneId 0 = 슬롯 1.
-/// - MmTel 음성 기능(Voice)이 true여도 Wi-Fi 통화(IWLAN)로만 등록됐으면 VoLTE가 아님 —
-///   ImsPhone 등록 로그의 마지막 "handleImsRegistered … imsRadioTech=WWAN|WLAN"으로 구분 (2026-10-03 실기기 덤프 확인)
-fn parse_ims_voice(out: &str) -> HashMap<u8, ImsVoice> {
-    let mut map: HashMap<u8, ImsVoice> = HashMap::new();
-    let mut phone: Option<u8> = None;
-    for line in out.lines() {
-        let t = line.trim();
-        if let Some(v) = t.strip_prefix("mPhoneId=") {
-            phone = v
-                .trim()
-                .parse::<i32>()
-                .ok()
-                .filter(|n| *n >= 0)
-                .map(|n| (n + 1) as u8);
-            continue;
-        }
-        let Some(slot) = phone else { continue };
-        let e = map.entry(slot).or_default();
-        if t.starts_with("mMmTelCapabilities=") {
-            if e.voice.is_none() {
-                e.voice = Some(t.contains("Voice: true"));
-            }
-        } else if let Some(v) = t.strip_prefix("mImsMmTelRegistrationState") {
-            e.reg_state = v.trim_start_matches([' ', '=']).trim().parse().ok();
-        } else if t.contains("handleImsRegistered") {
-            // 로그는 시간순 — 마지막 등록이 현재 전송 방식
-            if t.contains("imsRadioTech=WLAN") {
-                e.wlan = Some(true);
-            } else if t.contains("imsRadioTech=WWAN") {
-                e.wlan = Some(false);
-            }
-        }
-    }
-    map
-}
-
 /// 듀얼 SIM 프롭에서 슬롯 값 — 실기기는 "[,SK Telecom]"처럼 쉼표로 슬롯을 구분해 한 프롭에 담음.
 /// 쉼표 구분 값이 비어 있으면 `<key>.2` 형식(일부 기종)으로 폴백
 fn slot_prop(p: &HashMap<String, String>, key: &str, idx: usize) -> String {
@@ -552,6 +490,7 @@ pub struct SimOut {
     state: String,
     /// "on" = 셀룰러 IMS 음성(VoLTE) / "wifi" = Wi-Fi 통화로만 등록 / "off" = 미등록 / "unknown" = 판별 불가
     volte: &'static str,
+    ims: ImsDiagnostic,
     #[serde(rename = "_plmn")]
     plmn: String,
 }
@@ -576,6 +515,8 @@ pub struct DeviceOut {
     firmware: String,
     /// ro.build.fingerprint — 업데이트 확인에서 같은 기기·지역·버전인지 대조(시리얼 없음)
     fingerprint: String,
+    baseband: String,
+    observed_at_ms: u64,
     android: String,
     mode: String,
     bootloader: String,
@@ -615,8 +556,10 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
         "getprop; echo __SU__; which su || true; echo __ISUB__; \
          dumpsys isub | sed -n '/^Active subscriptions:/,/^All subscriptions:/p' \
            | grep -oE 'simSlotIndex=-?[0-9]+ portIndex=-?[0-9]+ isEmbedded=[01]' || true; echo __IMS__; \
-         dumpsys activity service com.android.phone/.TelephonyDebugService \
-           | grep -E 'mPhoneId=|mMmTelCapabilities=|mImsMmTelRegistrationState|handleImsRegistered' || true; echo __DEV__; \
+         ims_dump=$(dumpsys activity service com.android.phone/.TelephonyDebugService 2>&1); ims_status=$?; \
+         case \"$ims_dump\" in *'Permission Denial'*|*'not found'*|*'No services match'*|*'Error dumping'*|*'Exception'*) ims_status=1;; esac; \
+         echo __IMS_STATUS__=$ims_status; printf '%s\\n' \"$ims_dump\" \
+           | grep -E 'mPhoneId=|mMmTelCapabilities=|mImsMmTelRegistrationState|mImsRegistrationTech|handleImsRegistered|handleImsRegistering|handleImsUnregistered' || true; echo __DEV__; \
          settings get global development_settings_enabled; settings get global adb_enabled",
     )?;
     let (props_raw, rest) = raw.split_once("__SU__").unwrap_or((&raw, ""));
@@ -632,6 +575,7 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
     );
     let embedded = parse_embedded_slots(isub_raw);
     let ims_voice = parse_ims_voice(ims_raw);
+    let ims_query_ok = ims_raw.lines().any(|l| l.trim() == "__IMS_STATUS__=0");
     let p = parse_getprop(props_raw);
     let get = |k: &str| p.get(k).cloned().unwrap_or_default();
 
@@ -678,6 +622,7 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
             let loaded = state == "LOADED";
             // 활성 구독이 있으면 실측값, 없으면 슬롯 1=물리 / 2=eSIM (XQ-DQ44 구성) 가정
             let is_esim = embedded.get(&slot).copied().unwrap_or(slot == 2);
+            let ims = ims_diagnostics(&state, ims_query_ok, ims_voice.get(&slot));
             SimOut {
                 slot,
                 sim_type: if is_esim { "esim" } else { "physical" },
@@ -691,9 +636,10 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
                 state,
                 // IMS 음성 등록 상태(실측) 우선 — 덤프에서 못 읽으면 판별 불가
                 volte: match (loaded, ims_voice.get(&slot)) {
-                    (true, Some(v)) => v.volte(),
+                    (true, Some(v)) if ims_query_ok => v.volte(),
                     _ => "unknown",
                 },
+                ims,
                 plmn: numerics[idx].clone(),
             }
         })
@@ -717,6 +663,11 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
         model,
         firmware,
         fingerprint: get("ro.build.fingerprint"),
+        baseband: get("gsm.version.baseband"),
+        observed_at_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
         android: get("ro.build.version.release"),
         mode: "android".into(),
         bootloader: bootloader.into(),
@@ -745,6 +696,8 @@ fn placeholder(state: &str, serial: String, serial_masked: String, name: &str) -
         product_name: name.to_string(),
         firmware: String::new(),
         fingerprint: String::new(),
+        baseband: String::new(),
+        observed_at_ms: 0,
         android: String::new(),
         mode: "android".into(),
         bootloader: "unknown".into(),
@@ -1296,6 +1249,41 @@ pub async fn settings_overview(serial: Option<String>) -> Result<SettingsOvervie
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn device_status_exposes_ims_query_failure_without_stale_success() {
+        use crate::backup::fake_device::FakeADBDevice;
+        for status in ["0", "1", "missing"] {
+            let mut dev = FakeADBDevice::new();
+            let status_line = if status == "missing" {
+                String::new()
+            } else {
+                format!("__IMS_STATUS__={status}\n")
+            };
+            dev.answer_shell("getprop;", &format!("[ro.product.manufacturer]: [Sony]\n[ro.product.model]: [XQ-DQ44]\n[gsm.sim.state]: [LOADED,ABSENT]\n[gsm.version.baseband]: [test-baseband]\n__SU__\n__ISUB__\n__IMS__\n{status_line}mPhoneId=0\nmMmTelCapabilities=MmTel Capabilities - [Voice: true SMS: false]\nmImsMmTelRegistrationState = 2\nhandleImsRegistered: imsTransportType=WWAN\n__DEV__\n1\n1\n"));
+            let output =
+                serde_json::to_value(super::device_status(&mut dev, "SELECTED").unwrap()).unwrap();
+            assert_eq!(output["baseband"], "test-baseband");
+            assert!(output["observedAtMs"].as_u64().unwrap() > 0);
+            assert_eq!(
+                output["sims"][0]["volte"],
+                if status == "0" { "on" } else { "unknown" }
+            );
+            assert_eq!(
+                output["sims"][0]["ims"]["status"],
+                if status == "0" {
+                    "registered"
+                } else {
+                    "query-failed"
+                }
+            );
+            assert_eq!(output["sims"][1]["ims"]["status"], "no-sim");
+            assert!(dev
+                .shell_calls
+                .iter()
+                .all(|command| !command.contains("setprop") && !command.contains("reboot")));
+        }
+    }
+
     #[test]
     fn usb_approval_wait_is_reported_as_unauthorized() {
         use super::*;

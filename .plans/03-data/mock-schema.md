@@ -2,6 +2,8 @@
 
 status: implemented
 
+2026-10-05: `DeviceStatus`에 optional `baseband/observedAtMs`, `SimInfo`에 optional `ims: ImsDiagnostic`을 추가한다. 진단은 등록·음성/SMS·접속 방식·기술 및 사유를 분리한다. mock은 slot1 no-sim, slot2 not-registered이며 실측처럼 정상 통화를 주장하지 않는다. `RunJournal.communication`은 before/latest 스냅샷과 슬롯별 `CallCheck`(outgoing/incoming/audio/afterReboot/afterIdle)를 저장한다. 스냅샷에는 시각·기종·펌웨어 지문·Android·베이스밴드·SIM 요약·선택 프리셋 버전/전체 SHA256만 넣고 시리얼·IMEI·전화번호·구독 식별자·원시 덤프는 넣지 않는다. 실제 발신·수신·음성 확인은 사용자 체크이며 자동 통화가 아니다.
+
 2026-10-04: 실제 실행 계획은 `src/lib/domain/plan.ts`로 이동했다. 공통 `ApiResult<T>`와 nullable 진행 파일 필드는 `types.ts`, 디스크 진행 기록의 런타임 검증은 `domain/journal.ts`를 사용한다. mock은 개발용 데이터와 백업 항목 시드만 제공한다.
 
 ## 시드 출처

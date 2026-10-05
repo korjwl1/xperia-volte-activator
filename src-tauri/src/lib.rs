@@ -11,6 +11,7 @@ mod fastboot;
 mod firmware;
 mod guard;
 mod host;
+mod ims;
 mod journal;
 mod magisk;
 mod storage;

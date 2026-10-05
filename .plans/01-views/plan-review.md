@@ -2,6 +2,8 @@
 
 status: implemented (mock)
 
+2026-10-05: VoLTE 대상이 있으면 옵션 pane에 공통 `CommunicationPanel`과 [통신 상태 다시 확인]을 표시한다. `wizard.refreshCommunication("before")`는 기존 `api.deviceList`로 같은 기기만 읽어 작업 전 스냅샷을 남긴다. SIM·IMS 결과는 실행 게이트나 대상 선택에 사용하지 않는다. 자동 발신·APN/네트워크 설정 변경 없음. 시각·기종·펌웨어·Android·베이스밴드·선택 프리셋 버전을 표시하며 전체 해시는 진행 기록에 저장한다. 비주얼: 기존 pane 스크롤과 MD3 의미색·lucide 아이콘 유지.
+
 ## 네이티브 EFS 작업 준비 (2026-10-05)
 
 - `REAL_STEPS.efs`가 켜져 있고 패치 대상 SIM이 있을 때 `EfsSetup`을 표시한다. 기본 mock 모드에서는 숨긴다.

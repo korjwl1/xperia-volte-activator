@@ -4,6 +4,7 @@
   import { api } from "$lib/api";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { simStateLabel, type DeviceStatus } from "$lib/types";
+  import { cellularReady, imsDetail, imsLabel } from "$lib/domain/communication";
 
   const CAFE_URL = "https://cafe.naver.com/x1smart";
   const GITHUB_URL = "https://github.com/korjwl1";
@@ -160,17 +161,11 @@
                 </div>
                 {#if sim.carrier}
                   <div class="text-base font-semibold">{sim.carrier}</div>
-                  <div class="flex items-center gap-1.5 text-sm {sim.volte === 'on' ? 'text-emerald-300' : 'opacity-70'}">
-                    {#if sim.volte === "on"}
-                      <CircleCheck size={14} /> VoLTE 활성화
-                    {:else if sim.volte === "wifi"}
-                      Wi-Fi 통화만 등록 (VoLTE 아님)
-                    {:else if sim.volte === "off"}
-                      VoLTE 비활성화
-                    {:else}
-                      VoLTE 상태 확인 불가
-                    {/if}
+                  <div class="flex items-center gap-1.5 text-sm">
+                    {#if cellularReady(sim)}<CircleCheck size={14} />{:else}<TriangleAlert size={14} />{/if}
+                    {imsLabel(sim)}
                   </div>
+                  <p class="text-[11px] opacity-70">{imsDetail(sim)}</p>
                 {:else}
                   <div class="text-base font-semibold opacity-50">{simStateLabel(sim.state)}</div>
                   <div class="text-sm opacity-50">
