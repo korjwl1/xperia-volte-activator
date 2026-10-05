@@ -1,4 +1,4 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+//! Tauri 앱 진입점 — 모듈 등록과 명령 목록. 명령 계약은 .plans/02-contracts/tauri-commands.md
 mod adb;
 mod apk_verify;
 mod app_paths;

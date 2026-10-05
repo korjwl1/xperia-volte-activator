@@ -6,7 +6,7 @@ status: implemented / gated (실기기 미검증, 쓰기·재부팅 기본 비�
 - 검증: FakeTransport와 메모리 API를 사용하는 wizard 테스트만 실행. USB 장치 open·프로브·쓰기 테스트는 실행하지 않는다.
 - 프로토콜 근거: [AOSP fastboot README](https://android.googlesource.com/platform/system/core/+/refs/heads/main/fastboot/README.md) (2026-10-04 확인).
 - 명령 길이는 Sony 호환을 위해 기존 64바이트 제한 유지. 응답은 최대 256바이트, DATA는 정확히 8자리 hex 크기.
-- INFO/TEXT는 최대 256개까지 허용한 다음 종결 응답을 읽는다. 각 USB 읽기/명령 쓰기는 10초, 데이터 청크 쓰기는 60초 제한.
+- INFO/TEXT는 최대 256개까지 허용한 다음 종결 응답을 읽는다. 응답 대기는 응답 1건 전체 상한(INFO가 와도 늘어나지 않음) — 일반 명령 10초, getvar:all 30초, 언락(초기화)·flash·본문 수신 확인 300초. 명령 쓰기 10초, DATA 본문은 청크마다 최대 60초·전체 600초.
 
 ## 모듈
 
@@ -37,9 +37,9 @@ status: implemented / gated (실기기 미검증, 쓰기·재부팅 기본 비�
 ## 플래시·기록
 
 - 입력 partition은 슬롯 접미사 없는 기본명. _a/_b를 이미 붙인 입력, 잘못된 문자·길이는 거부.
-- 이미지 파일은 blocking 스레드에서 읽으며 빈 파일과 1 GiB 초과를 거부. 크기 제한은 파일이 읽는 동안 커져도 적용한다.
+- 기록 이미지는 blocking 스레드에서 읽으며 boot·init_boot만 허용(부트 이미지 상한 256 MiB, `boot_image::MAX_BYTES`). 이미지 종류가 파티션과 맞아야 한다(init_boot = 헤더 v4·커널 없음, boot = 커널 있음). 빈 expectedSha256은 거부.
 - bootloader 모드, current-slot=a/b, has-slot:<partition>=yes, 기기 식별값을 확인하고 양쪽 슬롯을 기록한다.
-- max-download-size 조회의 통신 오류·잘못된 값은 다운로드 전에 실패. 변수 FAIL(미지원)만 호스트 1 GiB 상한으로 폴백.
+- max-download-size 조회의 통신 오류·잘못된 값은 다운로드 전에 실패. 변수 FAIL(미지원)만 호스트 상한(프로토콜 1 GiB, 실제 입력은 부트 이미지 256 MiB)으로 폴백.
 - flash-history.jsonl: deviceKey(일련번호 SHA-256), partition, image 경로, bytes, sha256, at, status(started/done/failed).
 - sha256은 실제 전송 버퍼에서 계산. 경로 파일을 다시 읽지 않는다.
 - 이력 파일 open과 started 기록·sync가 성공해야 flash를 시작한다. 슬롯별 done/failed도 기록·sync하고 저장 실패는 반환한다.
