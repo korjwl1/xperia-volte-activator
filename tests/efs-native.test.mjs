@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { before, beforeEach, after, test } from "node:test";
 import { createServer } from "vite";
 
-let server, Wizard, api, flags, transport, originalApi, originalFlags, originalInvoke, buildPlan, bootPartition, decodeJournal;
+let server, Wizard, api, flags, transport, originalApi, originalFlags, originalInvoke, buildPlan, bootPartition, decodeJournal, executionPlanProblem;
 const configured = { port: "COM9", presetRoot: "C:/bundle", snapshotRoot: "C:/snapshots" };
+const liveFlags = { backup: true, restore: true, fastboot: true, root: true, verify: true, efs: true };
 const ok = value => ({ ok: true, value });
 const warning = { code: "nvPrefixVerification", target: "NV 71", message: "Only explicit bytes verified" };
 before(async () => {
@@ -15,6 +16,7 @@ before(async () => {
   ({ buildPlan } = await server.ssrLoadModule("/src/lib/domain/plan.ts"));
   ({ bootPartition } = await server.ssrLoadModule("/src/lib/data/devices.ts"));
   ({ decodeJournal } = await server.ssrLoadModule("/src/lib/domain/journal.ts"));
+  ({ executionPlanProblem } = await server.ssrLoadModule("/src/lib/domain/execution.ts"));
   originalApi = { ...api }; originalFlags = { ...flags }; originalInvoke = transport.invoke;
 });
 beforeEach(() => {
@@ -59,6 +61,74 @@ async function settled(w) {
   }
   assert.fail("EFS engine did not settle");
 }
+
+test("supported live routes require every device engine and simulation accepts all routes", () => {
+  const ids = ["efs-input", "prep", "backup", "unlock", "setup-min", "root", "efs-preflight", "efs", "verify", "volte-props", "comm-check", "unroot", "restore", "final-verify"];
+  assert.equal(executionPlanProblem(ids, liveFlags), null);
+  for (const [flag, id] of Object.entries({ backup: "backup", restore: "restore", fastboot: "unlock", root: "root", efs: "efs-input" })) {
+    assert.match(executionPlanProblem(ids, { ...liveFlags, [flag]: false }), new RegExp(id));
+  }
+  assert.equal(executionPlanProblem(ids, { ...liveFlags, verify: false }), null);
+  assert.match(executionPlanProblem(["final-verify"], { ...liveFlags, verify: false, efs: false }), /final-verify/);
+  assert.equal(executionPlanProblem(["efs-input", "efs", "verify", "final-verify"], { ...originalFlags, efs: true }), null);
+  assert.equal(executionPlanProblem(["backup"], { ...originalFlags, backup: true }), null);
+  assert.equal(executionPlanProblem([...ids, "fw-flash", "relock"], originalFlags), null);
+});
+
+test("live relock, firmware update and mixed simulation stop before any engine or manual prompt", async () => {
+  for (const [ids, currentFlags, pattern] of [
+    [["efs-input", "unlock", "efs", "relock"], liveFlags, /리락/],
+    [["fw-download", "backup", "fw-flash", "fw-verify"], liveFlags, /펌웨어 기록/],
+    [["efs-input", "unlock", "root", "efs"], { ...liveFlags, efs: false }, /efs-input/],
+    [["backup", "unlock"], { ...liveFlags, backup: false }, /backup/],
+    [["unlock", "root"], { ...liveFlags, root: false }, /root/],
+  ]) {
+    const w = wizard(ids[0]); Object.assign(flags, currentFlags);
+    w.runSteps = ids.map(id => ({ id, title: id, status: "pending", progress: 0, logs: [], manualDone: 0 }));
+    let prompts = 0, engines = 0, guards = 0;
+    w.openManual = async () => { prompts++; }; w.runEngineStep = () => { engines++; };
+    w.setGuard = on => { if (on) guards++; };
+    const selected = structuredClone(w.volteConfig.sims);
+    Wizard.prototype.begin.call(w);
+    await settled(w);
+    assert.match(w.stepError, pattern);
+    assert.equal(w.runSteps[0].status, "failed");
+    assert.ok(w.runSteps.slice(1).every(s => s.status === "pending"));
+    assert.equal(w.running, false); assert.equal(w.timer, undefined);
+    assert.equal(w.manualCurrent, null); assert.equal(prompts + engines + guards, 0);
+    assert.deepEqual(w.volteConfig.sims, selected);
+  }
+});
+
+test("resume cannot bypass live plan rejection using a completed input checkpoint", async () => {
+  const w = wizard("efs-input"); Object.assign(flags, liveFlags);
+  w.runSteps[0].status = "done";
+  w.runSteps.push(...["unlock", "relock"].map(id => ({ id, title: id, status: "pending", progress: 0, logs: [], manualDone: 0 })));
+  w.cursor = 1; w.begin = () => Wizard.prototype.begin.call(w);
+  w.resumeRun(); await settled(w);
+  assert.match(w.stepError, /리락/);
+  assert.equal(w.runSteps[0].status, "done"); assert.equal(w.runSteps[1].status, "failed");
+  assert.equal(w.running, false);
+});
+
+test("unknown model procedures stop before unlock even when a device is already rooted", async () => {
+  for (const model of ["", "SM-S918N", "XQ-UNKNOWN"]) {
+    for (const rooted of [true, false]) {
+      const w = wizard("efs-input"); Object.assign(flags, liveFlags);
+      Object.assign(w.device, { model, rooted, sims: [] });
+      w.runSteps.push({ id: "unlock", title: "unlock", status: "pending", progress: 0, logs: [], manualDone: 0 });
+      let local = 0, writes = 0;
+      api.efsConfiguration = async () => { local++; return ok(configured); };
+      api.efsValidatePresets = async () => { local++; return ok(null); };
+      api.fastbootUnlock = api.efsDiagOpen = async () => { writes++; return ok(null); };
+      w.tick(); await settled(w);
+      assert.match(w.stepError, /기종.*확인되지/);
+      assert.equal(local + writes, 0);
+      assert.equal(w.runSteps[1].status, "pending");
+      assert.equal(w.volteConfig.sims[0].carrier, "SKT");
+    }
+  }
+});
 
 test("EFS facade gates device calls while cancellation remains available", async () => {
   Object.assign(api, originalApi);
@@ -319,7 +389,7 @@ test("real EFS disables mock errors and manual skipping", async () => {
 });
 
 test("native EFS refuses simulated prerequisite engines before local or device work", async () => {
-  for (const id of ["unlock", "root", "unroot", "fw-flash"]) {
+  for (const id of ["unlock", "root", "unroot", "fw-flash", "relock"]) {
     let calls = 0;
     api.efsConfiguration = api.efsDiagOpen = api.efsUpload = async () => { calls++; return ok(configured); };
     const w = wizard("efs-input");

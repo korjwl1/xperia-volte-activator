@@ -7,6 +7,7 @@ import { mockBackupGroups } from "$lib/mock/apps";
 import { bootloaderOnly, buildPlan, stepHazard, updateTarget, type PlanOptions } from "$lib/domain/plan";
 import { firmwareUpdateProblems } from "$lib/domain/verify";
 import { SIMULATED_RUN, REAL_STEPS } from "$lib/data/runMode";
+import { executionPlanProblem } from "$lib/domain/execution";
 import { EFS_PRESET_MODE, EFS_PRESET_VERSION, efsPreset } from "$lib/data/efsPresets";
 import type { BackupProgress, BackupSummary, EfsConfiguration } from "$lib/types";
 import { AsyncQueue } from "$lib/domain/asyncQueue";
@@ -773,6 +774,8 @@ export class Wizard {
 
   begin() {
     if (this.running || this.usbError || this.stepError) return;
+    const problem = executionPlanProblem(this.runSteps.map(s => s.id), REAL_STEPS);
+    if (problem) return this.failStep(problem);
     this.running = true;
     this.stopInfo = null;
     this.setGuard(true);
@@ -1892,15 +1895,8 @@ export class Wizard {
 
   private async runRealEfsInputs(cur: RunStep) {
     const gen = this.runGen;
-    if (this.runSteps.some(s => ["root", "unroot"].includes(s.id)) && (!REAL_STEPS.root || !REAL_STEPS.fastboot)) {
-      return this.failStep("실전 EFS 계획의 루팅·언루팅에는 실전 root·fastboot 엔진이 모두 필요합니다");
-    }
-    if (this.runSteps.some(s => s.id === "unlock") && !REAL_STEPS.fastboot) {
-      return this.failStep("실전 EFS 계획의 언락을 시뮬레이션으로 진행할 수 없습니다");
-    }
-    if (this.runSteps.some(s => s.id === "fw-flash") && !this.hasRealEngine("fw-flash")) {
-      return this.failStep("펌웨어 기록이 실전으로 구현되지 않아 업데이트와 실전 EFS를 함께 진행할 수 없습니다");
-    }
+    const problem = executionPlanProblem(this.runSteps.map(s => s.id), REAL_STEPS);
+    if (problem) return this.failStep(problem);
     if (!await this.validatedEfsInputs(gen)) return;
     const tool = await api.efsToolCheck();
     if (gen !== this.runGen) return;

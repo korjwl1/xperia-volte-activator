@@ -53,6 +53,9 @@ export function modelSupport(model: string): ModelSupport {
 /** SIM detection never changes the user's targets. These restrictions concern missing model procedures only. */
 export function patchProcedureProblem(model: string, carriers: readonly string[]): string | null {
   if (!carriers.length) return null;
+  if (bootPartition(model) === null) {
+    return "이 기종의 부트 파티션·패치 절차가 확인되지 않아 자동 패치를 지원하지 않습니다";
+  }
   if (["XQ-AT", "XQ-AS"].some(prefix => model.startsWith(prefix))) {
     return "Mark II에 필요한 PDC 고정 작업을 이 앱에서 수행하지 못해 자동 패치를 지원하지 않습니다";
   }
