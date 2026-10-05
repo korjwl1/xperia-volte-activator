@@ -3,6 +3,7 @@ use std::{path::Path, time::Duration};
 
 use crate::{
     Result, RustADBError,
+    error::UNAUTHORIZED_MARKER,
     message_devices::{
         adb_message_transport::ADBMessageTransport,
         adb_session::ADBSession,
@@ -136,9 +137,26 @@ impl<T: ADBMessageTransport> ADBMessageDevice<T> {
 
         self.transport.write_message(message)?;
 
+        // [xvolte patch] 공개 키를 보낸 뒤 응답이 없으면 폰에 "USB 디버깅 허용" 창이 떠 있는 상태다.
+        // 일반 시간 초과와 구분할 수 있게 고정 문구(UNAUTHORIZED_MARKER)로 돌려준다.
         let response = self
             .transport
             .read_message_with_timeout(Duration::from_secs(10))
+            .map_err(|e| match e {
+                #[cfg(feature = "usb")]
+                RustADBError::UsbError(rusb::Error::Timeout) => {
+                    RustADBError::ADBRequestFailed(UNAUTHORIZED_MARKER.into())
+                }
+                RustADBError::IOError(io)
+                    if matches!(
+                        io.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    RustADBError::ADBRequestFailed(UNAUTHORIZED_MARKER.into())
+                }
+                other => other,
+            })
             .and_then(|message| {
                 message.assert_command(MessageCommand::Cnxn)?;
                 Ok(message)

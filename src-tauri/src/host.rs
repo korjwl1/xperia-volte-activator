@@ -1,5 +1,4 @@
-//! PC(호스트) 측 읽기 전용 질의.
-//! 규칙: PC에 영향을 주는(쓰기·설치·삭제) 명령은 이 모듈에 작성 금지.
+//! PC(호스트) 측 읽기 전용 질의(드라이브 여유 공간). PC에 쓰는 작업은 각 기능 모듈(storage·journal·backup)에 있다.
 
 use std::path::Path;
 
@@ -12,10 +11,16 @@ fn disk_free_work(path: &str) -> Result<u64, String> {
     fs2::available_space(p).map_err(|e| format!("여유 공간 조회 실패: {e}"))
 }
 
-/// 네트워크 드라이브·잠든 외장 디스크는 수 초 걸릴 수 있으므로 메인 스레드 밖에서 조회한다
+/// 네트워크 드라이브·잠든 외장 디스크는 수 초 걸리거나 멈출 수 있으므로 메인 스레드 밖에서 시간 제한을 두고 조회한다
 #[tauri::command]
 pub async fn disk_free(path: String) -> Result<u64, String> {
-    crate::tasks::blocking("여유 공간 조회", move || disk_free_work(&path)).await
+    crate::tasks::timed(
+        "여유 공간 조회",
+        "여유 공간 조회 시간 초과 — 드라이브 연결 상태를 확인해 주세요",
+        std::time::Duration::from_secs(15),
+        move || disk_free_work(&path),
+    )
+    .await
 }
 
 #[cfg(test)]
