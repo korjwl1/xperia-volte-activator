@@ -101,3 +101,49 @@ fn denied_write_and_malformed_input_exit_before_creating_a_session_or_probing_a_
         assert!(error["error"].as_str().unwrap().contains("Cargo feature"));
     }
 }
+
+#[test]
+fn wiping_steps_need_backup_proof_before_any_session_or_device_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let request = dir.path().join("request.json");
+    let state = dir.path().join("session");
+    std::fs::write(
+        &request,
+        json!({"command":"fastboot_unlock","args":{"code":"0x0123456789ABCDEF","confirm":true,"expectedSerial":"sha256:bad"}}).to_string(),
+    )
+    .unwrap();
+    let run = |extra: &[&str]| {
+        let mut args = vec![
+            "run",
+            "--request",
+            request.to_str().unwrap(),
+            "--data-dir",
+            state.to_str().unwrap(),
+            "--allow-device-write",
+        ];
+        args.extend_from_slice(extra);
+        cli(&args)
+    };
+    if cfg!(feature = "fastboot-write") {
+        // 백업 증명도, 백업 생략 명시도 없으면 기기·세션에 닿기 전에 거부
+        let output = run(&[]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(!state.exists());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert!(error["error"].as_str().unwrap().contains("--backup-dir"));
+        // 완결되지 않은(없는) 백업 폴더도 거부
+        let missing = dir.path().join("no-backup");
+        let output = run(&["--backup-dir", missing.to_str().unwrap()]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(!state.exists());
+    }
+    // 초기화하지 않는 단계에는 백업 옵션을 받지 않는다
+    std::fs::write(
+        &request,
+        json!({"command":"env_check","args":{}}).to_string(),
+    )
+    .unwrap();
+    let output = run(&["--ack-no-backup"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!state.exists());
+}

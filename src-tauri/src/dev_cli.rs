@@ -393,7 +393,12 @@ fn unlock_secret(value: &str) -> bool {
 }
 
 // An explicit hashed selector lets AI select a device without printing/saving its raw serial.
-async fn resolve_targets(value: &mut Value, events: Events) -> Result<(), String> {
+/// expectedSerial(fastboot)은 해석 결과를 마지막 device_list의 ADB serial과 대조한다(앱과 같은 기준, check_gui_parity).
+async fn resolve_targets(
+    value: &mut Value,
+    events: Events,
+    adb_keys: &[String],
+) -> Result<(), String> {
     let args = value
         .get_mut("args")
         .and_then(Value::as_object_mut)
@@ -411,6 +416,9 @@ async fn resolve_targets(value: &mut Value, events: Events) -> Result<(), String
         }
         let token = target.as_str().ok_or("serial은 문자열이어야 합니다")?;
         let Some(key) = token.strip_prefix("sha256:") else {
+            if name == "expectedSerial" {
+                check_gui_parity(adb_keys, token)?;
+            }
             continue;
         };
         if key.len() != 64 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -418,10 +426,14 @@ async fn resolve_targets(value: &mut Value, events: Events) -> Result<(), String
         }
         let serial = if name == "expectedSerial" {
             let vars = crate::fastboot::fastboot_getvar_with_events(events.clone()).await?;
-            vars.get("serialno")
+            let serialno = vars
+                .get("serialno")
                 .filter(|s| serial_key(s).eq_ignore_ascii_case(key))
                 .cloned()
-                .ok_or("선택한 fastboot 기기와 serialKey가 다릅니다")?
+                .ok_or("선택한 fastboot 기기와 serialKey가 다릅니다")?;
+            // fastboot 자신의 serialno로 해석하면 엔진의 기기 대조가 항상 통과한다 — 앱 기준(ADB serial)과도 같아야 한다
+            check_gui_parity(adb_keys, &serialno)?;
+            serialno
         } else {
             let devices = serde_json::to_value(crate::adb::device_list().await?)
                 .map_err(|e| e.to_string())?;
@@ -486,18 +498,171 @@ fn build_info() -> Value {
         "features":{"devCli":true,"fastbootWrite":cfg!(feature="fastboot-write"),"rootWrite":cfg!(feature="root-write"),"efsWrite":cfg!(feature="efs-write")}})
 }
 
+// ── 실기기 세션 안전장치 — GUI 흐름에만 있던 선행 조건을 CLI에도 같은 기준으로 요구한다 ──
+
+/// 폰 데이터가 초기화되는 단계(언락·리락). GUI는 enforceBackupGate로 막는다.
+const WIPING_COMMANDS: &[&str] = &["fastboot_unlock", "fastboot_lock"];
+
+/// 기기에 연결하지 않는 명령 — GUI 앱이 떠 있어도 실행할 수 있다
+fn pc_only(command: &str) -> bool {
+    matches!(
+        command,
+        "env_check"
+            | "efs_tool_check"
+            | "firmware_dir_check"
+            | "magisk_prepare"
+            | "relock_gate_check"
+            | "efs_validate_presets"
+            | "backup_manifest_check"
+    )
+}
+
+/// 초기화 단계의 백업 선행 조건 — 완결된 백업(backup_manifest_check의 complete) 또는 백업 없이 진행한다는 명시.
+/// GUI의 enforceBackupGate와 같은 판정(같은 엔진의 매니페스트 재검사)을 쓴다.
+async fn backup_gate(
+    command: &str,
+    backup_dir: Option<&Path>,
+    ack_no_backup: bool,
+) -> Result<Option<Value>, String> {
+    if !WIPING_COMMANDS.contains(&command) {
+        if backup_dir.is_some() || ack_no_backup {
+            return Err(
+                "--backup-dir/--ack-no-backup은 초기화 단계(fastboot_unlock·fastboot_lock)에만 씁니다".into(),
+            );
+        }
+        return Ok(None);
+    }
+    match (backup_dir, ack_no_backup) {
+        (Some(_), true) => Err("--backup-dir와 --ack-no-backup 중 하나만 지정하세요".into()),
+        (None, false) => Err("폰 데이터가 초기화되는 단계입니다 — 완결된 백업 폴더를 --backup-dir로 지정하거나, 백업 없이 진행하려면 --ack-no-backup을 명시하세요".into()),
+        (None, true) => Ok(Some(json!({"backup": "skipped-by-operator"}))),
+        (Some(dir), false) => {
+            if !dir.is_absolute() {
+                return Err("--backup-dir는 절대 경로여야 합니다".into());
+            }
+            let summary = crate::backup::backup_manifest_check(dir.to_string_lossy().into_owned())
+                .await?
+                .ok_or("--backup-dir 백업 폴더가 없습니다")?;
+            if !summary.complete {
+                let reason = if summary.errors.is_empty() {
+                    "완결 아님".to_string()
+                } else {
+                    summary.errors.join(" / ")
+                };
+                return Err(format!("백업이 완결되지 않아 초기화 단계를 실행하지 않습니다 — {reason}"));
+            }
+            Ok(Some(json!({"backup": "complete", "files": summary.files, "bytes": summary.bytes})))
+        }
+    }
+}
+
+/// 마지막 device_list가 본 ADB 기기들의 serialKey — fastboot 기대값을 GUI와 같은 기준으로 대조하는 데 쓴다
+const SESSION_FILE: &str = "dev-session.json";
+
+fn write_session(data_dir: &Path, devices: &Value) -> Result<(), String> {
+    let keys: Vec<String> = devices
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|d| d.get("state").and_then(Value::as_str) == Some("device"))
+        .filter_map(|d| d.get("serial").and_then(Value::as_str))
+        .map(serial_key)
+        .collect();
+    write_record(
+        &data_dir.join(SESSION_FILE),
+        &json!({"version": 1, "at": now(), "adbSerialKeys": keys}),
+    )
+}
+
+fn read_session(data_dir: &Path) -> Vec<String> {
+    crate::storage::read_bounded(&data_dir.join(SESSION_FILE), MAX_REQUEST)
+        .ok()
+        .flatten()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|v| v.get("adbSerialKeys").cloned())
+        .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+        .unwrap_or_default()
+}
+
+/// GUI는 ADB 기기의 serial을 fastboot expectedSerial로 넘긴다. CLI도 같은 값이어야 앱과 결과가 같다.
+fn check_gui_parity(adb_keys: &[String], expected_serial: &str) -> Result<(), String> {
+    if adb_keys.is_empty() {
+        return Err("먼저 같은 --data-dir로 device_list를 실행하세요 — fastboot 기대값을 앱과 같은 기준(ADB serial)으로 대조합니다".into());
+    }
+    let key = serial_key(expected_serial);
+    if !adb_keys.iter().any(|k| k.eq_ignore_ascii_case(&key)) {
+        return Err("fastboot 기대값이 마지막 device_list의 ADB serial과 다릅니다 — 앱은 ADB serial을 기대값으로 넘기므로 이 단계는 앱에서 거부됩니다(앱과 CLI 결과 불일치)".into());
+    }
+    Ok(())
+}
+
+/// GUI 앱이 같은 PC에서 실행 중인지 — USB 직접 연결은 프로세스마다 인터페이스를 점유해 함께 쓸 수 없다.
+/// 확인할 수 없으면 false(막지 않음).
+fn gui_running() -> bool {
+    #[cfg(windows)]
+    {
+        process_running("xperia-volte-activator.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+#[cfg(windows)]
+fn process_running(exe: &str) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    // SAFETY: 스냅숏 핸들은 이 함수에서만 쓰고 닫는다. entry는 dwSize를 채운 0 초기화 구조체다.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return false;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut found = false;
+        let mut more = Process32FirstW(snapshot, &mut entry) != 0;
+        while more {
+            let len = entry
+                .szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(entry.szExeFile.len());
+            if String::from_utf16_lossy(&entry.szExeFile[..len]).eq_ignore_ascii_case(exe) {
+                found = true;
+                break;
+            }
+            more = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+        found
+    }
+}
+
 async fn run(
     mut value: Value,
     data_dir: &Path,
     step: &str,
     allow_write: bool,
+    backup_dir: Option<&Path>,
+    ack_no_backup: bool,
 ) -> Result<bool, String> {
     let req = decode(value.clone())?;
     authorize(&req, allow_write)?; // Before any hardware lookup, even hashed selectors.
     let command = req.policy().0;
+    if !pc_only(command) && gui_running() {
+        return Err("GUI 앱(xperia-volte-activator)이 실행 중입니다 — USB 직접 연결이 겹치므로 앱을 닫고 다시 실행하세요".into());
+    }
+    // 기기에 닿기 전에 확인한다(초기화 단계의 백업 선행 조건)
+    let backup = backup_gate(command, backup_dir, ack_no_backup).await?;
     std::fs::create_dir_all(data_dir).map_err(|e| e.to_string())?;
     let data_dir = data_dir.canonicalize().map_err(|e| e.to_string())?;
     crate::app_paths::init(data_dir.clone());
+    let adb_keys = read_session(&data_dir);
     let runs = data_dir.join("dev-runs");
     std::fs::create_dir_all(&runs).map_err(|e| e.to_string())?;
     let dir = runs.join(format!(
@@ -508,6 +673,9 @@ async fn run(
     std::fs::create_dir(&dir).map_err(|e| format!("실행 폴더 생성 실패: {e}"))?;
     let record_path = dir.join("record.json");
     let mut record = json!({"version":1,"command":command,"step":step,"status":"running","startedAt":now(),"build":build_info(),"recordPath":record_path});
+    if let Some(gate) = backup {
+        record["backupGate"] = gate;
+    }
     write_record(&record_path, &record)?;
     let mut redactor = Redactor::default();
     redactor.learn(&value);
@@ -528,7 +696,7 @@ async fn run(
     });
     let result = async {
         let _power = crate::guard::CliPowerGuard::acquire().map_err(|e| json!(e))?;
-        resolve_targets(&mut value, events.clone())
+        resolve_targets(&mut value, events.clone(), &adb_keys)
             .await
             .map_err(|e| json!(e))?;
         log.lock()
@@ -540,10 +708,19 @@ async fn run(
     }
     .await;
     let mut log = log.lock().map_err(|_| "로그 잠금 실패")?;
+    // device_list가 본 ADB 기기를 기록 — 이후 fastboot 기대값을 앱 기준과 대조한다(원본 시리얼은 남기지 않음)
+    let session_error = match (&result, command) {
+        (Ok(devices), "device_list") => write_session(&data_dir, devices).err(),
+        _ => None,
+    };
     let (mut ok, result) = match result {
         Ok(value) => (outcome_ok(command, &value), json!({"value":value})),
         Err(error) => (false, json!({"error":error})),
     };
+    if let Some(error) = session_error {
+        ok = false;
+        record["sessionError"] = json!(format!("기기 세션 기록 실패: {error}"));
+    }
     log.redactor.learn(&result);
     record["finishedAt"] = json!(now());
     record["result"] = log.redactor.clean(&result);
@@ -627,6 +804,10 @@ struct Options {
     data_dir: Option<PathBuf>,
     step: String,
     allow_write: bool,
+    /// 초기화 단계(언락·리락)의 완결 백업 폴더
+    backup_dir: Option<PathBuf>,
+    /// 초기화 단계를 백업 없이 진행한다는 명시
+    ack_no_backup: bool,
 }
 fn options(args: impl Iterator<Item = OsString>) -> Result<Options, String> {
     let mut args = args;
@@ -641,6 +822,8 @@ fn options(args: impl Iterator<Item = OsString>) -> Result<Options, String> {
         data_dir: None,
         step: String::new(),
         allow_write: false,
+        backup_dir: None,
+        ack_no_backup: false,
     };
     let mut seen = std::collections::HashSet::new();
     while let Some(arg) = args.next() {
@@ -665,6 +848,10 @@ fn options(args: impl Iterator<Item = OsString>) -> Result<Options, String> {
                     .map_err(|_| "step은 UTF-8이어야 합니다")?
             }
             "--allow-device-write" => opts.allow_write = true,
+            "--backup-dir" => {
+                opts.backup_dir = Some(args.next().ok_or("--backup-dir 값이 필요합니다")?.into())
+            }
+            "--ack-no-backup" => opts.ack_no_backup = true,
             _ => return Err("알 수 없는 옵션입니다. help를 확인하세요".into()),
         }
     }
@@ -677,7 +864,7 @@ pub fn main_entry(args: impl Iterator<Item = OsString>) -> i32 {
         let opts = options(args)?;
         match opts.action.as_str() {
             "help" | "--help" | "-h" => {
-                println!("xva-dev commands\nxva-dev validate --request <JSON file|->\nxva-dev run --request <JSON file|-> --data-dir <absolute folder> [--step <label>] [--allow-device-write]\nxva-dev history --data-dir <absolute folder>\nOne invocation executes ONE engine command. Rebuild and run only the next/repaired command. Never auto-replay writes. Output: JSON Lines; exit 0 success, 1 engine/verification failure, 2 input/recording failure.");
+                println!("xva-dev commands\nxva-dev validate --request <JSON file|->\nxva-dev run --request <JSON file|-> --data-dir <absolute folder> [--step <label>] [--allow-device-write] [--backup-dir <complete backup folder> | --ack-no-backup]\nxva-dev history --data-dir <absolute folder>\nOne invocation executes ONE engine command. Rebuild and run only the next/repaired command. Never auto-replay writes. fastboot_unlock/fastboot_lock wipe the phone and need --backup-dir (complete) or --ack-no-backup. fastboot expectedSerial must match the ADB serial recorded by device_list in the same --data-dir (same rule as the app). Close the GUI app before device commands. Output: JSON Lines; exit 0 success, 1 engine/verification failure, 2 input/recording failure.");
                 Ok(true)
             }
             "commands" => {
@@ -707,7 +894,14 @@ pub fn main_entry(args: impl Iterator<Item = OsString>) -> i32 {
                 } else {
                     let value =
                         read_request(opts.request.as_deref().ok_or("--request가 필요합니다")?)?;
-                    tauri::async_runtime::block_on(run(value, &dir, &opts.step, opts.allow_write))
+                    tauri::async_runtime::block_on(run(
+                        value,
+                        &dir,
+                        &opts.step,
+                        opts.allow_write,
+                        opts.backup_dir.as_deref(),
+                        opts.ack_no_backup,
+                    ))
                 }
             }
             _ => Err("알 수 없는 명령입니다. help를 확인하세요".into()),
@@ -730,6 +924,59 @@ pub fn main_entry(args: impl Iterator<Item = OsString>) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fastboot_target_must_match_the_adb_serial_the_app_would_send() {
+        let dir = tempfile::tempdir().unwrap();
+        // device_list 전에는 대조할 기준이 없다
+        assert!(check_gui_parity(&read_session(dir.path()), "SERIAL001").is_err());
+        write_session(
+            dir.path(),
+            &json!([{"state":"device","serial":"SERIAL001"},{"state":"unauthorized","serial":"usb-0"}]),
+        )
+        .unwrap();
+        let keys = read_session(dir.path());
+        assert_eq!(keys, vec![serial_key("SERIAL001")]);
+        assert!(check_gui_parity(&keys, "SERIAL001").is_ok());
+        // fastboot serialno가 ADB serial과 다르면 앱에서는 거부될 단계 — CLI도 거부
+        assert!(check_gui_parity(&keys, "FASTBOOT-ONLY").is_err());
+        assert!(check_gui_parity(&keys, "usb-0").is_err());
+        // 원본 시리얼은 기록하지 않는다
+        let raw = std::fs::read_to_string(dir.path().join(SESSION_FILE)).unwrap();
+        assert!(!raw.contains("SERIAL001"));
+    }
+
+    #[test]
+    fn backup_gate_applies_only_to_wiping_steps() {
+        let gate = |command: &str, dir: Option<&Path>, ack: bool| {
+            tauri::async_runtime::block_on(backup_gate(command, dir, ack))
+        };
+        assert!(gate("fastboot_unlock", None, false).is_err());
+        assert!(gate("fastboot_lock", None, false).is_err());
+        assert_eq!(
+            gate("fastboot_unlock", None, true).unwrap().unwrap()["backup"],
+            "skipped-by-operator"
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(gate("fastboot_unlock", Some(tmp.path()), true).is_err());
+        assert!(gate("fastboot_unlock", Some(Path::new("relative")), false).is_err());
+        // manifest 없는 폴더는 완결 백업이 아니다
+        assert!(gate("fastboot_unlock", Some(tmp.path()), false).is_err());
+        assert!(gate("fastboot_flash", None, false).unwrap().is_none());
+        assert!(gate("fastboot_flash", None, true).is_err());
+        assert!(
+            pc_only("relock_gate_check") && !pc_only("device_list") && !pc_only("fastboot_unlock")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn running_process_detection_sees_this_test_binary() {
+        let me = std::env::current_exe().unwrap();
+        let name = me.file_name().unwrap().to_str().unwrap();
+        assert!(process_running(name));
+        assert!(!process_running("definitely-not-running-xva.exe"));
+    }
+
     #[test]
     fn catalog_examples_use_the_same_schema_as_dispatch() {
         for spec in commands().as_array().unwrap() {

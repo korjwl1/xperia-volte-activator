@@ -10,6 +10,14 @@ Tauri 명령은 기존 알고리즘을 `*_with_events`에 위임하고 CLI도 �
 
 CLI는 개발자가 명시한 엔진 명령 하나를 실행하는 도구다. Svelte wizard의 전체 계획 생성·수동 확인·재연결 대기·백업 선행 게이트를 실행하지 않는다. GUI 단계 전환은 마지막에 앱에서 별도 검토한다. 미구현 전체 펌웨어 다운로드·기록 명령은 CLI에도 없다. 임의 셸 명령 실행은 제공하지 않는다.
 
+## 실기기 세션 규칙 (먼저 읽기)
+
+- **GUI 앱을 닫고 쓴다.** USB 직접 연결은 프로세스마다 인터페이스를 점유한다. 기기에 닿는 명령은 GUI(`xperia-volte-activator.exe`)가 실행 중이면 시작 전에 거부한다(PC 전용 명령은 허용).
+- **한 흐름 안에서 CLI와 GUI를 섞지 않는다.** CLI는 `--data-dir`를 앱 데이터 폴더로 쓰므로 CLI로 한 플래시 이력·출처 기록·Magisk 캐시·진행 기록을 GUI가 보지 못한다(예: CLI로 기록한 뒤 GUI 리락 게이트는 이력이 없어 거부).
+- **종료 코드 0·`done`은 그 명령이 오류 없이 끝났다는 뜻일 뿐이다.** 백업 `complete`, SMS `ready`, 검사 결과의 `ok`·`false` 같은 의미 필드를 반드시 직접 확인한다.
+- **초기화 단계(`fastboot_unlock`·`fastboot_lock`)는 백업 증명이 필요하다.** `--backup-dir <완결 백업 폴더>`(앱과 같은 매니페스트 재검사로 `complete` 확인) 또는 백업 없이 진행한다는 `--ack-no-backup` 중 하나를 지정해야 하며, 결과는 기록의 `backupGate`에 남는다. 앱의 enforceBackupGate와 같은 선행 조건이다.
+- **fastboot 기대값은 앱과 같은 기준으로 대조한다.** 앱은 ADB 기기의 serial을 fastboot `expectedSerial`로 넘긴다. CLI도 같은 `--data-dir`에서 마지막 `device_list`가 본 ADB serial(해시만 `dev-session.json`에 저장)과 일치해야 실행한다. 다르면 "앱에서도 거부될 단계"로 실패한다 — Android·fastboot 식별값이 다른 기종이면 앱 수정이 필요하다는 신호다.
+
 ## 빌드
 
 저장소 루트, MSVC 개발 셸에서 실행한다. 일반 PowerShell에서는 Visual Studio Build Tools의 `vcvars64.bat` 환경을 먼저 적용한다.
@@ -59,9 +67,9 @@ $sessionDir = Join-Path $env:LOCALAPPDATA 'xva-device-test\xq-dq44'
 {"command":"root_check","args":{"serial":"sha256:<device_list의 serialKey>"}}
 ```
 
-fastboot는 `fastboot_getvar` 결과의 `serialKey`를 확인한다. Android/fastboot의 식별값이 실제로 같은지도 내일 검토한다. EFS는 항상 작업자가 직접 확인한 `COM<number>`를 지정한다. CLI의 파일 경로/COM/선택한 SIM 프리셋은 작업자가 제공하며 자동 추정하지 않는다.
+fastboot 명령의 `expectedSerial`은 `device_list`의 `serialKey`(ADB serial)를 그대로 쓴다. CLI는 이를 연결된 fastboot 기기의 serialno로 해석하고, 그 값이 마지막 `device_list`의 ADB serial과 같은지 확인한다(위 세션 규칙). 먼저 같은 `--data-dir`로 `device_list`를 실행해야 한다. EFS는 항상 작업자가 직접 확인한 `COM<number>`를 지정한다. CLI의 파일 경로/COM/선택한 SIM 프리셋은 작업자가 제공하며 자동 추정하지 않는다.
 
-기기 변경 명령에는 실행마다 `--allow-device-write`가 필요하다. fastboot는 입력의 기존 `confirm: true`도 그대로 요구한다. EFS의 초기화·읽기 명령도 DIAG 세션 설정을 수행하므로 변경 옵션을 요구한다. 쓰기 feature가 빠졌거나 옵션이 없으면 해시 selector 조회도 시작하지 않는다. 문자 준비·수집·복구도 기기 변경으로 분류한다. 백업은 폰에서 읽는 기존 엔진을 그대로 쓰며 PC에는 파일을 저장한다.
+기기 변경 명령에는 실행마다 `--allow-device-write`가 필요하다. 폰 데이터가 초기화되는 `fastboot_unlock`·`fastboot_lock`은 추가로 `--backup-dir` 또는 `--ack-no-backup`이 필요하다(다른 명령에 주면 오류). fastboot는 입력의 기존 `confirm: true`도 그대로 요구한다. EFS의 초기화·읽기 명령도 DIAG 세션 설정을 수행하므로 변경 옵션을 요구한다. 쓰기 feature가 빠졌거나 옵션이 없으면 해시 selector 조회도 시작하지 않는다. 문자 준비·수집·복구도 기기 변경으로 분류한다. 백업은 폰에서 읽는 기존 엔진을 그대로 쓰며 PC에는 파일을 저장한다.
 
 언락 코드가 든 요청은 공유·커밋하지 않는다. `--request -`로 stdin을 사용할 수도 있다. 입력 전체·원본 시리얼·언락 코드·IMEI는 실행 기록에 저장하지 않는다. 엔진이 반환하는 값·오류·진행 로그는 마스킹 후 저장한다. 요청 파일의 UTF-8 BOM도 지원한다.
 
@@ -89,7 +97,7 @@ fastboot는 `fastboot_getvar` 결과의 `serialKey`를 확인한다. Android/fas
 
 ## 오프라인 검증
 
-2026-10-05 결과: Rust 기본 빌드 216 passed / 8 ignored, `dev-cli` 및 모든 feature 빌드 각 223 passed / 8 ignored, CLI 바이너리 통합 테스트 각 2 passed. `cargo clippy --all-targets --all-features -- -D warnings`, `cargo fmt --check`, `git diff --check` 통과. 프론트 101 passed, Svelte check 0 errors / 0 warnings, 정적 프로덕션 빌드 통과. 기기 질의/USB/COM/DIAG/쓰기는 실행하지 않았다.
+2026-10-05 보강 후: Rust 기본 빌드 216 passed / 8 ignored, `dev-cli`·`dev-cli,fastboot-write`·모든 feature 빌드 각 226 passed / 8 ignored, CLI 바이너리 통합 테스트 각 3 passed(초기화 단계 백업 증명 거부 포함). 백업 게이트·앱 기준 serial 대조·GUI 실행 감지 단위 테스트 추가. `cargo clippy --all-targets --all-features -- -D warnings`, `cargo fmt --check`, `git diff --check` 통과. 프론트 101 passed, Svelte check 0 errors / 0 warnings, 정적 프로덕션 빌드 통과. 기기 질의/USB/COM/DIAG/쓰기는 실행하지 않았다.
 
 처음 검토에 쓸 debug CLI 사본을 `src-tauri/target/dev-cli/xva-dev.exe`(쓰기 feature 포함)와 `xva-dev-readonly.exe`(dev-cli만)에 준비했다. 사본은 현재 코드의 스냅샷이므로 **코드를 수정한 뒤에는 위의 cargo run/build로 새로 컴파일한 실행 파일을 사용한다.** 일반 GUI 설치 파일의 갱신과 CLI 빌드는 별도다.
 
