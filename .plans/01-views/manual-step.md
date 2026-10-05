@@ -45,11 +45,12 @@ RunProgress 실행 중 폰 측 조작이 필요한 지점(§12)에서 모달로 
   | usb-debug | 같은 기기가 adb device 상태 |
   | mode-wait / flash-mode | usb_modes에 fastboot / flashmode |
   | su-grant | root_check (su -c id = uid=0) |
+  | ims-precheck | 언루팅 전 통신 확인. [통신 확인 생략하고 계속]로 진행할 수 있고, 별도의 리락 검증 조건은 유지 |
   | ims-check | 대상 슬롯 IMS 등록과 실제 통화 확인을 구분. 통화 체크는 선택 사항. [통신 확인 없이 마무리]는 처음부터 사용 가능하며 SIM 없음·등록 미확인으로 파일 기록 결과를 실패 처리하지 않음 |
   | unlock-code | 형식(16자리 16진수)만 — 실제 백엔드는 fastboot가 거부하면 그 단계에서 멈추고 다시 입력받음. 목 모드(REAL_STEPS.fastboot 꺼짐)에서는 빈 입력란에 예시값 0x1234567890ABCDEF를 채운다(입력한 값은 덮어쓰지 않음) |
   | firmware(직접 지정) | firmware_dir_check: SIN 후보 하나와 같은 폴더 update.xml 지문 필수, raw IMG를 캐시에 추출. 실제 기록 전에 boot_image_check로 현재 기기 펌웨어 지문 대조 |
   | backup-notice | 동의 체크(확인 대상 아님) |
-- 자동 감지(watcher)는 그대로 — 감지되면 자동 진행
+- 자동 감지(watcher)는 감지되면 자동 진행하되, 최종 ims-check는 사용자 마무리 버튼으로 진행한다.
 - 목업 실행(src/lib/data/runMode.ts SIMULATED_RUN = true)에서만 "(목업) 건너뛰기" 표시 — 폰이 실제로 재부팅되지 않아 모드·루트 확인이 통과할 수 없기 때문. 실전 백엔드 연결 시 false
 - 실제 백엔드의 각 단계는 명령을 보내기 전에 전제 조건을 다시 확인 (예: 리락 전 fastboot 연결·순정 부트 이미지)
 

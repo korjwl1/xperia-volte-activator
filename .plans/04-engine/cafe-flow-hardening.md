@@ -20,4 +20,9 @@ Evidence:
 - https://cafe.naver.com/x1smart/616394 — SIM profile reload and fixed patch distinction.
 - https://developer.android.com/reference/android/telephony/ims/RegistrationManager — states 0/1/2 and transport type are separate.
 
-Offline validation is recorded below after execution. No physical-device tests. Cargo writes and REAL_STEPS remain disabled by default.
+Offline validation, including integration with main at e3102a5:
+
+- Frontend: 83 tests passed; svelte-check reported 0 errors and 0 warnings; Vite production build passed.
+- Rust: 206 tests passed and 8 intentionally ignored in both default and all-feature builds.
+- Strict Clippy passed for all targets and features; git diff --check passed.
+- No physical-device tests were run. Cargo writes and REAL_STEPS remain disabled by default. The packaged installer was not rebuilt.
