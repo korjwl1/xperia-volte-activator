@@ -31,11 +31,9 @@ fn save_work(key: &str, data: &str) -> Result<(), String> {
         return Err("진행 기록이 너무 큽니다".into());
     }
     let path = path_for(key, "")?;
-    std::fs::create_dir_all(path.parent().expect("journal 폴더"))
-        .map_err(|e| format!("기록 폴더 생성 실패: {e}"))?;
-    // 쓰는 도중 꺼져도 이전 기록이 깨지지 않도록 임시 파일에 쓴 뒤 교체
     serde_json::from_str::<serde_json::Value>(data)
         .map_err(|e| format!("진행 기록 JSON 오류: {e}"))?;
+    // 쓰는 도중 꺼져도 이전 기록이 깨지지 않도록 임시 파일에 쓴 뒤 교체(폴더도 atomic_write가 만든다)
     crate::storage::atomic_write(&path, data.as_bytes())
 }
 
@@ -59,7 +57,7 @@ fn archive_work(key: &str, tag: &str) -> Result<(), String> {
         return Ok(());
     }
     let to = path_for(key, &format!(".{tag}"))?;
-    let _ = std::fs::remove_file(&to);
+    // Windows의 std rename은 MOVEFILE_REPLACE_EXISTING — 이전 보관본을 지우지 않고 바로 교체한다
     std::fs::rename(&from, &to).map_err(|e| format!("진행 기록 보관 실패: {e}"))
 }
 
@@ -95,6 +93,17 @@ mod tests {
         assert!(load_file(&file).is_err());
         std::fs::write(&file, vec![b' '; MAX_JOURNAL_BYTES + 1]).unwrap();
         assert!(load_file(&file).is_err());
+    }
+
+    #[test]
+    fn archive_rename_replaces_an_earlier_archive() {
+        // archive_work는 이전 보관본을 지우지 않고 rename으로 바로 교체한다(Windows: MOVEFILE_REPLACE_EXISTING)
+        let dir = tempfile::tempdir().unwrap();
+        let (from, to) = (dir.path().join("k.json"), dir.path().join("k.done.json"));
+        std::fs::write(&to, b"old").unwrap();
+        std::fs::write(&from, b"new").unwrap();
+        std::fs::rename(&from, &to).unwrap();
+        assert_eq!(std::fs::read(&to).unwrap(), b"new");
     }
 
     #[test]
