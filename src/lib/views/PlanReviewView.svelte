@@ -378,6 +378,13 @@
           {procedureProblem}
         </div>
       {/if}
+      {#if wizard.workflow.support.notes.length > 0}
+        <div class="shrink-0 border-t bg-warning-container/40 px-4 py-3 space-y-1 text-[11px] leading-relaxed text-muted-foreground">
+          {#each wizard.workflow.support.notes as note}
+            <p>{note}</p>
+          {/each}
+        </div>
+      {/if}
       {#if simProblems.length > 0}
         <div class="shrink-0 border-t bg-warning-container/40 px-4 py-3 space-y-1">
           <div class="flex items-center gap-1.5 text-[12px] font-semibold text-warning">
@@ -385,7 +392,7 @@
           </div>
           <p class="text-[11px] leading-relaxed text-muted-foreground">
             SIM 유무와 관계없이 선택한 통신사·슬롯으로 기록합니다. SIM이 없어도 파일 기록 검증은 가능하지만 통신은 미확인으로 남습니다. 나중에 SIM을 넣거나 바꾸면 프로파일이 다시 적용되어 재패치가 필요할 수 있습니다.
-            {wizard.opts.relock ? "통신 확인을 생략해도 리락 자체의 순정 부트 체인 검증은 생략되지 않습니다." : ""}
+            {wizard.opts.relock ? "통신 확인을 생략해도 리락 전 순정 이미지·양 슬롯 복원 확인은 생략되지 않습니다." : ""}
           </p>
         </div>
       {/if}

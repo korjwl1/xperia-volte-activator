@@ -15,17 +15,19 @@ before(async () => {
 });
 after(async () => { Object.assign(api, originalApi); Object.assign(flags, originalFlags); await server?.close(); });
 beforeEach(() => {
-  calls = { checked: 0, patch: [], flash: [], install: 0, reboot: 0, unsubscribed: 0 };
+  calls = { checked: 0, patch: [], flash: [], install: 0, reboot: 0, unsubscribed: 0, order: [] };
   Object.assign(flags, { backup: false, restore: false, root: true, fastboot: true });
   Object.assign(api, originalApi, {
-    bootImageCheck: async () => { calls.checked++; return { ok: true, value: sourceHash }; },
+    bootImageCheck: async () => { calls.checked++; calls.order.push("image"); return { ok: true, value: sourceHash }; },
     magiskPrepare: async () => ({ ok: true, value: { version: "v30.7", apkPath: "Magisk.apk", sha256: apkHash } }),
     onMagiskLog: async () => () => calls.unsubscribed++,
     onFastbootLog: async () => () => calls.unsubscribed++,
     magiskPatch: async (...args) => { calls.patch.push(args); return { ok: true, value: { path: "patched.img", patchedSha256: patchHash, origSha256: sourceHash, bytes: 4096, log: [] } }; },
     fastbootFlash: async (...args) => { calls.flash.push(args); return { ok: true, value: null }; },
-    rootReboot: async () => ({ ok: true, value: null }),
-    fastbootReboot: async () => { calls.reboot++; return { ok: true, value: null }; },
+    rootReboot: async () => { calls.order.push("enter"); return { ok: true, value: null }; },
+    fastbootReboot: async () => { calls.reboot++; calls.order.push("reboot"); return { ok: true, value: null }; },
+    relockGateCheck: async () => { calls.order.push("gate"); return { ok: true, value: { ok: true, checked: [], reasons: [] } }; },
+    fastbootLock: async () => { calls.order.push("lock"); return { ok: true, value: { unlocked: false } }; },
     magiskInstall: async () => { calls.install++; return { ok: true, value: null }; },
     rootCheck: async () => true,
     backupCancel: async () => true,
@@ -107,9 +109,39 @@ test("retry removes engine-added manual guides until staging completes again", (
     assert.deepEqual(w.steps[0].manual, id === "backup" ? ["backup-notice"] : []);
   }
 });
-test("relock is blocked before mode-wait can reboot the phone", () => {
-  const w = wizard("relock"); w.steps[0].manual = ["mode-wait"]; w.tick();
-  assert.equal(w.runSteps[0].status, "failed"); assert.equal(w.manualCurrent, null); assert.equal(calls.reboot, 0);
+test("relock validates current firmware and restoration before reboot, then requires explicit locked state", async () => {
+  const w = wizard("relock"); await w.runRealRelock(w.runSteps[0]);
+  assert.deepEqual(calls.order, ["image", "gate", "enter", "lock", "reboot"]);
+  assert.equal(w.runSteps[0].status, "done");
+});
+
+test("relock rejects missing restore evidence or firmware mismatch before switching modes", async () => {
+  for (const failure of ["firmware", "history"]) {
+    const w = wizard("relock"); calls.order = [];
+    if (failure === "firmware") api.bootImageCheck = async () => ({ ok: false, error: "mismatch" });
+    else {
+      api.bootImageCheck = async () => ({ ok: true, value: sourceHash });
+      api.relockGateCheck = async () => ({ ok: true, value: { ok: false, checked: [], reasons: ["missing slot"] } });
+    }
+    await w.runRealRelock(w.runSteps[0]);
+    assert.equal(w.runSteps[0].status, "failed");
+    assert.ok(!calls.order.includes("enter") && !calls.order.includes("lock"));
+  }
+});
+
+test("relock failure, uncertain locked state or cancellation cannot finish or reboot", async () => {
+  for (const result of [{ ok: false, error: "state unknown" }, { ok: true, value: { unlocked: true } }]) {
+    const w = wizard("relock"); calls.order = [];
+    api.fastbootLock = async () => { calls.order.push("lock"); return result; };
+    await w.runRealRelock(w.runSteps[0]);
+    assert.equal(w.runSteps[0].status, "failed"); assert.ok(!calls.order.includes("reboot"));
+  }
+  const w = wizard("relock"), gate = deferred(); calls.order = [];
+  api.relockGateCheck = () => gate.promise;
+  const run = w.runRealRelock(w.runSteps[0]);
+  await new Promise(resolve => setImmediate(resolve)); w.runGen++;
+  gate.resolve({ ok: true, value: { ok: true, checked: [], reasons: [] } }); await run;
+  assert.ok(!calls.order.includes("enter") && !calls.order.includes("lock"));
 });
 test("real boot flows cannot skip phone verification", () => {
   const w = wizard(); w.manualCurrent = { id: "su-grant" }; assert.equal(w.manualSkippable, false);

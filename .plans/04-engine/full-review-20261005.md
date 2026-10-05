@@ -1,5 +1,7 @@
 # 전체 병합 후 코드 리뷰 — 2026-10-05
 
+후속 정책: 리락 무조건 차단 및 II/IV 일괄 거부는 [기종별 워크플로우 재검토](model-workflow-recheck-20261005.md)에서 대체했다. 현재 리락은 복원 조건 검사 뒤 실행 가능하며, 일반 EFS는 외부 작업 안내와 함께 진행한다. 아래는 이 후속 수정 전의 리뷰 기록이다.
+
 대상: 기존 통합 브랜치 `fix/full-review`의 `371d063`와 네이티브 EFS 브랜치 `feat/efs-native`의 `d90acdb`. 기존 driver-check·verify·backup·root·fastboot 수정 이력을 보존하고 EFS를 병합한다. 실행 파일 래퍼 대신 앱 내장 Rust COM/HDLC/DIAG/EFS/NV 모듈을 사용한다.
 
 사용자 범위: 코드 전체의 일관성·오류·함수 분리·원본 자동화 순서·최적화를 재검토하고 발견 사항을 수정한다. 실제 폰/COM/USB 테스트는 제외한다. 기본 `REAL_STEPS`와 Cargo 쓰기 기능은 모두 꺼짐을 유지한다.

@@ -1,6 +1,6 @@
 # fastboot 엔진 (M2) — 언락/리락·플래시
 
-status: implemented / gated (실기기 미검증, 쓰기·재부팅 기본 비활성, 실전 리락 차단)
+status: implemented / gated (실기기 미검증, 쓰기·재부팅 기본 비활성, 조건부 리락 구현)
 
 - 정책: tasks/plan.md §3-3(리락·백업 의존성), §9-3(유한 처리), §10-2(모드 게이트).
 - 검증: FakeTransport와 메모리 API를 사용하는 wizard 테스트만 실행. USB 장치 open·프로브·쓰기 테스트는 실행하지 않는다.
@@ -21,7 +21,7 @@ status: implemented / gated (실기기 미검증, 쓰기·재부팅 기본 비�
 2. Cargo feature fastboot-write는 기본 꺼짐: 직접 invoke해도 unlock/lock/flash/reboot를 USB open 전에 거부한다. 읽기 전용 getvar는 별도다.
 3. unlock/lock/flash는 confirm=true 필수. 언락 코드·파티션명은 USB open 전에 검증한다.
 4. backend unlock은 getvar:is-userspace=no와 unlocked=yes/no를 확인한다. fastbootd, 조회 실패, 미지원·빈 값은 거부. 이전 Sony에서 is-userspace 미지원이면 모드 근거를 추가하기 전까지 차단한다.
-5. 실전 리락은 프론트·백엔드 모두 차단. 언루팅 done/skipped, su 부재, 일반 confirm은 §3-3의 순정 이미지 해시·기기/세션별 부트 체인×슬롯 이력 검증을 대체하지 않는다. 검증 게이트가 구현되기 전에는 fastboot-write를 켜도 실행하지 않는다.
+5. 리락은 현재 OS와 추출 이미지 지문 대조 → 추출 출처·이미지 종류/해시 → 해당 기기 양 슬롯의 최신 done 복원 이력 → bootloader 모드/동일 serial/슬롯 존재 확인 후 허용한다. 상세 절차는 [unroot-relock.md](unroot-relock.md). 언루팅 done/skipped·su 부재·일반 confirm만으로 허용하지 않는다. 전체 AVB 검증이나 외부 도구가 바꾼 파티션의 인증을 주장하지 않는다.
 6. 백업을 선택한 계획이면 fastboot만 실전인 경우도 실제 완결 summary 또는 기존 폴더 파일/해시 재검사가 필요하다. 백업 미선택은 기존 실행 전 이중 확인 경로를 따른다.
 7. 실전 fastboot를 켜면 수동 확인의 목업 건너뛰기를 숨기고 거부한다.
 
@@ -43,7 +43,7 @@ status: implemented / gated (실기기 미검증, 쓰기·재부팅 기본 비�
 - flash-history.jsonl: deviceKey(일련번호 SHA-256), partition, image 경로, bytes, sha256, at, status(started/done/failed).
 - sha256은 실제 전송 버퍼에서 계산. 경로 파일을 다시 읽지 않는다.
 - 이력 파일 open과 started 기록·sync가 성공해야 flash를 시작한다. 슬롯별 done/failed도 기록·sync하고 저장 실패는 반환한다.
-- 이 기록은 순정 이미지 출처의 증명이 아니며 실전 리락을 허용하지 않는다. 완전한 세션 연결·부트 체인 검증은 M4에서 구현해야 한다.
+- 이 기록만으로는 리락하지 않는다. 추출 출처/현재 펌웨어 대조와 실제 기기·모드 검사에 결합한다. 외부 플래시·vbmeta/커널 변경까지 검증하는 기능은 없다.
 
 ## 이벤트·마스킹
 

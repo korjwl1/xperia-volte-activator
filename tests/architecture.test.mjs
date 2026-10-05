@@ -113,6 +113,15 @@ test("journals for generated unlock, relock and patch plans pass structural vali
   }
 });
 
+test("relock-only restores both slots even when root detection reports an unrooted phone", () => {
+  const w = wizard(); w.device.bootloader = "unlocked"; w.device.rooted = false;
+  const config = { sims: [{ slot: 1, carrier: null }, { slot: 2, carrier: null }], firmware: null, bootloaderAction: "relock" };
+  const steps = buildPlan(w.device, config, { unroot: false, relock: false, restore: false }, false);
+  assert.ok(steps.find(s => s.id === "prep").manual.includes("firmware-select"));
+  assert.ok(steps.findIndex(s => s.id === "unroot") < steps.findIndex(s => s.id === "relock"));
+  assert.equal(steps.find(s => s.id === "relock").manual, undefined);
+});
+
 test("plan generator is deterministic and leaves inputs unchanged", () => {
   const w = wizard(), config = journal().config;
   config.bootloaderAction = "unlock";

@@ -1,5 +1,7 @@
 # Cafe follow-up, 2026-10-05
 
+Superseded model policy: [model-workflow-recheck-20261005.md](model-workflow-recheck-20261005.md) removes the blanket Mark II/IV blockers. PDC/modem work remains external and is shown only for relevant selections. Conditional relock replaces the permanent block. The original beta11 source has generic DIAG activation; Mark IV engineering-mode handling came from Hanabi's separate troubleshooting comment.
+
 User decision: write the selected carrier/slot regardless of SIM presence or detected carrier. Detection never overrides the selection. Missing network service is a communication verification outcome, not an EFS write failure.
 
 Changes:

@@ -3,7 +3,6 @@
 //! 순수 로직만 담는다(파일·해시 IO는 호출부 주입 — 단위 테스트 용이).
 
 use serde::Serialize;
-use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
@@ -80,14 +79,8 @@ pub fn parse_history(raw: &str) -> Result<Vec<HistoryEntry>, String> {
     Ok(out)
 }
 
-/// 이미지 형식·크기와 해시만 검사한다. 순정 출처나 AVB를 인증하지 않는다.
-pub fn stock_sha256(path: &Path) -> Result<String, String> {
-    let data = crate::boot_image::read(path)?;
-    Ok(crate::boot_image::sha256(&data))
-}
-
 /// 해당 기기 양 슬롯의 최신 항목이 done이고 입력 이미지와 같은지 진단한다.
-/// 진단 통과만으로 실제 리락을 허용하지 않는다(for_relock 참조).
+/// 호출부는 추출 출처와 현재 기기·모드를 별도로 검사한다. 전체 AVB 검증은 아니다.
 pub fn verify(
     history: &[HistoryEntry],
     partition: &str,
@@ -175,15 +168,6 @@ pub fn verify(
         reasons,
         checked,
     }
-}
-
-/// 플래시 이력은 전송 기록이며 순정 출처·AVB·전체 부트 체인의 증명이 아니다.
-pub(crate) const RELOCK_BLOCKED: &str = "리락은 순정 출처·AVB·전체 부트 체인 검증이 구현될 때까지 차단됩니다 — 플래시 이력만으로 잠글 수 없습니다";
-
-pub fn for_relock(mut result: GateResult) -> GateResult {
-    result.ok = false;
-    result.reasons.push(RELOCK_BLOCKED.into());
-    result
 }
 
 #[cfg(test)]
@@ -284,18 +268,6 @@ mod tests {
         for bad in ["{broken", "{}", r#"{"status":"done"}"#] {
             assert!(parse_history(&format!("{good}\n{bad}")).is_err());
         }
-    }
-
-    #[test]
-    fn stock_image_magic_enforced() {
-        let dir = tempfile::tempdir().unwrap();
-        let bad = dir.path().join("stock.img");
-        std::fs::write(&bad, b"NOTANDROID").unwrap();
-        assert!(stock_sha256(&bad).is_err());
-        let good = dir.path().join("stock2.img");
-        std::fs::write(&good, crate::boot_image::test_image(4096, 0)).unwrap();
-        let sha = stock_sha256(&good).unwrap();
-        assert_eq!(sha.len(), 64);
     }
 
     /// 루팅→언루팅 왕복 시나리오 — 이력 순서 보존 판정

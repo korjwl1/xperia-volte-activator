@@ -2,7 +2,6 @@
   import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "$lib/components/ui/card";
   import { Badge } from "$lib/components/ui/badge";
   import { LoaderCircle, LockOpen, Lock, TriangleAlert, ExternalLink } from "@lucide/svelte/icons";
-  import { modelSupport } from "$lib/data/devices";
   import { api } from "$lib/api";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { resolveCarrier, simStateLabel, type CarrierId, type SimTarget } from "$lib/types";
@@ -24,8 +23,8 @@
     if (id !== null) wizard.volteConfig.bootloaderAction = null; // 패치를 고르면 부트로더만 작업은 해제
   }
 
-  // 기종별 지원 범위 — 기기에 따라 고정(선택에 따라 바뀌지 않음)
-  const support = $derived(modelSupport(wizard.device?.model ?? ""));
+  // 인식된 기종·사용자 선택 통신사·리락 여부에 맞는 안내만 표시한다.
+  const support = $derived(wizard.workflow.support);
 
   // 펌웨어 버전 — 서버 조회는 기기당 1회 (읽기 전용)
   wizard.ensureFirmwareVersions();
@@ -60,7 +59,7 @@
     {
       id: "relock" as const,
       label: "리락만 진행하기",
-      desc: "필요하면 언루팅 후 부트로더를 다시 잠급니다 — 기기가 초기화되며 VoLTE 패치는 유지됩니다",
+      desc: "현재 펌웨어의 순정 부트 이미지를 복원한 뒤 잠급니다 — 기기가 초기화됩니다",
       icon: Lock,
       enabled: blAvailable && bl === "unlocked",
       reason: bl === "locked" ? "이미 잠긴 기기입니다" : bl === "unknown" ? "부트로더 상태를 확인할 수 없습니다" : "",

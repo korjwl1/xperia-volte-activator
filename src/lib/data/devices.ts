@@ -13,8 +13,8 @@ export function bootPartition(model: string): "init_boot" | "boot" | null {
   return null;
 }
 
-// ── 기종별 지원 범위 (카페 기종별 주의 사항 cafe.naver.com/x1smart/613331 등, 2026-10-03 조사) ──
-// 하나의 패치 절차로 모든 기종을 처리할 수 없다. 표에 없는 기종은 "지원 미확인" — 추측하지 않는다.
+// ── 기종별 참고 사항 (Hanabi beta11 소스 + 자동화툴 사용자 보고, 2026-10-05 재검토) ──
+// 외부 후속 작업은 안내하며 일반 EFS 경로를 차단하지 않는다. 표 밖 파티션은 추측하지 않는다.
 export type SupportLevel = "일반" | "추가 조건" | "지원 미확인";
 export interface ModelSupport {
   name: string;
@@ -23,44 +23,54 @@ export interface ModelSupport {
   source?: string;
 }
 
-const CAFE_MODEL_NOTES = "https://cafe.naver.com/x1smart/613331";
 const IV_NOTES = [
-  "KT·LG U+는 SoftBank 모뎀을 먼저 적용한 뒤 패치하는 절차가 안내되어 있습니다 — 이 앱은 모뎀 교체를 하지 않습니다",
+  "KT·LG U+에서 자동화툴 적용 뒤 통화가 안 되어 PDC·모뎀 작업으로 대응한 보고가 있습니다. 펌웨어에 따라 EFS만으로 성공한 보고도 있습니다",
+  "이 앱은 Mark IV 개발 포트 보완을 포함하지만 PDC·모뎀 교체는 수행하지 않습니다",
   "모뎀을 섞은 상태에서 리락한 뒤 실패한 사례가 있습니다",
 ];
-const III_NOTES = ["리락 후 VoLTE를 켜려면 Shizuku·Pixel IMS 설정이 필요하다는 안내가 있습니다 — 이 앱은 해당 설정을 하지 않습니다"];
-const II_NOTES = ["패치 고정 작업(PDC)이 필요하다는 안내가 있습니다 — 이 앱의 절차만으로는 패치가 유지되지 않을 수 있습니다"];
+const III_NOTES = ["리락 뒤 VoLTE 설정을 위해 Shizuku·Pixel IMS를 사용하는 안내가 있습니다 — 이 앱과 Hanabi 도구는 해당 앱 설정을 하지 않습니다"];
+const II_NOTES = ["Hanabi는 자동화툴의 EFS 포트 개방 뒤 PDC 고정 작업을 별도로 수동 진행하도록 안내합니다 — 이 앱도 고정 작업은 수행하지 않습니다"];
 
 const MODEL_SUPPORT: [string, ModelSupport][] = [
   ["XQ-DQ", { name: "Xperia 1 V", level: "일반", notes: [] }],
   ["XQ-DE", { name: "Xperia 5 V", level: "일반", notes: [] }],
   ["XQ-EC", { name: "Xperia 1 VI", level: "일반", notes: [] }],
-  ["XQ-CT", { name: "Xperia 1 IV", level: "추가 조건", notes: IV_NOTES, source: CAFE_MODEL_NOTES }],
-  ["XQ-CQ", { name: "Xperia 5 IV", level: "추가 조건", notes: IV_NOTES, source: CAFE_MODEL_NOTES }],
-  ["XQ-BC", { name: "Xperia 1 III", level: "추가 조건", notes: III_NOTES, source: CAFE_MODEL_NOTES }],
-  ["XQ-BQ", { name: "Xperia 5 III", level: "추가 조건", notes: III_NOTES, source: CAFE_MODEL_NOTES }],
-  ["XQ-BE", { name: "Xperia PRO-I", level: "추가 조건", notes: III_NOTES, source: CAFE_MODEL_NOTES }],
-  ["XQ-AT", { name: "Xperia 1 II", level: "지원 미확인", notes: II_NOTES, source: CAFE_MODEL_NOTES }],
-  ["XQ-AS", { name: "Xperia 5 II", level: "지원 미확인", notes: II_NOTES, source: CAFE_MODEL_NOTES }],
+  ["XQ-CT", { name: "Xperia 1 IV", level: "추가 조건", notes: IV_NOTES, source: "https://cafe.naver.com/x1smart/614559" }],
+  ["XQ-CQ", { name: "Xperia 5 IV", level: "추가 조건", notes: IV_NOTES, source: "https://cafe.naver.com/x1smart/614559" }],
+  ["XQ-BC", { name: "Xperia 1 III", level: "추가 조건", notes: III_NOTES, source: "https://cafe.naver.com/x1smart/615748" }],
+  ["XQ-BQ", { name: "Xperia 5 III", level: "추가 조건", notes: III_NOTES, source: "https://cafe.naver.com/x1smart/615748" }],
+  ["XQ-BE", { name: "Xperia PRO-I", level: "추가 조건", notes: III_NOTES, source: "https://cafe.naver.com/x1smart/613331" }],
+  ["XQ-AT", { name: "Xperia 1 II", level: "추가 조건", notes: II_NOTES, source: "https://cafe.naver.com/x1smart/615332" }],
+  ["XQ-AS", { name: "Xperia 5 II", level: "추가 조건", notes: II_NOTES, source: "https://cafe.naver.com/x1smart/615332" }],
 ];
 
 /** 기종별 지원 범위 — 표에 없으면 지원 미확인 */
-export function modelSupport(model: string): ModelSupport {
+export function modelSupport(model: string, carriers?: readonly string[], relock = true): ModelSupport {
   const hit = MODEL_SUPPORT.find(([p]) => model.startsWith(p));
-  return hit ? hit[1] : { name: model, level: "지원 미확인", notes: ["이 앱에서 확인된 패치 절차가 없는 기종입니다"] };
+  if (!hit) return { name: model, level: "지원 미확인", notes: ["이 앱에서 확인된 패치 절차가 없는 기종입니다"] };
+  const relevant = carriers === undefined || carriers.length > 0;
+  const notes = !relevant
+    || (hit[1].notes === IV_NOTES && carriers !== undefined && !carriers.some(c => c === "KT" || c === "LGU"))
+    || (hit[1].notes === III_NOTES && !relock) ? [] : hit[1].notes;
+  return { ...hit[1], notes, level: notes.length ? hit[1].level : "일반" };
 }
 
-/** SIM detection never changes the user's targets. These restrictions concern missing model procedures only. */
+/** 인식된 기종과 사용자가 고른 작업으로만 절차를 맞춘다. SIM 감지나 펌웨어 최신 여부는 입력이 아니다. */
+export function deviceWorkflow(model: string, carriers: readonly string[], relock: boolean) {
+  const diagEngineering = model.startsWith("XQ-CT") || model.startsWith("XQ-CQ");
+  return {
+    partition: bootPartition(model),
+    diagEngineering,
+    manualPdc: carriers.length > 0 && (model.startsWith("XQ-AT") || model.startsWith("XQ-AS")),
+    support: modelSupport(model, carriers, relock),
+  };
+}
+
+/** 외부 PDC/모뎀 작업과 SIM 감지는 사용자 선택을 차단하지 않는다. 부트 파티션만 확정해야 한다. */
 export function patchProcedureProblem(model: string, carriers: readonly string[]): string | null {
   if (!carriers.length) return null;
   if (bootPartition(model) === null) {
     return "이 기종의 부트 파티션·패치 절차가 확인되지 않아 자동 패치를 지원하지 않습니다";
-  }
-  if (["XQ-AT", "XQ-AS"].some(prefix => model.startsWith(prefix))) {
-    return "Mark II에 필요한 PDC 고정 작업을 이 앱에서 수행하지 못해 자동 패치를 지원하지 않습니다";
-  }
-  if (["XQ-CT", "XQ-CQ"].some(prefix => model.startsWith(prefix)) && carriers.some(c => c === "KT" || c === "LGU")) {
-    return "Mark IV의 KT·LG U+ 패치에는 별도 모뎀 작업이 필요합니다. 이 앱은 모뎀 교체·선행 조건 검증을 지원하지 않아 자동 패치를 진행할 수 없습니다";
   }
   return null;
 }

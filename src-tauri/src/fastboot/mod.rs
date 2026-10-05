@@ -27,7 +27,7 @@ fn ensure_write_enabled() -> Result<(), String> {
 /// fastboot serialno → 이력 deviceKey(fastboot_flash 기록 방식과 동일)
 fn device_key(serial: &str) -> String {
     use sha2::{Digest, Sha256};
-    hex::encode(Sha256::digest(serial.as_bytes()))
+    hex::encode(Sha256::digest(serial.trim().as_bytes()))
 }
 
 /// 리락 게이트(§3-3) — 이력 파일을 읽어 판정. 순수 로직은 relock::verify.
@@ -41,9 +41,7 @@ fn verify_from_dir(
         .ok_or("플래시 이력 파일이 없습니다 — 슬롯 상태를 확인할 수 없습니다")?;
     let raw = String::from_utf8(raw).map_err(|e| format!("플래시 이력 UTF-8 오류: {e}"))?;
     let history = relock::parse_history(&raw)?;
-    Ok(relock::for_relock(relock::verify(
-        &history, partition, stock_sha, device_key,
-    )))
+    Ok(relock::verify(&history, partition, stock_sha, device_key))
 }
 
 fn load_and_verify(
@@ -158,7 +156,7 @@ pub async fn fastboot_unlock(
     .await
 }
 
-/// 순정 출처·AVB·전체 부트 체인 검증 전까지 실제 리락은 차단한다.
+/// 추출 출처·양 슬롯 복원 이력·기기/모드를 확인한 뒤 리락한다.
 #[tauri::command]
 pub async fn fastboot_lock(
     app: tauri::AppHandle,
@@ -172,11 +170,25 @@ pub async fn fastboot_lock(
         return Err("확인 없이는 실행하지 않습니다".into());
     }
     validate_base_partition(&partition)?;
-    let _ = (app, stock_path, expected_serial);
-    Err(relock::RELOCK_BLOCKED.into())
+    let operation = crate::device_io::WriteOperation::acquire()?;
+    crate::tasks::blocking("부트로더 리락", move || {
+        let stock_sha = verified_stock_sha(&partition, &stock_path)?;
+        let dir = crate::app_paths::data_dir().ok_or("앱 데이터 폴더를 찾지 못했습니다")?;
+        // 로컬 선행 조건 실패는 USB를 열기 전에 거부한다. 실제 기기 기준으로도 재검사한다.
+        require_relock_gate(verify_from_dir(
+            &dir,
+            &partition,
+            &stock_sha,
+            Some(&device_key(&expected_serial)),
+        )?)?;
+        with_device(operation, app, None, move |mut d| {
+            lock_verified_device(&mut d, &expected_serial, &dir, &partition, &stock_sha)
+        })
+    })
+    .await
 }
 
-/// 리락 이력 진단(읽기 전용). 진단 통과도 실제 리락을 허용하지 않는다.
+/// 리락 로컬 선행 조건 검사(읽기 전용). 실제 기기/모드는 fastboot_lock이 재검사한다.
 #[tauri::command]
 pub async fn relock_gate_check(
     partition: String,
@@ -185,7 +197,7 @@ pub async fn relock_gate_check(
 ) -> Result<relock::GateResult, String> {
     validate_base_partition(&partition)?;
     crate::tasks::blocking("리락 게이트 점검", move || {
-        let stock_sha = relock::stock_sha256(std::path::Path::new(&stock_path))
+        let stock_sha = verified_stock_sha(&partition, &stock_path)
             .map_err(|e| format!("순정 이미지 확인 실패: {e}"))?;
         load_and_verify(
             &partition,
@@ -194,6 +206,56 @@ pub async fn relock_gate_check(
         )
     })
     .await
+}
+
+fn verified_stock_sha(partition: &str, stock_path: &str) -> Result<String, String> {
+    let path = std::path::Path::new(stock_path);
+    let image = crate::boot_image::read(path)?;
+    crate::boot_image::check_fits_partition(&image, partition)?;
+    let origin = crate::boot_image::load_origin(path, &image, "")?;
+    if origin.partition != partition || origin.fingerprint.trim().is_empty() {
+        return Err("순정 이미지의 추출 파티션·펌웨어 출처가 일치하지 않습니다".into());
+    }
+    Ok(crate::boot_image::sha256(&image))
+}
+
+fn require_relock_gate(gate: relock::GateResult) -> Result<(), String> {
+    if gate.ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "리락 선행 조건을 확인하지 못했습니다 — {}",
+            gate.reasons.join(" / ")
+        ))
+    }
+}
+
+fn lock_verified_device<T: transport::FastbootTransport>(
+    d: &mut FastbootDevice<T>,
+    expected_serial: &str,
+    dir: &std::path::Path,
+    partition: &str,
+    stock_sha: &str,
+) -> Result<UnlockResult, String> {
+    let serial = ensure_target(d, expected_serial)?;
+    d.ensure_bootloader()?;
+    if d.getvar(&format!("has-slot:{partition}"))?.as_deref() != Some("yes") {
+        return Err("양쪽 슬롯이 있는 파티션인지 확인할 수 없습니다".into());
+    }
+    require_relock_gate(verify_from_dir(
+        dir,
+        partition,
+        stock_sha,
+        Some(&device_key(&serial)),
+    )?)?;
+    if d.unlocked()? {
+        d.oem_lock()?;
+    }
+    let unlocked = d.unlocked()?;
+    if unlocked {
+        return Err("리락 후 unlocked=no가 확인되지 않습니다".into());
+    }
+    Ok(UnlockResult { unlocked })
 }
 
 /// 이 도구가 기록하는 파티션은 부트 이미지 두 가지뿐이다(공통 규칙: boot_image::validate_partition)
@@ -390,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn relock_requires_more_than_a_successful_flash_history() {
+    fn relock_history_passes_only_when_both_slots_finished() {
         #[cfg(not(feature = "fastboot-write"))]
         assert!(ensure_write_enabled().is_err());
         let dir = tempfile::tempdir().unwrap();
@@ -401,10 +463,169 @@ mod tests {
         std::fs::write(dir.path().join("flash-history.jsonl"), history).unwrap();
         let gate = verify_from_dir(dir.path(), "init_boot", &stock, Some(&key)).unwrap();
         assert!(gate.checked.iter().all(|slot| slot.ok));
-        assert!(!gate.ok);
-        assert!(gate.reasons.iter().any(|reason| reason.contains("AVB")));
+        assert!(gate.ok);
         std::fs::write(dir.path().join("flash-history.jsonl"), "{broken").unwrap();
         assert!(verify_from_dir(dir.path(), "init_boot", &stock, Some(&key)).is_err());
+    }
+
+    fn write_stock_history(dir: &std::path::Path, serial: &str, sha: &str) {
+        let mut file = std::fs::File::create(dir.join("flash-history.jsonl")).unwrap();
+        for slot in ["a", "b"] {
+            record_flash_history(
+                &mut file,
+                &device_key(serial),
+                &format!("init_boot_{slot}"),
+                "stock.img",
+                8192,
+                sha,
+                "done",
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn relock_stock_requires_extraction_origin_partition_and_unchanged_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stock.img");
+        let image = crate::boot_image::test_image(8192, 0x41);
+        std::fs::write(&path, &image).unwrap();
+        let path_str = path.to_str().unwrap();
+        assert!(verified_stock_sha("init_boot", path_str).is_err());
+        crate::boot_image::save_with_origin(&path, &image, "boot", "Sony/current").unwrap();
+        assert!(verified_stock_sha("init_boot", path_str).is_err());
+        crate::boot_image::save_with_origin(&path, &image, "init_boot", "Sony/current").unwrap();
+        assert_eq!(
+            verified_stock_sha("init_boot", path_str).unwrap(),
+            crate::boot_image::sha256(&image)
+        );
+        assert!(verified_stock_sha("boot", path_str).is_err());
+        std::fs::write(&path, crate::boot_image::test_image(8192, 0x42)).unwrap();
+        assert!(verified_stock_sha("init_boot", path_str).is_err());
+    }
+
+    #[test]
+    fn relock_sends_lock_only_after_matching_device_mode_and_stock_history() {
+        use protocol::fake::{FakeTransport, Frame};
+        let dir = tempfile::tempdir().unwrap();
+        let sha = "a".repeat(64);
+        write_stock_history(dir.path(), "A", &sha);
+        let cases = [
+            (
+                vec![
+                    Frame::Ok("A"),
+                    Frame::Ok("no"),
+                    Frame::Ok("yes"),
+                    Frame::Ok("yes"),
+                    Frame::Ok(""),
+                    Frame::Ok("no"),
+                ],
+                true,
+                true,
+            ),
+            (vec![Frame::Ok("B")], false, false),
+            (vec![Frame::Ok("A"), Frame::Ok("yes")], false, false),
+            (
+                vec![Frame::Ok("A"), Frame::Ok("no"), Frame::Ok("no")],
+                false,
+                false,
+            ),
+            (
+                vec![
+                    Frame::Ok("A"),
+                    Frame::Ok("no"),
+                    Frame::Ok("yes"),
+                    Frame::Fail("unknown"),
+                ],
+                false,
+                false,
+            ),
+            (
+                vec![
+                    Frame::Ok("A"),
+                    Frame::Ok("no"),
+                    Frame::Ok("yes"),
+                    Frame::Ok("no"),
+                    Frame::Ok("no"),
+                ],
+                true,
+                false,
+            ),
+        ];
+        for (frames, success, locked) in cases {
+            let mut d = FastbootDevice::new(FakeTransport::new(frames), Box::new(|_| {}));
+            let result = lock_verified_device(&mut d, "A", dir.path(), "init_boot", &sha);
+            assert_eq!(result.is_ok(), success);
+            if let Ok(result) = result {
+                assert!(!result.unlocked);
+            }
+            assert_eq!(
+                d.into_transport().sent_cmds.iter().any(|s| s == "oem lock"),
+                locked
+            );
+        }
+    }
+
+    #[test]
+    fn relock_stale_or_partial_history_never_sends_lock() {
+        use protocol::fake::{FakeTransport, Frame};
+        let dir = tempfile::tempdir().unwrap();
+        let sha = "a".repeat(64);
+        for mode in ["missing", "other-phone", "patched", "started", "corrupt"] {
+            write_stock_history(dir.path(), "A", &sha);
+            let path = dir.path().join("flash-history.jsonl");
+            match mode {
+                "missing" => std::fs::remove_file(&path).unwrap(),
+                "other-phone" => write_stock_history(dir.path(), "B", &sha),
+                "patched" => write_stock_history(dir.path(), "A", &"b".repeat(64)),
+                "started" => {
+                    let mut file = std::fs::OpenOptions::new()
+                        .append(true)
+                        .open(&path)
+                        .unwrap();
+                    record_flash_history(
+                        &mut file,
+                        &device_key("A"),
+                        "init_boot_b",
+                        "stock.img",
+                        8192,
+                        &sha,
+                        "started",
+                    )
+                    .unwrap();
+                }
+                _ => std::fs::write(&path, "{broken").unwrap(),
+            }
+            let mut d = FastbootDevice::new(
+                FakeTransport::new(vec![Frame::Ok("A"), Frame::Ok("no"), Frame::Ok("yes")]),
+                Box::new(|_| {}),
+            );
+            assert!(lock_verified_device(&mut d, "A", dir.path(), "init_boot", &sha).is_err());
+            assert!(!d.into_transport().sent_cmds.iter().any(|s| s == "oem lock"));
+        }
+    }
+
+    #[test]
+    fn relock_does_not_report_success_from_okay_without_explicit_locked_state() {
+        use protocol::fake::{FakeTransport, Frame};
+        let dir = tempfile::tempdir().unwrap();
+        let sha = "a".repeat(64);
+        write_stock_history(dir.path(), "A", &sha);
+        for last in [Frame::Ok("yes"), Frame::Ok(""), Frame::Fail("unsupported")] {
+            let mut d = FastbootDevice::new(
+                FakeTransport::new(vec![
+                    Frame::Ok("A"),
+                    Frame::Ok("no"),
+                    Frame::Ok("yes"),
+                    Frame::Ok("yes"),
+                    Frame::Ok(""),
+                    last,
+                ]),
+                Box::new(|_| {}),
+            );
+            assert!(lock_verified_device(&mut d, "A", dir.path(), "init_boot", &sha).is_err());
+            assert!(d.into_transport().sent_cmds.iter().any(|s| s == "oem lock"));
+        }
     }
 
     #[test]

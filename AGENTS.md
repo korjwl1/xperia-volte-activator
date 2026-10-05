@@ -22,6 +22,7 @@ Xperia VoLTE 활성화 통합 도구. Tauri 2 + SvelteKit 2 + Svelte 5 + TypeScr
 - 예외(사용자 승인 2026-10-04): 완료 화면 [백업 파일 삭제] — 사용자가 확인 모달에서 [삭제]를 누른 경우에만, 이 실행이 만든 백업 폴더(이름 `backup-*` + 유효한 manifest.json, 심볼릭 링크·정션 아님)를 PC에서 지운다(`backup_delete`). 사용자가 고른 상위 저장 위치는 지우지 않는다.
 - **실기기 미검증 항목은 `.plans/04-engine/device-test-checklist.md` 한 곳에서 관리한다.** 단계의 REAL_STEPS·쓰기 Cargo 기능은 그 단계 항목이 모두 체크되기 전까지 켜서 배포하지 않는다. 새 기기 동작을 추가하면 체크리스트에 항목을 추가한다.
 - 예외(사용자 승인 2026-10-05): **전체 브랜치 병합·통합 코드 리뷰·수정·실기기 이외의 검증 허용**. 원본 파일 읽기, 공식 배포 해시 확인, Sony 서버 부분 다운로드, 빌드·패키징은 허용한다. 실기기 연결·DIAG 전환·COM/USB 동작 테스트는 하지 않으며 기존 쓰기 기능 기본 꺼짐을 유지한다. 통합 리뷰: `.plans/04-engine/full-review-20261005.md`.
+- 예외(사용자 승인 2026-10-05 후속): **조건부 리락 구현·기종 인식 워크플로우 보강 허용**. 과거 리락 무조건 차단 및 II/IV 일괄 제한을 재검토한다. Hanabi 배포 소스와 실제 사용자 보고에 맞추며 PDC·모뎀 교체·외부 앱 설치는 새로 자동화하지 않는다. 실기기 테스트 금지 및 기본 쓰기 비활성은 유지한다. 최신 기준: `.plans/04-engine/model-workflow-recheck-20261005.md`.
 - 기기 통신: ADB는 `adb_client` 크레이트(ADB 프로토콜 순수 Rust) — 실행 중인 adb 서버 재사용 → USB 직접 연결 폴백. EFS/NV는 명시적으로 지정한 COM의 순수 Rust DIAG 세션. adb·EfsTools 바이너리 직접 실행 및 .NET 런타임 의존 금지.
   - 레지스트리 판이 아니라 I/O 시간 상한을 넣은 사본 `src-tauri/vendor/adb_client`(3.2.3, `[patch.crates-io]`)을 쓴다. 고친 내용은 `vendor/adb_client/PATCHES.md`에 기록하고, 업그레이드할 때 다시 적용한다.
 

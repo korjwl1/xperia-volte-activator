@@ -11,13 +11,13 @@ export interface ExecutionFlags {
 export function executionPlanProblem(ids: readonly string[], flags: ExecutionFlags): string | null {
   if (!Object.values(flags).some(Boolean)) return null;
   if (ids.includes("fw-flash")) return "전체 펌웨어 기록이 아직 구현되지 않아 이 실전 계획을 시작할 수 없습니다";
-  if (ids.includes("relock")) return "리락은 순정 출처·AVB·전체 부트 체인 검증이 구현될 때까지 차단됩니다";
   for (const id of ids) {
     let ready = true;
     switch (id) {
       case "backup": ready = flags.backup; break;
       case "restore": ready = flags.restore; break;
       case "unlock": ready = flags.fastboot; break;
+      case "relock": ready = flags.fastboot; break;
       case "root":
       case "unroot": ready = flags.root && flags.fastboot; break;
       case "efs-input":

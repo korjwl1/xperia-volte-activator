@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { before, beforeEach, after, test } from "node:test";
 import { createServer } from "vite";
 
-let server, Wizard, api, flags, transport, originalApi, originalFlags, originalInvoke, buildPlan, bootPartition, decodeJournal, executionPlanProblem;
+let server, Wizard, api, flags, transport, originalApi, originalFlags, originalInvoke, buildPlan, bootPartition, deviceWorkflow, decodeJournal, executionPlanProblem;
 const configured = { port: "COM9", presetRoot: "C:/bundle", snapshotRoot: "C:/snapshots" };
 const liveFlags = { backup: true, restore: true, fastboot: true, root: true, verify: true, efs: true };
 const ok = value => ({ ok: true, value });
@@ -14,7 +14,7 @@ before(async () => {
   ({ REAL_STEPS: flags } = await server.ssrLoadModule("/src/lib/data/runMode.ts"));
   ({ transport } = await server.ssrLoadModule("/src/lib/api/transport.ts"));
   ({ buildPlan } = await server.ssrLoadModule("/src/lib/domain/plan.ts"));
-  ({ bootPartition } = await server.ssrLoadModule("/src/lib/data/devices.ts"));
+  ({ bootPartition, deviceWorkflow } = await server.ssrLoadModule("/src/lib/data/devices.ts"));
   ({ decodeJournal } = await server.ssrLoadModule("/src/lib/domain/journal.ts"));
   ({ executionPlanProblem } = await server.ssrLoadModule("/src/lib/domain/execution.ts"));
   originalApi = { ...api }; originalFlags = { ...flags }; originalInvoke = transport.invoke;
@@ -73,11 +73,12 @@ test("supported live routes require every device engine and simulation accepts a
   assert.equal(executionPlanProblem(["efs-input", "efs", "verify", "final-verify"], { ...originalFlags, efs: true }), null);
   assert.equal(executionPlanProblem(["backup"], { ...originalFlags, backup: true }), null);
   assert.equal(executionPlanProblem([...ids, "fw-flash", "relock"], originalFlags), null);
+  assert.equal(executionPlanProblem([...ids, "relock"], liveFlags), null);
+  assert.match(executionPlanProblem(["relock"], { ...liveFlags, fastboot: false }), /relock/);
 });
 
-test("live relock, firmware update and mixed simulation stop before any engine or manual prompt", async () => {
+test("live firmware update and mixed simulation stop before any engine or manual prompt", async () => {
   for (const [ids, currentFlags, pattern] of [
-    [["efs-input", "unlock", "efs", "relock"], liveFlags, /리락/],
     [["fw-download", "backup", "fw-flash", "fw-verify"], liveFlags, /펌웨어 기록/],
     [["efs-input", "unlock", "root", "efs"], { ...liveFlags, efs: false }, /efs-input/],
     [["backup", "unlock"], { ...liveFlags, backup: false }, /backup/],
@@ -103,10 +104,10 @@ test("live relock, firmware update and mixed simulation stop before any engine o
 test("resume cannot bypass live plan rejection using a completed input checkpoint", async () => {
   const w = wizard("efs-input"); Object.assign(flags, liveFlags);
   w.runSteps[0].status = "done";
-  w.runSteps.push(...["unlock", "relock"].map(id => ({ id, title: id, status: "pending", progress: 0, logs: [], manualDone: 0 })));
+  w.runSteps.push(...["unlock", "fw-flash"].map(id => ({ id, title: id, status: "pending", progress: 0, logs: [], manualDone: 0 })));
   w.cursor = 1; w.begin = () => Wizard.prototype.begin.call(w);
   w.resumeRun(); await settled(w);
-  assert.match(w.stepError, /리락/);
+  assert.match(w.stepError, /펌웨어 기록/);
   assert.equal(w.runSteps[0].status, "done"); assert.equal(w.runSteps[1].status, "failed");
   assert.equal(w.running, false);
 });
@@ -215,18 +216,46 @@ test("absent or differently provisioned SIMs never override or block the selecte
   }
 });
 
-test("missing model procedures stop before local configuration, DIAG, snapshots or writes", async () => {
+test("known Mark II and IV models use the original EFS route without new PDC or modem blockers", async () => {
   for (const [model, carrier] of [["XQ-AT72", "SKT"], ["XQ-AS72", "KT"], ["XQ-CT72", "KT"], ["XQ-CQ72", "LGU"]]) {
-    for (const id of ["efs-input", "efs-preflight", "efs"]) {
-      let touched = 0;
-      api.efsConfiguration = api.efsDiagOpen = api.efsSnapshot = api.efsUpload = async () => { touched++; return ok(configured); };
-      const w = wizard(id); w.device.model = model;
+    for (const id of ["efs-input", "efs-preflight"]) {
+      let diag = 0;
+      api.efsDiagOpen = async () => { diag++; return ok(null); };
+      const w = wizard(id); Object.assign(flags, liveFlags); w.device.model = model;
       w.volteConfig.sims = [{ slot: 1, carrier }, { slot: 2, carrier: null }];
+      const selected = structuredClone(w.volteConfig.sims);
       w.tick(); await settled(w);
-      assert.equal(w.runSteps[0].status, "failed", model + "/" + id);
-      assert.equal(touched, 0);
+      assert.equal(w.runSteps[0].status, "done", model + "/" + id);
+      assert.equal(diag, id === "efs-preflight" ? 1 : 0);
+      assert.deepEqual(w.volteConfig.sims, selected);
     }
   }
+});
+
+test("detected models adapt boot and DIAG workflows and only show relevant external work", () => {
+  const w = wizard("efs-input");
+  for (const [model, partition, diag, carrier] of [
+    ["XQ-DQ44", "init_boot", false, "LGU_V"], ["XQ-DE72", "init_boot", false, "SKT"],
+    ["XQ-EC72", "init_boot", false, "KT"], ["XQ-CT72", "boot", true, "KT"],
+    ["XQ-CQ72", "boot", true, "LGU"], ["XQ-AT72", "boot", false, "SKT"],
+    ["XQ-BE72", "boot", false, "KT"],
+  ]) {
+    const selected = { sims: [{ slot: 1, carrier }, { slot: 2, carrier: null }], firmware: null, bootloaderAction: null };
+    const before = structuredClone(selected);
+    const route = deviceWorkflow(model, [carrier], false);
+    assert.equal(route.partition, partition); assert.equal(route.diagEngineering, diag);
+    const plan = buildPlan({ ...w.device, model, bootloader: "unlocked", rooted: false, prep: {} }, selected, { unroot: true, relock: false, restore: false }, false);
+    assert.ok(plan.find(s => s.id === "root").desc.includes(partition));
+    assert.equal(plan.find(s => s.id === "efs-preflight").desc.includes("Mark IV"), diag);
+    assert.deepEqual(selected, before);
+  }
+  assert.deepEqual(deviceWorkflow("XQ-CT72", ["SKT"], false).support.notes, []);
+  assert.ok(deviceWorkflow("XQ-CT72", ["KT"], false).support.notes.length);
+  assert.deepEqual(deviceWorkflow("XQ-BC72", ["KT"], false).support.notes, []);
+  assert.ok(deviceWorkflow("XQ-BC72", ["KT"], true).support.notes.length);
+  assert.equal(deviceWorkflow("XQ-AT72", ["SKT"], false).manualPdc, true);
+  assert.deepEqual(deviceWorkflow("XQ-AT72", [], false).support.notes, []);
+  assert.equal(deviceWorkflow("XQ-UNKNOWN", ["SKT"], false).partition, null);
 });
 
 test("Mark IV SKT retains the native procedure and PRO-I uses the boot partition", async () => {

@@ -3,6 +3,7 @@
 // 수동 가이드의 "수동 업데이트"(newflasher, .ta·userdata 제외)를 따른다.
 import type { DeviceStatus, ManualId, PlanStep, VolteConfig } from "$lib/types";
 import { CARRIER_LABEL } from "$lib/types";
+import { deviceWorkflow } from "$lib/data/devices";
 
 export interface PlanOptions {
   unroot: boolean;
@@ -53,6 +54,7 @@ export function buildPlan(
   // 후처리(언루팅/리락)는 VoLTE 패치 흐름에서만, 부트로더 상태가 확인된 기기 (plan §3-2 매트릭스)
   const relock = patch && bootloaderKnown && opts.relock;
   const unroot = patch && bootloaderKnown && (opts.unroot || relock); // 리락 ⟹ 언루팅
+  const workflow = deviceWorkflow(device.model, config.sims.flatMap(s => s.carrier ? [s.carrier] : []), relock);
   const wipes = needsUnlock || relock;
 
   // 사전 준비 — 백업(수 분) 전에 사용자 입력·폰 설정을 한 번에 받는다
@@ -96,7 +98,7 @@ export function buildPlan(
       id: "root",
       kind: "root",
       title: update && !patch ? "루팅 다시 적용" : "루팅",
-      desc: "Magisk로 시스템 수정 권한 확보",
+      desc: `${workflow.partition ?? "부트"} 이미지를 Magisk로 패치해 시스템 수정 권한 확보`,
       risk: "warn",
       estSec: 600,
     });
@@ -107,9 +109,9 @@ export function buildPlan(
       .filter((s) => s.carrier !== null)
       .map((s) => `SIM${s.slot}=${CARRIER_LABEL[s.carrier!]}`)
       .join(", ");
-    steps.push({ id: "efs-preflight", kind: "efs-preflight", title: "EFS 연결 확인", desc: "루트 권한 승인 · DIAG 연결 및 프로토콜 응답 확인", estSec: 60, manual: ["su-grant"] });
+    steps.push({ id: "efs-preflight", kind: "efs-preflight", title: "EFS 연결 확인", desc: workflow.diagEngineering ? "루트 권한 승인 · Mark IV 개발 포트 설정 · DIAG 연결 확인" : "루트 권한 승인 · DIAG 연결 및 프로토콜 응답 확인", estSec: 60, manual: ["su-grant"] });
     // 원본 beta11 계승: 슬롯별 두 번 업로드 → 전수 리드백. 두 번 썼다는 것만으로 성공 판정하지 않는다
-    steps.push({ id: "efs", kind: "efs", title: "VoLTE 적용", desc: `${targets} 프로파일을 슬롯별로 두 번 주입합니다`, risk: "danger", estSec: 420 });
+    steps.push({ id: "efs", kind: "efs", title: "VoLTE 적용", desc: `${targets} 프로파일을 슬롯별로 두 번 주입합니다${workflow.manualPdc ? " — PDC 고정은 별도 수동 작업입니다" : ""}`, risk: "danger", estSec: 420 });
     steps.push({ id: "verify", kind: "verify", title: "적용 확인", desc: "주입한 파일 전수 리드백·해시 비교 — 누락·불일치는 실패", estSec: 120 });
     steps.push({ id: "volte-props", kind: "volte-props", title: "VoLTE 활성화 설정", desc: "VoLTE·영상통화·Wi-Fi 통화 설정을 켜고 재부팅 (통신사 서비스 검증은 아님)", estSec: 120 });
     // 언루팅·리락 전에 실제 통신 확인 — 리락 뒤 문제가 있으면 다시 고치려면 초기화가 한 번 더 필요
@@ -119,10 +121,10 @@ export function buildPlan(
   }
 
   if (unroot) {
-    steps.push({ id: "unroot", kind: "unroot", title: "언루팅", desc: "순정 이미지로 복원합니다 — 리락 전 필수", risk: "warn", estSec: 180 });
+    steps.push({ id: "unroot", kind: "unroot", title: "언루팅", desc: `순정 ${workflow.partition ?? "부트"} 이미지로 복원합니다 — 리락 전 필수`, risk: "warn", estSec: 180 });
   }
   if (relock) {
-    steps.push({ id: "relock", kind: "relock", title: "부트로더 리락", desc: "기기가 초기화됩니다", risk: "danger", wipe: true, estSec: 120, manual: ["mode-wait"] });
+    steps.push({ id: "relock", kind: "relock", title: "부트로더 리락", desc: "순정 복원·현재 펌웨어 확인 후 리락 — 기기가 초기화됩니다", risk: "danger", wipe: true, estSec: 120 });
     // 초기화 후 최종 확인·복구에 adb 연결이 필요
     steps.push(setupAfterWipe("setup-relock"));
   }
@@ -149,8 +151,8 @@ function setupAfterWipe(id: string): Seed {
 /** 부트로더 언락만 / 리락만 — VoLTE 패치·펌웨어 업데이트 없음 */
 function bootloaderOnlyPlan(device: DeviceStatus, only: "unlock" | "relock", opts: PlanOptions, hasBackup: boolean): Seed[] {
   const steps: Seed[] = [];
-  // 리락 전 순정 이미지 복원 — 루팅 여부를 모르면 안전하게 포함 (수정된 부트 이미지로 리락하면 부팅 불가)
-  const unroot = only === "relock" && device.rooted !== false;
+  // 리락 전 같은 펌웨어의 순정 이미지로 양 슬롯 복원. su 부재만으로 슬롯 상태를 추측하지 않는다.
+  const unroot = only === "relock";
   const prep: ManualId[] = [];
   if (only === "unlock" && !prepReady(device)) prep.push("oem-toggle");
   if (only === "unlock") prep.push("unlock-code");
@@ -175,7 +177,7 @@ function bootloaderOnlyPlan(device: DeviceStatus, only: "unlock" | "relock", opt
     if (unroot) {
       steps.push({ id: "unroot", kind: "unroot", title: "언루팅", desc: "순정 이미지로 복원합니다 — 리락 전 필수", risk: "warn", estSec: 180 });
     }
-    steps.push({ id: "relock", kind: "relock", title: "부트로더 리락", desc: "기기가 초기화됩니다 — VoLTE 패치는 유지됩니다", risk: "danger", wipe: true, estSec: 120, manual: ["mode-wait"] });
+    steps.push({ id: "relock", kind: "relock", title: "부트로더 리락", desc: "순정 복원·현재 펌웨어 확인 후 리락 — 기기가 초기화됩니다", risk: "danger", wipe: true, estSec: 120 });
     steps.push(setupAfterWipe("setup-relock"));
   }
   if (opts.restore && hasBackup) {

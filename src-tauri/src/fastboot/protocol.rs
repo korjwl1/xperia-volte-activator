@@ -200,9 +200,8 @@ impl<T: FastbootTransport> FastbootDevice<T> {
     }
 
     /// 부트로더 리락 — `oem lock`
-    #[cfg(test)]
     pub fn oem_lock(&mut self) -> Result<(), String> {
-        match self.command("oem lock")? {
+        match self.command_with("oem lock", LONG_RESPONSE_TIMEOUT)? {
             Terminal::Ok(_) => Ok(()),
             Terminal::Fail(r) => Err(format!("리락 거부(FAIL): {r}")),
             Terminal::Data(_) => Err("예상치 못한 DATA 응답".into()),

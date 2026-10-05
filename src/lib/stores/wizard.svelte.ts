@@ -2,7 +2,7 @@
 import type { CallCheck, CommunicationSnapshot, FirmwareDirInfo, AppItem, FirmwareResult, FirmwareVersions, SettingsOverview, SimInfo, BackupGroup, DeviceStatus, EnvCheckItem, ManualId, ManualPrompt, PlanStep, RunJournal, RunStep, VolteConfig } from "$lib/types";
 import { api } from "$lib/api";
 import { LINKS, maskSecret } from "$lib/data/links";
-import { bootPartition, patchProcedureProblem } from "$lib/data/devices";
+import { deviceWorkflow, patchProcedureProblem } from "$lib/data/devices";
 import { mockBackupGroups } from "$lib/mock/apps";
 import { bootloaderOnly, buildPlan, stepHazard, updateTarget, type PlanOptions } from "$lib/domain/plan";
 import { firmwareUpdateProblems } from "$lib/domain/verify";
@@ -391,7 +391,15 @@ export class Wizard {
 
   /** 루팅/언루팅 대상 파티션 (원본 CLI 기준 표, 미등록 기종은 null) */
   get partition(): "init_boot" | "boot" | null {
-    return this.device ? bootPartition(this.device.model) : null;
+    return this.workflow.partition;
+  }
+
+  get workflow() {
+    return deviceWorkflow(
+      this.device?.model ?? "",
+      this.volteConfig.sims.flatMap(s => s.carrier ? [s.carrier] : []),
+      this.opts.relock || this.bootloaderOnly === "relock",
+    );
   }
 
   // ── 실행 상태 ──
@@ -928,8 +936,6 @@ export class Wizard {
     }
     // 혼합 모드에서 실전 기록 뒤 시뮬레이션 완료로 넘어갈 수 없도록 먼저 차단한다.
     if ((cur.id === "root" || cur.id === "unroot") && (REAL_STEPS.root || REAL_STEPS.fastboot) && !this.realBootFlowReady()) return;
-    // 리락은 이력만으로 안전성을 증명할 수 없어 모드 전환 전에도 차단한다.
-    if (cur.id === "relock" && REAL_STEPS.fastboot) return this.failStep("리락은 순정 출처·AVB·전체 부트 체인 검증이 구현될 때까지 차단됩니다");
     // 실전 최종 확인은 재부팅을 먼저 하고, 그 뒤에 VoLTE 등록 확인 안내를 연다(계획의 수동 안내보다 엔진이 먼저)
     if (cur.id === "final-verify" && this.engineRan.get(cur.id) !== this.runGen) {
       const first = this.engineFor(cur);
@@ -2158,7 +2164,7 @@ export class Wizard {
   /** 리락 게이트 사전 점검용 deviceKey — fastboot serial과 같은 알고리즘(SHA-256 hex). 없으면 null */
   private async deviceKeyHex(): Promise<string | null> {
     const serial = this.device?.serial;
-    return serial ? sha256Hex(serial) : null;
+    return serial?.trim() ? sha256Hex(serial.trim()) : null;
   }
 
   /** adb로 부트로더 재부팅 → fastboot 모드 감지 대기. 실패 사유 또는 null (호출부에서 세대 확인) */
@@ -2227,8 +2233,8 @@ export class Wizard {
     this.stepDone(cur);
   }
 
-  /** 실전 리락 — 게이트(§3-3) 사전 점검 → oem lock → 확인 (최종 판정은 백엔드가 기기 fastboot serial 기준으로 재수행).
-   *  현재는 tick()이 리락을 먼저 차단하므로 실행되지 않는다(순정 출처·AVB 검증 구현 전까지). */
+  /** 실전 리락 — 현재 OS/순정 이미지 대조 → 양 슬롯 이력 → 부트로더 진입 → 잠금·상태 확인.
+   *  백엔드는 추출 출처·이력을 다시 읽고 실제 fastboot serial/모드 기준으로 재검사한다. */
   private async runRealRelock(cur: RunStep) {
     const gen = this.runGen;
     const partition = this.partition;
@@ -2237,6 +2243,9 @@ export class Wizard {
       this.failStep("리락 게이트에 필요한 부트 파티션·순정 이미지가 준비되지 않았습니다 — 사전 준비에서 펌웨어를 먼저 받아 주세요");
       return;
     }
+    const source = await api.bootImageCheck(this.device?.serial ?? "", stock.path, stock.fingerprint);
+    if (gen !== this.runGen) return;
+    if (!source.ok) return this.failStep(`리락 전 현재 펌웨어 확인 실패: ${source.error}`);
     await this.fastbootLog(gen, cur, async () => {
       // 사전 게이트 — 미충족 사유를 로그로 보여준다
       cur.progress = 0.3;
@@ -2249,6 +2258,9 @@ export class Wizard {
       const gate = gateRes.value;
       for (const c of gate.checked) this.log(cur, `[게이트] ${c.partition}${c.slot} — ${c.detail}`);
       if (!gate.ok) return this.failStep(`리락 게이트 실패 — ${gate.reasons.join(" / ")}`);
+      const fbError = await this.enterFastboot(gen);
+      if (gen !== this.runGen) return;
+      if (fbError) return this.failStep(fbError);
       cur.progress = 0.6;
       const r = await api.fastbootLock(true, partition, stock.path, this.device?.serial ?? "");
       if (gen !== this.runGen) return;

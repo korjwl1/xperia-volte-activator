@@ -156,21 +156,22 @@ invoke('env_check') → EnvCheckItem[]            // ✅ 구현(src-tauri/src/en
 
 ## plan / fastboot (M2 — 설계 `.plans/04-engine/fastboot.md`, 사용자 승인 2026-10-03)
 
-**구현 상태**: FakeTransport 검증, 실기기 미검증. 쓰기·재부팅은 Cargo `fastboot-write` 기본 비활성 + `REAL_STEPS.fastboot`로 보호. 리락 이력 진단은 구현됐으나 순정 출처·AVB·전체 부트 체인 증명이 없어 **실제 리락은 항상 차단**한다(all-features 포함).
+**구현 상태**: FakeTransport 검증, 실기기 미검증. 쓰기·재부팅은 Cargo `fastboot-write` 기본 비활성 + `REAL_STEPS.fastboot`로 보호. 리락은 현재 OS/추출 출처/양 슬롯 복원 이력·동일 기기·bootloader 검사 뒤 조건부 실행한다. 전체 AVB 인증은 구현 범위가 아니다.
 
 ```ts
 invoke('fastboot_getvar') → Record<string,string>   // ✅ 읽기 전용 — rusb FF/42/03 open, getvar:all 파싱(unlocked·current-slot·slot-successful:_a/_b·max-download-size …)
 //   fastboot 모드 Sony 장치가 정확히 1대일 때만 open(다중 기기 거부 — §9-3)
 invoke('fastboot_unlock', { code, confirm, expectedSerial }) → { unlocked: boolean }
 //   "oem unlock 0x{code}" — 16자리 hex 검증, 로그·이벤트에 코드 마스킹(§12.5). 실행 후 getvar로 이중 확인
-invoke('fastboot_lock', { confirm, partition, stockPath, expectedSerial }) → reject
-//   순정 출처·AVB·전체 부트 체인 검증 전까지 USB 접근 없이 항상 거부. 이력 일치도 해제 조건이 아니다.
+invoke('fastboot_lock', { confirm, partition, stockPath, expectedSerial }) → { unlocked: boolean }
+//   추출 출처/파티션/해시와 양 슬롯 복원 이력 재검사. 동일 serial·bootloader·슬롯 확인 뒤 oem lock.
+//   unlocked=no를 명시적으로 확인해야 성공한다. 프런트는 모드 전환 전에 현재 OS 지문을 대조한다.
 invoke('relock_gate_check', { partition, stockPath, deviceKey? }) → { ok, reasons: string[], checked: [{partition, slot, ok, detail}] }
-//   기기 키 필수. 이력 없음·손상·슬롯 누락·최신 미완료는 실패. 진단 정상이어도 ok=false(리락 차단).
+//   기기 키·추출 출처 필수. 이력 없음·손상·슬롯 누락·최신 미완료는 실패. 조건 충족 시 ok=true.
 invoke('fastboot_flash', { partition, path, confirm, expectedSerial, expectedSha256 }) → void
 //   partition은 boot·init_boot만(그 외 파티션은 직접 호출도 거부). 전송 버퍼 해시 대조, 부트 이미지 형식·크기 검사.
 //   이미지 종류가 파티션과 맞아야 한다(init_boot = 헤더 v4·커널 없음, boot = 커널 있음). 빈 expectedSha256은 거부.
-//   응답 대기는 응답 1건 전체 기준: 일반 10초, getvar:all 30초, 언락·flash·본문 확인 300초, DATA 전송 전체 600초.
+//   응답 대기는 응답 1건 전체 기준: 일반 10초, getvar:all 30초, 언락·리락·flash·본문 확인 300초, DATA 전송 전체 600초.
 //   양쪽 슬롯 존재 확인 → download/flash → 기기별·슬롯별 이력. flash·언락 응답은 최대 300초 대기(기기 작업 중 10초로 끊지 않음).
 invoke('fastboot_reboot', { target: 'os'|'bootloader', expectedSerial }) → void
 //   언락·기록·재부팅은 fastboot serialno == expectedSerial 확인 후에만 실행한다.
