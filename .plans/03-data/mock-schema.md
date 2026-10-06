@@ -20,7 +20,7 @@ status: implemented
 DeviceMode = 'android'|'bootloader-fastboot'|'fastbootd'|'flashmode'
 DeviceStatus { serialMasked, model:'XQ-DQ44', productName:'Xperia 1 V', firmware, fingerprint?(ro.build.fingerprint — 백엔드 실측, mock에는 없음), android,
   mode, bootloader:'locked'|'unlocked'|'unknown', rooted:bool|'unknown',
-  sims: { slot, type:'physical'|'esim', carrier|null, volte:'on'|'off'|'unknown', patchedWith? }[],
+  sims: { slot, type:'physical'|'esim'|'unknown', carrier|null, volte:'on'|'off'|'unknown', patchedWith? }[],
   usb{topology,controller,speed} }
   // patchedWith는 DIAG 리드백(M5) 전까지 판별 불가 — 표시하지 않음
 EnvCheckItem { id,label,state:'pass'|'warn'|'fail'|'info',detail,fixable:bool }
@@ -51,3 +51,6 @@ DeviceStatus += state:'device'|'unauthorized'|'offline'|'usb'…,  SimInfo += st
 - `EfsToolCheck`는 `deviceExecution`·`rootExecution`·`fastbootExecution`을 반환한다. 브라우저 mock은 모두 false, Rust는 각각 Cargo 쓰기 feature의 컴파일 여부를 반환한다.
 
 - RunJournal v1 optional imsVerified/callVerified boolean 추가. 잘못된 타입은 거부, 이전 기록은 최종 통신 확인 재실행. 시뮬레이션의 단계 완료만으로 실제 IMS·통화 확인 플래그를 세우지 않는다.
+2026-10-06 SimInfo.type에 unknown 추가. 구독 정보가 없거나 충돌할 때 슬롯 순서로 물리/eSIM을 가정하지 않는다. mock의 미삽입 slot1도 unknown이며 관찰한 slot2 구독만 esim이다. 기록 로더는 unknown을 그대로 보존한다.
+
+2026-10-06 단계 대기: RunJournal v1의 optional `awaitingNext: string|null`은 cursor 직전 완료/스킵 단계 id와 대조한다. optional `backupOmissions: {apps: BackupSummary.omittedApps, pending:boolean}`은 제외 안내의 확인 여부를 유지하며 구조·개수·바이트·boolean 타입을 검사한다. 구형 기록은 필드 없이 읽을 수 있다. mock도 메인 단계 완료 후 자동으로 진행하지 않고 [다음]을 기다린다.

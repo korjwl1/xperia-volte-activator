@@ -5,7 +5,9 @@ const object = (value: unknown): value is Record<string, unknown> => !!value && 
 const text = (value: unknown): value is string => typeof value === "string";
 const texts = (value: unknown): value is string[] => Array.isArray(value) && value.every(text);
 const integer = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-const option = (value: unknown) => object(value) && ["unroot", "relock", "restore"].every(key => typeof value[key] === "boolean");
+const option = (value: unknown) => object(value) && ["unroot", "relock", "restore"].every(key => typeof value[key] === "boolean")
+  && (value.backupOnly === undefined || typeof value.backupOnly === "boolean")
+  && (value.backupOnly !== true || (!value.unroot && !value.relock && !value.restore));
 const manualIds = new Set<string>(MANUAL_IDS);
 const kinds = new Set<string>(STEP_KINDS);
 const statuses = new Set(["pending", "running", "done", "failed", "skipped", "manual-wait"]);
@@ -29,7 +31,7 @@ function snapshot(value: unknown): boolean {
   const sims = value.sims;
   const presets = value.presets;
   return sims.every(sim => object(sim) && [1, 2].includes(sim.slot as number)
-      && ["physical", "esim"].includes(sim.type as string) && (sim.carrier === null || text(sim.carrier)) && text(sim.state)
+      && ["physical", "esim", "unknown"].includes(sim.type as string) && (sim.carrier === null || text(sim.carrier)) && text(sim.state)
       && ["on", "off", "wifi", "unknown"].includes(sim.volte as string) && (sim.ims === undefined || diagnostic(sim.ims)))
     && new Set(sims.map(s => s.slot)).size === sims.length
     && presets.every(p => object(p) && [1, 2].includes(p.slot as number) && carriers.has(p.carrier as string)
@@ -72,6 +74,7 @@ export function decodeJournal(raw: string): RunJournal | null {
           || !integer(step.estSec) || (step.manual !== undefined && (!texts(step.manual) || !step.manual.every(id => manualIds.has(id))))) return null;
       definitions.set(step.id, step);
     }
+    if ((value.opts as Record<string,unknown>).backupOnly === true && (value.steps.length!==1 || value.backupItems.length===0 || value.steps.some(step => step.id !== "backup" || step.kind!=="backup" || step.wipe || (step.manual ?? []).some((id: unknown)=>!["backup-notice", "usb-debug", "smsie-export"].includes(id as string))) || config.bootloaderAction!==null || config.firmware!==null || config.sims.some(sim=>sim.carrier!==null))) return null;
     const enabled = value.steps.filter(step => step.enabled);
     if (enabled.length !== value.runSteps.length) return null;
     for (const [index, step] of value.runSteps.entries()) {
@@ -83,6 +86,16 @@ export function decodeJournal(raw: string): RunJournal | null {
           || step.manualDone > ((definitions.get(step.id as string)?.manual as string[] | undefined)?.length ?? 0)) return null;
       if (step.sub !== undefined && (!object(step.sub) || !texts(step.sub.list)
           || !integer(step.sub.done) || step.sub.done > step.sub.list.length)) return null;
+    }
+    if (value.awaitingNext !== undefined && value.awaitingNext !== null &&
+        (!text(value.awaitingNext) || value.cursor === 0 ||
+          value.runSteps[value.cursor - 1]?.id !== value.awaitingNext ||
+          !["done", "skipped"].includes(value.runSteps[value.cursor - 1]?.status))) return null;
+    if (value.backupOmissions !== undefined) {
+      const omissions = value.backupOmissions;
+      if (!object(omissions) || typeof omissions.pending !== "boolean" || !Array.isArray(omissions.apps)
+          || !omissions.apps.every(app => object(app) && text(app.package) && texts(app.reasons)
+            && integer(app.removedFiles) && integer(app.removedBytes) && typeof app.cleanupPending === "boolean")) return null;
     }
     if (value.firmware !== null && (!object(value.firmware)
         || !["partition", "path", "version", "fingerprint"].every(key => text((value.firmware as Record<string, unknown>)[key]))

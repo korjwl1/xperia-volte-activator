@@ -5,7 +5,7 @@
   import { api } from "$lib/api";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { simStateLabel, type DeviceStatus } from "$lib/types";
-  import { cellularReady, imsDetail, imsLabel } from "$lib/domain/communication";
+  import { cellularReady, simTypeLabel } from "$lib/domain/communication";
 
   const CAFE_URL = "https://cafe.naver.com/x1smart";
   const GITHUB_URL = "https://github.com/korjwl1";
@@ -153,20 +153,19 @@
           <!-- 2행: SIM 정보 -->
           <div class="w-full grid grid-cols-1 sm:grid-cols-2 gap-3">
             {#each device.sims as sim (sim.slot)}
-              <div class="rounded-xl bg-black/25 border {sim.type === 'physical' ? 'border-white/10' : 'border-white/25 border-dashed'} px-5 py-4 space-y-1.5">
+              <div class="rounded-xl bg-black/25 border {sim.type === 'esim' ? 'border-white/25 border-dashed' : 'border-white/10'} px-5 py-4 space-y-1.5">
                 <div class="flex items-center gap-2.5">
                   <span class="text-base font-bold">SIM{sim.slot}</span>
                   <span class="rounded px-1.5 py-0.5 text-[10px] font-semibold {sim.type === 'physical' ? 'bg-white/15' : 'bg-white/25'}">
-                    {sim.type === "physical" ? "물리" : "eSIM"}
+                    {simTypeLabel(sim.type)}
                   </span>
                 </div>
                 {#if sim.carrier}
                   <div class="text-base font-semibold">{sim.carrier}</div>
+                  <!-- VoLTE는 켜짐/꺼짐만 — 셀룰러 IMS 음성 등록이 확인되지 않으면 지금 VoLTE는 안 되는 상태다 -->
                   <div class="flex items-center gap-1.5 text-sm">
-                    {#if cellularReady(sim)}<CircleCheck size={14} />{:else}<TriangleAlert size={14} />{/if}
-                    {imsLabel(sim)}
+                    {#if cellularReady(sim)}<CircleCheck size={14} />VoLTE 활성{:else}<TriangleAlert size={14} />VoLTE 비활성{/if}
                   </div>
-                  <p class="text-[11px] opacity-70">{imsDetail(sim)}</p>
                 {:else}
                   <div class="text-base font-semibold opacity-50">{simStateLabel(sim.state)}</div>
                   <div class="text-sm opacity-50">
@@ -205,6 +204,10 @@
           >
             VoLTE 작업 시작
             <ArrowRight size={20} />
+          </button>
+          <button class="rounded-xl border border-primary-foreground/40 px-8 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary-foreground/10 transition-colors"
+            onclick={() => wizard.startBackupSession()}>
+            백업만 실행
           </button>
       </div>
 

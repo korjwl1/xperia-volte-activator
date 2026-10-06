@@ -75,7 +75,10 @@ requests! {
     VoltePropsSet("volte_props_set", true, cfg!(feature = "efs-write"), false) { serial: String = "sha256:<serialKey>" }
     BackupPrepare("backup_prepare", false, true, false) { serial: String = "sha256:<serialKey>", dest: String = "<existing backup parent>" }
     BackupRun("backup_run", false, true, false) { serial: String = "sha256:<serialKey>", items: Vec<String> = json!(["dcim"]), dest: String = "<existing backup parent>", resume_dir: Option<String> = Value::Null, run_id: String = "backup-test-1" }
+    BackupTransferProbe("backup_transfer_probe", false, true, false) { serial: String = "sha256:<serialKey>", remote_root: String = "/sdcard/DCIM", dest: String = "<existing probe parent>", max_files: usize = 16, max_total_bytes: u64 = 67108864 }
     BackupManifestCheck("backup_manifest_check", false, true, true) { dir: String = "<backup folder>" }
+    BackupCleanUnreadableApps("backup_clean_unreadable_apps", false, true, true) { dir: String = "<finished backup folder>" }
+    BackupMetadataEnrich("backup_metadata_enrich", false, true, false) { serial: String = "sha256:<serialKey>", dir: String = "<backup folder>" }
     ContactsRestoreFinish("contacts_restore_finish", true, true, false) { serial: String = "sha256:<serialKey>", dir: String = "<backup folder>" }
     ContactsRestoreCheck("contacts_restore_check", false, true, false) { serial: String = "sha256:<serialKey>", dir: String = "<backup folder>" }
     SmsiePrepare("smsie_prepare", true, true, false) { serial: String = "sha256:<serialKey>", download: bool = true }
@@ -280,7 +283,25 @@ async fn dispatch(req: Request, events: Events) -> Result<Value, Value> {
             backup::backup_run_with_events(events, Some(serial), items, dest, resume_dir, run_id)
                 .await,
         ),
-        Request::BackupManifestCheck { dir } => packed(backup::backup_manifest_check(dir).await),
+        Request::BackupManifestCheck { dir } => {
+            packed(backup::backup_manifest_check_with_events(events.clone(), dir, None).await)
+        }
+        Request::BackupCleanUnreadableApps { dir } => {
+            packed(backup::backup_clean_unreadable_apps(dir).await)
+        }
+        Request::BackupMetadataEnrich { serial, dir } => {
+            packed(backup::backup_metadata_enrich(events, serial, dir).await)
+        }
+        Request::BackupTransferProbe {
+            serial,
+            remote_root,
+            dest,
+            max_files,
+            max_total_bytes,
+        } => packed(
+            backup::transfer_probe::run(serial, remote_root, dest, max_files, max_total_bytes)
+                .await,
+        ),
         Request::ContactsRestoreCheck { serial, dir } => {
             packed(backup::contacts_restore_check(Some(serial), dir).await)
         }
@@ -542,7 +563,7 @@ async fn backup_gate(
             if !dir.is_absolute() {
                 return Err("--backup-dir는 절대 경로여야 합니다".into());
             }
-            let summary = crate::backup::backup_manifest_check(dir.to_string_lossy().into_owned())
+            let summary = crate::backup::backup_manifest_check_with_events(Events::callback(|_,_|Ok(())),dir.to_string_lossy().into_owned(),None)
                 .await?
                 .ok_or("--backup-dir 백업 폴더가 없습니다")?;
             if !summary.complete {
@@ -780,6 +801,15 @@ async fn run(
 }
 
 fn outcome_ok(command: &str, value: &Value) -> bool {
+    if command == "backup_metadata_enrich"
+        && !value.as_array().is_some_and(|receipts| {
+            receipts
+                .iter()
+                .all(|r| r.get("complete") == Some(&json!(true)))
+        })
+    {
+        return false;
+    }
     if matches!(command, "backup_run" | "backup_manifest_check")
         && value.get("complete") != Some(&json!(true))
     {
@@ -976,6 +1006,17 @@ pub fn main_entry(args: impl Iterator<Item = OsString>) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn attribute_receipts_with_missing_records_are_not_cli_success() {
+        assert!(!super::outcome_ok(
+            "backup_metadata_enrich",
+            &serde_json::json!([{ "complete":false }])
+        ));
+        assert!(super::outcome_ok(
+            "backup_metadata_enrich",
+            &serde_json::json!([{ "complete":true }])
+        ));
+    }
     use super::*;
 
     #[test]

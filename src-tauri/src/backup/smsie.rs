@@ -12,8 +12,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub const SMSIE_PKG: &str = "com.github.tmo1.sms_ie";
-/// 기기 측 임시 폴더 — 고정 경로만 rm -rf 한다(그 외 삭제 금지)
-pub const DEVICE_TMP_DIR: &str = "/sdcard/xvolte-smsie";
+/// 기기 측 내보내기 폴더 — 검증한 선택 산출물만 rm -f로 정리한다.
+pub const DEVICE_TMP_DIR: &str = "/sdcard/volte_sms_backup";
 const GH_RELEASES_API: &str = "https://api.github.com/repos/tmo1/sms-ie/releases/latest";
 const SMS_ROLE: &str = "android.app.role.SMS";
 /// 한 기기에서 기본 SMS 역할은 하나여야 한다. 오류/여러 응답을 빈 역할로 추측하지 않는다.
@@ -187,6 +187,22 @@ pub fn prepare(
     prepare_with_pins(dev, apk, apk_verify::SMSIE_CERT_SHA256)
 }
 
+/// Open the app only; export/import buttons and the save picker remain user actions.
+pub fn open_export_app(dev: &mut dyn ADBDeviceExt) -> Result<(), String> {
+    let output = run(dev, &format!("am start -n {SMSIE_PKG}/.MainActivity"))?;
+    if output.lines().any(|line| {
+        let line = line.trim();
+        line.starts_with("Error:") || line.starts_with("Exception")
+    }) || !output.contains("Starting: Intent")
+    {
+        return Err(format!(
+            "문자 백업 앱 실행을 확인할 수 없습니다: {}",
+            output.trim()
+        ));
+    }
+    Ok(())
+}
+
 fn prepare_with_pins(
     dev: &mut dyn ADBDeviceExt,
     apk: Option<&(PathBuf, String)>,
@@ -242,7 +258,21 @@ fn item_for(name: &str) -> Option<&'static str> {
     }
 }
 
-/// 수집 — 임시 폴더의 파일을 전부 받아(smsie/) 항목 기록 병합. 비었으면 not_ready.
+pub fn probe(dev: &mut dyn ADBDeviceExt, selected: &[&str]) -> Result<bool, String> {
+    let entries = dev
+        .list(&DEVICE_TMP_DIR)
+        .map_err(|e| format!("내보내기 파일 목록 조회 실패: {e}"))?;
+    let found: std::collections::HashSet<_> = entries
+        .into_iter()
+        .filter_map(|e| match e {
+            adb_client::ADBListItemType::File(f) if f.size > 0 => item_for(&f.name),
+            _ => None,
+        })
+        .collect();
+    Ok(!selected.is_empty() && selected.iter().all(|id| found.contains(id)))
+}
+
+/// 문자·통화 수집 — 연락처 JSON은 제외하고 기존 VCF 백업을 사용한다.
 /// 삭제는 선택 항목 검증과 manifest 저장이 모두 끝난 뒤 명령 층에서 실행한다.
 pub fn collect(
     dev: &mut dyn ADBDeviceExt,
@@ -256,7 +286,7 @@ pub fn collect(
     let mut found: Vec<(String, u64, u32)> = Vec::new();
     for e in entries {
         if let adb_client::ADBListItemType::File(f) = e {
-            if f.name.ends_with(".apk") {
+            if item_for(&f.name).is_none() || !selected.contains(&item_for(&f.name).unwrap()) {
                 continue;
             }
             found.push((f.name, f.size as u64, f.time));
@@ -303,7 +333,7 @@ pub fn collect(
                 let rec = records
                     .iter_mut()
                     .find(|(rid, _)| rid == id)
-                    .expect("2종 준비됨");
+                    .expect("산출물 종류 준비됨");
                 rec.1.entries.push(entry);
             }
             None => {
@@ -359,8 +389,36 @@ pub(super) fn selected_done(records: &[(String, ItemRecord)], selected: &[&str])
         })
 }
 
-pub(super) fn cleanup_exports(dev: &mut dyn ADBDeviceExt) -> Result<(), String> {
-    run(dev, &format!("rm -rf {DEVICE_TMP_DIR}")).map(|_| ())
+pub(super) fn cleanup_exports(
+    dev: &mut dyn ADBDeviceExt,
+    records: &[ItemRecord],
+) -> Result<(), String> {
+    for record in records {
+        for entry in &record.entries {
+            let name = entry
+                .remote
+                .strip_prefix(&format!("{DEVICE_TMP_DIR}/"))
+                .ok_or("내보내기 정리 경로 오류")?;
+            if name.contains('/')
+                || item_for(name) != Some(record.id.as_str())
+                || entry.error.is_some()
+                || entry.sha256.is_none()
+            {
+                return Err("검증되지 않은 내보내기 파일은 삭제할 수 없습니다".into());
+            }
+            let stat = dev
+                .stat_extended(&entry.remote)
+                .map_err(|e| e.to_string())?;
+            if let Some(stat) = stat {
+                if stat.size != entry.size || stat.mtime != entry.mtime {
+                    return Err("백업 후 변경된 내보내기 파일을 폰에 보존했습니다".into());
+                }
+                let quoted = format!("'{}'", entry.remote.replace('\'', "'\"'\"'"));
+                run(dev, &format!("rm -f -- {quoted}"))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 pub enum CollectState {
@@ -426,9 +484,22 @@ pub fn restore_stage(
             .map_err(|e| format!("{name} 전송 실패: {e}"))?;
     }
     stage_role(dev, state_dir)?;
+    open_export_app(dev)?;
     let list = names.join(", ");
+    let instructions = manifest
+        .items
+        .iter()
+        .map(|item| {
+            if item.id == "sms" {
+                "Import Messages → messages*.zip"
+            } else {
+                "Import Call Log → calls*.json"
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     Ok(format!(
-        "폰을 비행기 모드로 전환했는지 확인하세요(전환 중 수신 문자 유실 방지).\nSMS Import/Export 앱에서 Import → {DEVICE_TMP_DIR}의 파일({list})을 선택해 가져오세요. 끝나면 [완료]를 눌러주세요.",
+        "폰을 비행기 모드로 전환했는지 확인하세요(전환 중 수신 문자 유실 방지).\n내장 저장소 → volte_sms_backup에 검증한 파일({list})을 올려 두었습니다.\n{instructions}\n선택한 항목의 성공 안내를 확인한 뒤 [확인하고 진행]을 눌러주세요.",
     ))
 }
 
@@ -468,7 +539,10 @@ pub fn restore_finish(dev: &mut dyn ADBDeviceExt, state_dir: &Path) -> Result<Ve
         return Err("기본 문자 앱 원복 명령 후 실제 역할을 확인하지 못했습니다".into());
     }
     super::sms_role::remove(state_dir, &key)?;
-    let _ = run(dev, &format!("rm -rf {DEVICE_TMP_DIR}"));
+    log.push(
+        "가져오기 파일은 volte_sms_backup에 보존했습니다. 필요 없으면 직접 삭제할 수 있습니다"
+            .into(),
+    );
     log.push(
         "완전한 반영을 위해 문자 앱 설정에서 저장공간/캐시 삭제가 필요할 수 있습니다(앱 캐싱)"
             .into(),
@@ -484,9 +558,11 @@ mod tests {
     fn export_names_follow_sms_ie() {
         // sms-ie 원본: "messages$dateInString.zip", "calls$dateInString.json"
         assert_eq!(item_for("messages-2026-10-05.zip"), Some("sms"));
+        assert_eq!(item_for("messages-2027-01-02 (1).zip"), Some("sms"));
         assert_eq!(item_for("calls-2026-10-05.json"), Some("calllog"));
+        assert_eq!(item_for("calls-2025-12-31 (2).json"), Some("calllog"));
         assert_eq!(item_for("Calls 2026-10-05.json"), Some("calllog"));
-        assert_eq!(item_for("contacts-2026-10-05.json"), None);
+        assert_eq!(item_for("contacts-2027-01-02 (1).json"), None);
     }
 
     #[test]
@@ -529,6 +605,10 @@ mod tests {
         d.answer_shell("mkdir", "");
         d.answer_shell("rm -rf", "");
         d.answer_shell("cmd role", "");
+        d.answer_shell(
+            "am start",
+            "Starting: Intent { cmp=com.github.tmo1.sms_ie/.MainActivity }",
+        );
         d
     }
 
@@ -557,10 +637,30 @@ mod tests {
                 assert_eq!(calls.1.status, ItemStatus::Done);
                 assert_eq!(sms.1.files, 1);
                 assert!(tmp.path().join("smsie/messages-2026-10-03.zip").exists());
-                assert!(!d.shell_calls.iter().any(|c| c.starts_with("rm -rf")));
+                assert!(!d.shell_calls.iter().any(|c| c.starts_with("rm -f --")));
             }
             _ => panic!("records 여야 함"),
         }
+    }
+
+    #[test]
+    fn contacts_only_exports_are_not_sms_readiness_and_are_never_pulled() {
+        let mut device = dev_ready();
+        device.add_dir(DEVICE_TMP_DIR);
+        for name in ["contacts-2027-01-02.json", "Contacts-2028-03-04 (1).JSON"] {
+            device.add_file(
+                &format!("{DEVICE_TMP_DIR}/{name}"),
+                b"invalid JSON",
+                1,
+                0o644,
+            );
+        }
+        let root = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            collect(&mut device, root.path(), &["sms", "calllog"]).unwrap(),
+            CollectState::NotReady
+        ));
+        assert!(device.pull_calls.is_empty());
     }
 
     #[test]
@@ -728,6 +828,30 @@ mod tests {
     }
 
     #[test]
+    fn export_app_launch_rejects_errors_and_preparation_creates_the_requested_folder() {
+        let mut d = dev_ready();
+        prepare(&mut d, None).unwrap();
+        assert!(d
+            .shell_calls
+            .iter()
+            .any(|cmd| cmd == "mkdir -p /sdcard/volte_sms_backup"));
+        open_export_app(&mut d).unwrap();
+        assert!(d
+            .shell_calls
+            .iter()
+            .any(|cmd| cmd == "am start -n com.github.tmo1.sms_ie/.MainActivity"));
+        for output in [
+            "",
+            "Starting: Intent\nError: Activity not started",
+            "Exception: permission denied",
+        ] {
+            let mut broken = FakeADBDevice::new();
+            broken.answer_shell("am start", output);
+            assert!(open_export_app(&mut broken).is_err());
+        }
+    }
+
+    #[test]
     fn adversarial_uninstalled_restore_requires_install_and_permissions() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sms-ie.apk");
@@ -776,8 +900,31 @@ mod tests {
     }
 
     #[test]
-    fn unknown_export_cannot_become_complete() {
+    fn probe_only_lists_and_never_pulls_exports() {
+        let mut dev = dev_ready();
+        dev.add_dir(DEVICE_TMP_DIR);
+        dev.add_file(
+            &format!("{DEVICE_TMP_DIR}/messages-2099-10-07 (1).zip"),
+            b"large",
+            1,
+            0o644,
+        );
+        assert!(probe(&mut dev, &["sms"]).unwrap());
+        assert!(!probe(&mut dev, &["sms", "calllog"]).unwrap());
+        dev.add_file(
+            &format!("{DEVICE_TMP_DIR}/calls-2099-10-07.json"),
+            b"[]",
+            1,
+            0o644,
+        );
+        assert!(probe(&mut dev, &["sms", "calllog"]).unwrap());
+        assert!(dev.pull_calls.is_empty());
+        assert!(dev.shell_calls.is_empty());
+    }
+    #[test]
+    fn unrelated_user_files_are_never_collected_or_deleted() {
         let mut d = dev_ready();
+        d.answer_shell("rm -f --", "");
         d.add_dir(DEVICE_TMP_DIR);
         d.add_file(
             &format!("{DEVICE_TMP_DIR}/messages-1.zip"),
@@ -793,14 +940,20 @@ mod tests {
             panic!()
         };
         let (_, sms) = records.iter().find(|(id, _)| id == "sms").unwrap();
-        assert_eq!(sms.status, ItemStatus::Partial);
-        assert!(!sms.errors.is_empty());
+        assert_eq!(sms.status, ItemStatus::Done);
+        assert!(sms.errors.is_empty());
+        assert!(!d.pull_calls.iter().any(|p| p.ends_with("unknown.json")));
+        cleanup_exports(&mut d, &[sms.clone()]).unwrap();
+        assert!(!d
+            .shell_calls
+            .iter()
+            .any(|c| c.contains("unknown.json") || c.starts_with("rm -rf")));
     }
 
     #[test]
     fn device_copy_is_removed_when_every_selected_item_is_done() {
         let mut d = dev_ready();
-        d.answer_shell(&format!("rm -rf {DEVICE_TMP_DIR}"), "");
+        d.answer_shell("rm -f --", "");
         d.add_dir(DEVICE_TMP_DIR);
         d.add_file(
             &format!("{DEVICE_TMP_DIR}/messages-1.zip"),
@@ -809,14 +962,24 @@ mod tests {
             0o644,
         );
         let tmp = tempfile::tempdir().unwrap();
-        let removed = |d: &FakeADBDevice| d.shell_calls.iter().any(|c| c.starts_with("rm -rf"));
+        let removed = |d: &FakeADBDevice| d.shell_calls.iter().any(|c| c.starts_with("rm -f --"));
         // 통화 기록도 골랐다면 아직 끝나지 않았다 — 지우지 않는다
         collect(&mut d, tmp.path(), &["sms", "calllog"]).unwrap();
         assert!(!removed(&d));
         // 문자만 골랐다면 끝났다 — 개인 데이터 사본을 지운다
-        collect(&mut d, tmp.path(), &["sms"]).unwrap();
+        let CollectState::Records(records) = collect(&mut d, tmp.path(), &["sms"]).unwrap() else {
+            panic!("records")
+        };
         assert!(!removed(&d));
-        cleanup_exports(&mut d).unwrap();
+        cleanup_exports(
+            &mut d,
+            &records
+                .into_iter()
+                .filter(|(id, _)| id == "sms")
+                .map(|(_, rec)| rec)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
         assert!(removed(&d));
     }
 

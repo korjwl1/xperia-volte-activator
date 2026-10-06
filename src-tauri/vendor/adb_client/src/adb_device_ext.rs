@@ -45,7 +45,7 @@ pub trait ADBDeviceExt {
     ) -> Result<Option<ADBStatExtendedResponse>> {
         let mut stdout = Vec::new();
         self.shell_command(
-            &format!("stat {}", remote_path.as_ref()),
+            &format!("stat -- '{}'", remote_path.as_ref().replace('\'', "'\\''")),
             Some(&mut stdout),
             None,
         )?;
@@ -56,6 +56,22 @@ pub trait ADBDeviceExt {
 
     /// Pull the remote file pointed to by `source` and write its contents into `output`
     fn pull(&mut self, source: &dyn AsRef<str>, output: &mut dyn Write) -> Result<()>;
+
+    /// Keep a read-only SYNC stream across consecutive LIST/RECV requests.
+    /// False means this transport retains its per-request implementation.
+    fn begin_sync_batch(&mut self) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Finish the batch, including on cancellation or an error.
+    fn end_sync_batch(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// A detected protocol failure means this connection must be replaced before retry.
+    fn needs_reconnect(&self) -> bool {
+        false
+    }
 
     /// Push `stream` to `path` on the device.
     fn push(&mut self, stream: &mut dyn Read, path: &dyn AsRef<str>) -> Result<()>;

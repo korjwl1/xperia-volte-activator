@@ -89,7 +89,7 @@
   }
 
   function onPrev() {
-    if (wizard.view === "step2") wizard.view = "step1";
+    if (wizard.view === "step2") wizard.view = wizard.opts.backupOnly ? "device" : "step1";
     else if (wizard.view === "step1") wizard.view = "warning";
     else if (wizard.view === "warning") wizard.view = "device";
   }

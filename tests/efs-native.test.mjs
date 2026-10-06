@@ -366,7 +366,7 @@ test("legacy or changed-SIM journals recheck communication without rewriting use
     assert.ok(decodeJournal(JSON.stringify(journal)));
     assert.equal(decodeJournal(JSON.stringify({ ...journal, callVerified: "true" })), null);
     w.pendingJournal = journal;
-    w.resumeJournal();
+    w.omdAck=true; w.riskAck=true; w.resumeJournal();
     assert.equal(w.runSteps[0].status, "done");
     assert.equal(w.runSteps[1].status, "pending");
     assert.equal(w.imsVerified, false);
@@ -627,7 +627,7 @@ test("changed baseband on resume invalidates detailed communication proof but pr
   const journal = { version: 1, model: w.device.model, productName: "Xperia", serialMasked: "TEST", startedAt: "", updatedAt: "", backupPath: "", firmwareDir: "", config: { ...w.volteConfig }, opts: { unroot: false, relock: false, restore: false }, backupItems: [], steps, runSteps: steps.map(s => ({ id: s.id, title: s.title, status: "done", progress: 1, logs: [], manualDone: s.manual?.length ?? 0 })), cursor: 2, firmware: null, stop: null, imsVerified: true, callVerified: true,
     communication: { before: null, latest: w.communicationLatest, calls: [1, 2].map(slot => ({ slot, outgoing: true, incoming: true, audio: true, afterReboot: false, afterIdle: false })) } };
   assert.ok(decodeJournal(JSON.stringify(journal)));
-  w.pendingJournal = journal; w.resumeJournal();
+  w.pendingJournal = journal; w.omdAck=true; w.riskAck=true; w.resumeJournal();
   assert.equal(w.runSteps[0].status, "done"); assert.equal(w.runSteps[1].status, "pending");
   assert.equal(w.imsVerified, false); assert.equal(w.callVerified, false);
   assert.equal(w.communicationLatest, null); assert.deepEqual(w.callChecks, []);

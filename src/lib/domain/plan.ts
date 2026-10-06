@@ -6,6 +6,7 @@ import { CARRIER_LABEL } from "$lib/types";
 import { deviceWorkflow } from "$lib/data/devices";
 
 export interface PlanOptions {
+  backupOnly?: boolean;
   unroot: boolean;
   relock: boolean;
   restore: boolean;
@@ -39,6 +40,7 @@ export function buildPlan(
   hasBackup: boolean,
 ): PlanStep[] {
   if (!device) return [];
+  if (opts.backupOnly) return hasBackup ? finalize([{ id: "backup", kind: "backup", title: "백업", desc: "선택한 항목과 원본 속성을 PC에 보존합니다", risk: "warn", estSec: 1800, manual: ["backup-notice"] }]) : [];
   const only = bootloaderOnly(device, config);
   if (only) return finalize(bootloaderOnlyPlan(device, only, opts, hasBackup));
   const steps: Seed[] = [];

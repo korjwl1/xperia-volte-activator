@@ -6,12 +6,13 @@ use crate::backup::contacts;
 use crate::backup::model::{
     load_manifest, save_manifest_atomic, BackupSummary, ItemKind, ItemRecord, ItemStatus, Manifest,
 };
-use crate::backup::puller::{pull_item_files, CancelFlag, PullFile, PullProgress};
+use crate::backup::puller::{pull_item_files_resuming, CancelFlag, PullFile, PullProgress};
 use crate::backup::quarantine::Quarantine;
 use crate::backup::settings;
 use crate::backup::walker::{self};
 use crate::backup::winname::SeenPaths;
 use adb_client::ADBDeviceExt;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// 진행 알림 — mod.rs에서 이벤트 페이로드로 변환
@@ -65,9 +66,89 @@ struct TreeCtx<'c, 's> {
     quarantine: &'c mut Quarantine,
     cancel: &'c CancelFlag,
     on_progress: &'c mut ProgressSink<'s>,
+    verified: &'c HashMap<String, super::model::FileEntry>,
+    source_metadata: Vec<super::source_metadata::Snapshot>,
+    previous_metadata: Vec<super::source_metadata::Snapshot>,
 }
 
 impl TreeCtx<'_, '_> {
+    fn remember_metadata(
+        &mut self,
+        mut snapshot: super::source_metadata::Snapshot,
+    ) -> Result<(), String> {
+        let mut manifest = load_manifest(self.root)?;
+        if let Some(old) = manifest
+            .source_metadata
+            .iter()
+            .find(|r| r.item_id == snapshot.item_id)
+        {
+            let previous = match super::source_metadata::load(self.root, old) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    snapshot.limitations.push(format!(
+                        "Previous attribute record unavailable; new observation: {error}"
+                    ));
+                    for attr in &mut snapshot.entries {
+                        attr.capture_context = "resume-observation".into();
+                    }
+                    self.source_metadata.push(snapshot.clone());
+                    let receipt = super::source_metadata::publish(self.root, &snapshot)?;
+                    manifest
+                        .source_metadata
+                        .retain(|r| r.item_id != receipt.item_id);
+                    manifest.source_metadata.push(receipt);
+                    return save_manifest_atomic(&manifest, self.root);
+                }
+            };
+            self.previous_metadata.push(previous.clone());
+            let old_attrs: HashMap<_, _> = previous
+                .entries
+                .into_iter()
+                .map(|a| (a.remote.clone(), a))
+                .collect();
+            for attr in &mut snapshot.entries {
+                if let Some(old) = old_attrs.get(&attr.remote) {
+                    let retained = self.verified.get(&attr.remote);
+                    if (old.mode & 0o170000 == 0o040000 && attr.mode & 0o170000 == 0o040000)
+                        || (old.size == attr.size
+                            && old.modification_time == attr.modification_time
+                            && old.mode & 0o170000 == attr.mode & 0o170000)
+                        || retained.is_some_and(|file| {
+                            (old.backup_sha256.is_none() || old.backup_sha256 == file.sha256)
+                                && old.size == file.size
+                                && (old.modification_time as u32) == file.mtime
+                                && file.size == attr.size
+                                && i64::from(file.mtime) == attr.modification_time
+                        })
+                    {
+                        *attr = old.clone();
+                    }
+                }
+            }
+            let present: std::collections::HashSet<_> =
+                snapshot.entries.iter().map(|a| a.remote.clone()).collect();
+            for (remote, attr) in old_attrs {
+                if (attr.mode & 0o170000 == 0o040000
+                    || self.verified.get(&remote).is_some_and(|file| {
+                        attr.backup_sha256.is_some() && attr.backup_sha256 == file.sha256
+                    }))
+                    && !present.contains(&remote)
+                {
+                    snapshot.entries.push(attr);
+                }
+            }
+        }
+        let receipt = super::source_metadata::publish(self.root, &snapshot)?;
+        manifest
+            .source_metadata
+            .retain(|r| r.item_id != receipt.item_id);
+        manifest.source_metadata.push(receipt);
+        manifest.touch();
+        save_manifest_atomic(&manifest, self.root)?;
+        self.source_metadata.push(snapshot);
+        Ok(())
+    }
+
     fn pull(
         &mut self,
         id: &str,
@@ -75,7 +156,7 @@ impl TreeCtx<'_, '_> {
         local_for: &dyn Fn(&PullFile) -> PathBuf,
     ) -> ItemRecord {
         let on_progress = &mut *self.on_progress;
-        pull_item_files(
+        let record = pull_item_files_resuming(
             self.dev,
             id,
             ItemKind::Files,
@@ -85,8 +166,10 @@ impl TreeCtx<'_, '_> {
             self.seen,
             self.quarantine,
             self.cancel,
+            self.verified,
             |p| on_progress(copy_progress(id, &p)),
-        )
+        );
+        record
     }
 
     /// 기기 폴더 하나를 전수 열거해 받는 항목 — `local`은 기기 경로 → 백업 루트 상대 경로
@@ -97,11 +180,40 @@ impl TreeCtx<'_, '_> {
         skip: &dyn Fn(&str) -> bool,
         local: &dyn Fn(&str) -> String,
     ) -> ItemRecord {
+        (self.on_progress)(StepProgress::start(id, "scan", 0));
         let walker::WalkResult {
             files,
+            directories,
             skipped,
             errors,
-        } = walker::walk_cancellable(self.dev, remote_root, skip, self.cancel);
+        } = walker::walk_with_progress(
+            self.dev,
+            remote_root,
+            skip,
+            self.cancel,
+            &mut |directories, files| {
+                // Totals are unknown until enumeration ends; never count discovered files as copied.
+                let mut progress = StepProgress::start(id, "scan", files);
+                progress.file = Some(format!("폴더 {directories}개 · 파일 {files}개 확인"));
+                (self.on_progress)(progress);
+            },
+        );
+        let paths = files
+            .iter()
+            .map(|f| f.remote.clone())
+            .chain(directories)
+            .collect();
+        let snapshot = super::source_metadata::capture(
+            self.dev,
+            id,
+            paths,
+            "before-copy",
+            self.cancel,
+            &mut |done, total| (self.on_progress)(StepProgress::at(id, "metadata", done, total)),
+        );
+        if let Err(error) = self.remember_metadata(snapshot) {
+            return ItemRecord::new(id, ItemKind::Files).fail(error);
+        }
         let files: Vec<PullFile> = files.into_iter().map(PullFile::plain).collect();
         let mut rec = self.pull(id, &files, &|pf| PathBuf::from(local(&pf.entry.remote)));
         merge_walk(&mut rec, errors, &skipped);
@@ -119,13 +231,22 @@ fn collect_apks(ctx: &mut TreeCtx, id: &str) -> ItemRecord {
     };
     let mut files: Vec<PullFile> = Vec::new();
     let mut walk_errors: Vec<String> = Vec::new();
+    let mut directories = Vec::new();
     for (pkg, dir) in dirs {
         if ctx.cancel.cancelled() {
             walk_errors.push("열거가 취소됐습니다".into());
             break;
         }
         let w = walker::walk_cancellable(ctx.dev, &dir, &|_| false, ctx.cancel);
+        if !w
+            .files
+            .iter()
+            .any(|file| file.remote.rsplit('/').next() == Some("base.apk"))
+        {
+            walk_errors.push(format!("{pkg}: 설치 APK의 base.apk를 확인하지 못했습니다"));
+        }
         walk_errors.extend(w.errors);
+        directories.extend(w.directories);
         files.extend(
             w.files
                 .into_iter()
@@ -136,9 +257,32 @@ fn collect_apks(ctx: &mut TreeCtx, id: &str) -> ItemRecord {
                 }),
         );
     }
+    let paths = files
+        .iter()
+        .map(|f| f.entry.remote.clone())
+        .chain(directories)
+        .collect();
+    let snapshot = super::source_metadata::capture(
+        ctx.dev,
+        id,
+        paths,
+        "before-copy",
+        ctx.cancel,
+        &mut |done, total| (ctx.on_progress)(StepProgress::at(id, "metadata", done, total)),
+    );
+    if let Err(error) = ctx.remember_metadata(snapshot) {
+        return ItemRecord::new(id, ItemKind::Files).fail(error);
+    }
     let mut rec = ctx.pull(id, &files, &|pf| {
         let name = pf.entry.remote.rsplit('/').next().unwrap_or("apk");
-        PathBuf::from(format!("apks/{}/{}", pf.tag, name))
+        let parent = pf
+            .entry
+            .remote
+            .rsplit_once('/')
+            .map(|(p, _)| p)
+            .unwrap_or("");
+        let prefix = crate::boot_image::sha256(parent.as_bytes());
+        PathBuf::from(format!("apks/{}/{}-{name}", pf.tag, &prefix[..16]))
     });
     rec.errors.extend(walk_errors);
     rec.finalize();
@@ -351,9 +495,26 @@ pub fn run_backup_items(
             item.status = ItemStatus::Pending;
         }
     }
-    if resume_dir.is_some() {
-        crate::backup::verify::verify_selected(&root, &mut manifest, items);
+    super::recovery::repair_segments(&root, &mut manifest)?;
+    if super::source_metadata::rejudge_receipts(&root, &mut manifest) {
+        manifest.touch();
+        save_manifest_atomic(&manifest, &root)?;
     }
+    let mut verified = if resume_dir.is_some() {
+        crate::backup::verify::verify_selected_retaining_progress(
+            &root,
+            &mut manifest,
+            items,
+            cancel,
+            on_progress,
+        )
+    } else {
+        HashMap::new()
+    };
+    if cancel.cancelled() && resume_dir.is_some() {
+        return Err(format!("{} — 완료 파일은 보존됩니다", cancel.reason()));
+    }
+    super::recovery::clean_temporaries(&root)?;
     for id in items {
         if !manifest.items.iter().any(|item| item.id == *id) {
             manifest.record(ItemRecord::new(id, item_kind(id)));
@@ -362,7 +523,41 @@ pub fn run_backup_items(
     save_manifest_atomic(&manifest, &root)?;
     let mut quarantine = Quarantine::new(&root)?;
     let mut seen = SeenPaths::new();
+    // Completed items and deleted phone files still own their PC paths.
+    for item in &manifest.items {
+        let Some(entries) = verified.get(&item.id) else {
+            continue;
+        };
+        for entry in item
+            .entries
+            .iter()
+            .filter(|entry| !entry.quarantined && entries.contains_key(&entry.remote))
+        {
+            super::winname::check_relative_path(&entry.local, &entry.remote, &mut seen);
+        }
+    }
 
+    if resume_dir.is_some() && items.iter().any(|id| id == "apk") {
+        let dirs = package_install_dirs(dev)?;
+        if let Some(apk) = manifest.items.iter_mut().find(|i| i.id == "apk") {
+            let changed = dirs.iter().any(|(pkg, dir)| {
+                let old: Vec<_> = apk
+                    .entries
+                    .iter()
+                    .filter(|e| e.local.split('/').nth(1) == Some(pkg.as_str()))
+                    .collect();
+                old.is_empty()
+                    || old.iter().any(|e| {
+                        e.remote
+                            .rsplit_once('/')
+                            .is_none_or(|(parent, _)| parent != dir)
+                    })
+            });
+            if changed {
+                apk.status = ItemStatus::Partial;
+            }
+        }
+    }
     for id in items {
         if cancel.cancelled() {
             break;
@@ -373,12 +568,19 @@ pub fn run_backup_items(
                 continue;
             }
         }
-        let retained = manifest
+        let retained =
+            if manifest.items.iter().any(|item| {
+                item.id == *id && matches!(item.kind, ItemKind::Files | ItemKind::SmsIe)
+            }) {
+                verified.remove(id).unwrap_or_default()
+            } else {
+                HashMap::new()
+            };
+        let previous_entries = manifest
             .items
             .iter()
-            .find(|i| i.id == *id)
-            .filter(|i| i.kind == ItemKind::Files || i.kind == ItemKind::SmsIe)
-            .map(|i| super::verify::retained_entries(&root, i))
+            .find(|i| i.id == *id && matches!(i.kind, ItemKind::Files | ItemKind::SmsIe))
+            .map(|i| i.entries.clone())
             .unwrap_or_default();
         let mut ctx = TreeCtx {
             dev: &mut *dev,
@@ -387,6 +589,9 @@ pub fn run_backup_items(
             quarantine: &mut quarantine,
             cancel,
             on_progress: &mut *on_progress,
+            verified: &retained,
+            source_metadata: Vec::new(),
+            previous_metadata: Vec::new(),
         };
         let mut rec: ItemRecord = match id.as_str() {
             "settings-all" => {
@@ -400,12 +605,21 @@ pub fn run_backup_items(
             // SMS Import/Export 세미수동 — smsie_prepare/collect가 채운다
             "calllog" | "sms" => ItemRecord::new(id, ItemKind::SmsIe),
             "apk" => collect_apks(&mut ctx, id),
-            "app-data" => ctx.tree_item(id, walker::ANDROID_DATA_ROOT, &|_| false, &|remote| {
-                let rest = remote
-                    .strip_prefix("/sdcard/Android/data/")
-                    .unwrap_or(remote);
-                format!("android-data/{rest}")
-            }),
+            "app-data" => ctx.tree_item(
+                id,
+                walker::ANDROID_DATA_ROOT,
+                &|remote| {
+                    super::omissions::package(remote).is_some_and(|name| {
+                        manifest.omitted_apps.iter().any(|app| app.package == name)
+                    })
+                },
+                &|remote| {
+                    let rest = remote
+                        .strip_prefix("/sdcard/Android/data/")
+                        .unwrap_or(remote);
+                    format!("android-data/{rest}")
+                },
+            ),
             "fs-rest" => {
                 ctx.tree_item(id, walker::FS_REST_ROOT, &walker::fs_rest_skip, &|remote| {
                     let rest = remote.strip_prefix("/sdcard/").unwrap_or(remote);
@@ -426,8 +640,38 @@ pub fn run_backup_items(
                 })
             }
         };
-        for entry in retained {
-            if let Some(index) = rec.entries.iter().position(|e| e.remote == entry.remote) {
+        let snapshots = std::mem::take(&mut ctx.source_metadata);
+        let previous_metadata = std::mem::take(&mut ctx.previous_metadata);
+        drop(ctx);
+        let entry_indices: HashMap<_, _> = rec
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (entry.remote.clone(), index))
+            .collect();
+        let successful_apk_packages: std::collections::HashSet<_> = if id == "apk"
+            && rec.errors.is_empty()
+            && rec.entries.iter().all(|e| e.error.is_none())
+        {
+            rec.entries
+                .iter()
+                .filter_map(|e| e.local.split('/').nth(1).map(String::from))
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
+        for entry in retained.into_values() {
+            if id == "apk"
+                && entry
+                    .local
+                    .split('/')
+                    .nth(1)
+                    .is_some_and(|pkg| successful_apk_packages.contains(pkg))
+                && !entry_indices.contains_key(&entry.remote)
+            {
+                continue;
+            }
+            if let Some(&index) = entry_indices.get(&entry.remote) {
                 if rec.entries[index].error.is_some() {
                     // Keep the good snapshot's hash/provenance while recording the failed retry in errors.
                     rec.bytes += entry.size;
@@ -438,7 +682,68 @@ pub fn run_backup_items(
                 rec.entries.push(entry);
             }
         }
+        let present: std::collections::HashSet<_> =
+            rec.entries.iter().map(|e| e.remote.clone()).collect();
+        for mut old in previous_entries
+            .into_iter()
+            .filter(|entry| entry.sha256.is_some())
+        {
+            if present.contains(&old.remote)
+                || (id == "apk"
+                    && old
+                        .local
+                        .split('/')
+                        .nth(1)
+                        .is_some_and(|p| successful_apk_packages.contains(p)))
+            {
+                continue;
+            }
+            let error = format!(
+                "검증하지 못한 이전 백업 파일을 원본에서도 다시 수집하지 못했습니다: {}",
+                old.remote
+            );
+            old.error = Some(error.clone());
+            rec.errors.push(error);
+            rec.entries.push(old);
+        }
         rec.files = rec.entries.len() as u32;
+        for mut snapshot in snapshots {
+            let current: HashMap<_, _> = rec.entries.iter().map(|e| (&e.remote, e)).collect();
+            let mut attributes: HashMap<_, _> = snapshot
+                .entries
+                .into_iter()
+                .map(|a| (a.remote.clone(), a))
+                .collect();
+            for previous in &previous_metadata {
+                for attr in &previous.entries {
+                    if current.get(&attr.remote).is_some_and(|e| {
+                        e.error.is_none()
+                            && e.sha256.is_some()
+                            && attr.backup_sha256 == e.sha256
+                            && attr.size == e.size
+                            && (attr.modification_time as u32) == e.mtime
+                    }) {
+                        attributes.insert(attr.remote.clone(), attr.clone());
+                        snapshot.issues.retain(|i| i.remote != attr.remote);
+                    }
+                }
+            }
+            snapshot.entries = attributes.into_values().collect();
+            snapshot.entries.sort_by(|a, b| a.remote.cmp(&b.remote));
+            super::source_metadata::refresh_copied(
+                &mut *dev,
+                &root,
+                &mut snapshot,
+                &mut rec.entries,
+                cancel,
+            );
+            super::source_metadata::associate(&mut snapshot, &rec.entries);
+            let receipt = super::source_metadata::publish(&root, &snapshot)?;
+            manifest
+                .source_metadata
+                .retain(|r| r.item_id != receipt.item_id);
+            manifest.source_metadata.push(receipt);
+        }
         // A pending SMS export still needs the export collector's content validation.
         if rec.kind == ItemKind::Files {
             rec.finalize();
@@ -470,6 +775,9 @@ pub fn run_backup_items(
         manifest.touch();
         save_manifest_atomic(&manifest, &root)?;
     }
+    if !cancel.cancelled() {
+        super::omissions::clean(&root, &mut manifest)?;
+    }
     let mut summary = BackupSummary::from(&manifest);
     summary.dir = root.to_string_lossy().to_string();
     Ok(summary)
@@ -478,6 +786,61 @@ pub fn run_backup_items(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backup_finishes_with_whole_app_exclusion_and_resume_does_not_recollect_it() {
+        let mut device = dev_full();
+        let app = "/sdcard/Android/data/org.example.blocked";
+        device.add_dir(&format!("{app}/files"));
+        device.add_dir(&format!("{app}/private"));
+        device.add_file(&format!("{app}/files/data"), b"ordinary", 100, 0o644);
+        device.add_file(&format!("{app}/files/raw?"), b"quarantined", 100, 0o644);
+        device.deny_list.insert(format!("{app}/private"));
+        let dest = tempfile::tempdir().unwrap();
+        let mut sink: ProgressSink = Box::new(|_| {});
+        let first = run_backup_items(
+            &mut device,
+            &["app-data".into()],
+            dest.path(),
+            None,
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(first.complete, "{:?}", first.errors);
+        assert_eq!(first.omitted_apps.len(), 1);
+        assert_eq!(first.omitted_apps[0].removed_files, 2);
+        let root = Path::new(&first.dir);
+        assert!(!root.join("android-data/org.example.blocked").exists());
+        let mut manifest = load_manifest(root).unwrap();
+        assert!(super::super::verify::verify_manifest(root, &mut manifest).is_empty());
+        // A later partial item must scan again, while the whole omitted app stays excluded.
+        manifest.items[0].status = ItemStatus::Partial;
+        manifest.items[0]
+            .errors
+            .push("injected interruption".into());
+        save_manifest_atomic(&manifest, root).unwrap();
+        device.list_calls.clear();
+        device.pull_calls.clear();
+        let resumed = run_backup_items(
+            &mut device,
+            &["app-data".into()],
+            dest.path(),
+            Some(root),
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(resumed.complete, "{:?}", resumed.errors);
+        assert_eq!(resumed.omitted_apps.len(), 1);
+        assert!(device.list_calls.iter().all(|path| !path.starts_with(app)));
+        assert!(device.pull_calls.iter().all(|path| !path.starts_with(app)));
+        assert!(!root.join("android-data/org.example.blocked").exists());
+        assert!(
+            super::super::verify::verify_manifest(root, &mut load_manifest(root).unwrap())
+                .is_empty()
+        );
+    }
 
     #[test]
     fn deselecting_completed_files_preserves_restore_and_reselection_after_wipe() {
@@ -598,6 +961,76 @@ mod tests {
     }
 
     #[test]
+    fn updated_apk_replaces_the_whole_verified_cohort_without_path_collision() {
+        let mut dev = dev_full();
+        let dest = tempfile::tempdir().unwrap();
+        let mut sink: ProgressSink = Box::new(|_| {});
+        let first = run_backup_items(
+            &mut dev,
+            &["apk".into()],
+            dest.path(),
+            None,
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        let root = Path::new(&first.dir);
+        dev.answer_shell(
+            "pm list packages -3 -f",
+            "package:/data/app/new/com.example.app/base.apk=com.example.app\n",
+        );
+        dev.add_dir("/data/app/new/com.example.app");
+        dev.add_file("/data/app/new/com.example.app/base.apk", b"NEW", 101, 0o644);
+        dev.add_file(
+            "/data/app/new/com.example.app/split_config.apk",
+            b"SPLIT",
+            101,
+            0o644,
+        );
+        assert_eq!(
+            package_install_dirs(&mut dev).unwrap(),
+            vec![(
+                "com.example.app".into(),
+                "/data/app/new/com.example.app".into()
+            )]
+        );
+        let result = run_backup_items(
+            &mut dev,
+            &["apk".into()],
+            dest.path(),
+            Some(root),
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(result.complete, "{:?}", result.errors);
+        let manifest = load_manifest(root).unwrap();
+        let entries = &manifest.items[0].entries;
+        assert_eq!(
+            entries.len(),
+            2,
+            "entries={entries:?}, pulls={:?}, shells={:?}",
+            dev.pull_calls,
+            dev.shell_calls
+        );
+        assert!(entries
+            .iter()
+            .all(|e| e.remote.starts_with("/data/app/new/") && !e.quarantined));
+        assert_eq!(
+            std::fs::read(
+                root.join(
+                    &entries
+                        .iter()
+                        .find(|e| e.remote.ends_with("/base.apk"))
+                        .unwrap()
+                        .local
+                )
+            )
+            .unwrap(),
+            b"NEW"
+        );
+    }
+    #[test]
     fn full_run_creates_complete_manifest() {
         let mut d = dev_full();
         let dest = tempfile::tempdir().unwrap();
@@ -628,7 +1061,15 @@ mod tests {
         let root = PathBuf::from(&summary.dir);
         assert!(root.join("settings/settings_secure.txt").exists());
         assert!(root.join("android-data/com.kakao.talk/db").exists());
-        assert!(root.join("apks/com.example.app/base.apk").exists());
+        assert!(load_manifest(&root)
+            .unwrap()
+            .items
+            .iter()
+            .find(|i| i.id == "apk")
+            .unwrap()
+            .entries
+            .iter()
+            .all(|e| root.join(&e.local).exists()));
         assert!(root.join("sdcard/DCIM/a.jpg").exists());
         assert!(root.join("manifest.json").exists());
         // manifest의 시리얼은 마스킹만
@@ -693,6 +1134,73 @@ mod tests {
     }
 
     #[test]
+    fn resume_pulls_only_missing_changed_and_corrupted_files() {
+        let mut d = dev_full();
+        for name in [
+            "unchanged",
+            "changed",
+            "corrupted",
+            "failed",
+            "unknown-time",
+            "bad?.jpg",
+        ] {
+            d.add_file(
+                &format!("/sdcard/DCIM/{name}"),
+                b"before",
+                1700000001,
+                0o644,
+            );
+        }
+        d.add_file("/sdcard/DCIM/unknown-time", b"before", 0, 0o644);
+        d.fail_pull("/sdcard/DCIM/failed");
+        let dest = tempfile::tempdir().unwrap();
+        let mut sink: ProgressSink = Box::new(|_| {});
+        let first = run_backup_items(
+            &mut d,
+            &["dcim".into()],
+            dest.path(),
+            None,
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(!first.complete);
+        let root = Path::new(&first.dir);
+        // Same size, newer source timestamp must be copied again.
+        d.add_file("/sdcard/DCIM/changed", b"after!", 1700000002, 0o644);
+        std::fs::write(root.join("sdcard/DCIM/corrupted"), b"broken").unwrap();
+        d.fail_pull.clear();
+        d.pull_calls.clear();
+        let resumed = run_backup_items(
+            &mut d,
+            &["dcim".into()],
+            dest.path(),
+            Some(root),
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(resumed.complete, "{:?}", resumed.errors);
+        assert_eq!(
+            d.pull_calls.len(),
+            4,
+            "unchanged normal/tar files must not be transferred"
+        );
+        for name in ["changed", "corrupted", "failed", "unknown-time"] {
+            assert!(d.pull_calls.contains(&format!("/sdcard/DCIM/{name}")));
+        }
+        assert_eq!(
+            std::fs::read(root.join("sdcard/DCIM/changed")).unwrap(),
+            b"after!"
+        );
+        assert_eq!(
+            std::fs::read(root.join("sdcard/DCIM/corrupted")).unwrap(),
+            b"before"
+        );
+        assert!(super::super::verify::backup_summary(root).unwrap().complete);
+    }
+
+    #[test]
     fn adversarial_resume_retains_copied_files_deleted_from_phone_and_updates_selection() {
         let mut d = dev_full();
         d.add_file("/sdcard/DCIM/b.jpg", b"second", 1700000001, 0o644);
@@ -711,6 +1219,7 @@ mod tests {
         let root = Path::new(&first.dir);
         assert!(!first.complete);
         // A second interrupted attempt must not lose the first copy's manifest entry.
+        d.add_file("/sdcard/DCIM/a.jpg", b"changed source", 1700000002, 0o644);
         d.fail_pull("/sdcard/DCIM/a.jpg");
         let interrupted = run_backup_items(
             &mut d,
@@ -939,7 +1448,7 @@ mod tests {
     }
 
     #[test]
-    fn resume_records_why_a_completed_item_became_incomplete() {
+    fn resume_cancel_keeps_durable_records_and_a_later_check_detects_corruption() {
         let mut dev = dev_full();
         let dest = tempfile::tempdir().unwrap();
         let mut sink: ProgressSink = Box::new(|_| {});
@@ -965,15 +1474,14 @@ mod tests {
             &cancel,
             &mut sink,
         )
-        .unwrap();
-        assert!(!resumed.complete);
+        .unwrap_err();
+        assert!(resumed.contains("취소"));
+        let resumed = BackupSummary::from(&load_manifest(root).unwrap());
+        assert!(resumed.complete);
+        assert!(resumed.errors.is_empty());
         assert!(
-            resumed
-                .errors
-                .iter()
-                .any(|e| e.contains("크기/해시 불일치")),
-            "{:?}",
-            resumed.errors
+            !super::super::verify::verify_manifest(root, &mut load_manifest(root).unwrap())
+                .is_empty()
         );
     }
 
@@ -1002,6 +1510,59 @@ mod tests {
             .any(|e| e.starts_with("apk: 앱 목록 조회 실패")));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn resume_sharing_violation_preserves_manifest_and_does_not_recollect() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let mut dev = dev_full();
+        let dest = tempfile::tempdir().unwrap();
+        let mut sink: ProgressSink = Box::new(|_| {});
+        let items = ["dcim".into()];
+        let first = run_backup_items(
+            &mut dev,
+            &items,
+            dest.path(),
+            None,
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        let root = Path::new(&first.dir);
+        let original = std::fs::read(root.join("manifest.json")).unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(root.join("sdcard/DCIM/a.jpg"))
+            .unwrap();
+        dev.pull_calls.clear();
+        let error = run_backup_items(
+            &mut dev,
+            &items,
+            dest.path(),
+            Some(root),
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap_err();
+        assert!(error.contains("PC_READ_IO|"), "{error}");
+        assert!(!error.contains("사용자가"), "{error}");
+        assert_eq!(std::fs::read(root.join("manifest.json")).unwrap(), original);
+        assert!(dev.pull_calls.is_empty());
+        drop(lock);
+        assert!(
+            run_backup_items(
+                &mut dev,
+                &items,
+                dest.path(),
+                Some(root),
+                &CancelFlag::new(),
+                &mut sink
+            )
+            .unwrap()
+            .complete
+        );
+    }
+
     #[test]
     fn invalid_selections_fail_before_device_io() {
         let mut dev = dev_full();
@@ -1023,5 +1584,182 @@ mod tests {
             .is_err());
         }
         assert!(dev.shell_calls.is_empty());
+    }
+    #[test]
+    fn failed_changed_source_retry_preserves_payload_original_attributes_and_repairs_bad_sidecar() {
+        let mut dev = dev_full();
+        let dest = tempfile::tempdir().unwrap();
+        let mut sink: ProgressSink = Box::new(|_| {});
+        let result = run_backup_items(
+            &mut dev,
+            &["dcim".into()],
+            dest.path(),
+            None,
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        let root = Path::new(&result.dir);
+        let mut manifest = load_manifest(root).unwrap();
+        let before =
+            super::super::source_metadata::load(root, &manifest.source_metadata[0]).unwrap();
+        let attr = before
+            .entries
+            .iter()
+            .find(|a| a.remote == "/sdcard/DCIM/a.jpg")
+            .unwrap()
+            .clone();
+        manifest.items[0].status = ItemStatus::Partial;
+        manifest.items[0].errors.push("interrupted".into());
+        save_manifest_atomic(&manifest, root).unwrap();
+        dev.add_file("/sdcard/DCIM/a.jpg", b"different", 101, 0o600);
+        dev.fail_pull("/sdcard/DCIM/a.jpg");
+        let retry = run_backup_items(
+            &mut dev,
+            &["dcim".into()],
+            dest.path(),
+            Some(root),
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(!retry.complete);
+        let manifest = load_manifest(root).unwrap();
+        let after =
+            super::super::source_metadata::load(root, &manifest.source_metadata[0]).unwrap();
+        let preserved = after
+            .entries
+            .iter()
+            .find(|a| a.remote == attr.remote)
+            .unwrap();
+        assert_eq!(preserved.backup_sha256, attr.backup_sha256);
+        assert_eq!(preserved.observed_at, attr.observed_at);
+        assert_eq!(preserved.size, attr.size);
+        assert_eq!(
+            std::fs::read(root.join("sdcard/DCIM/a.jpg")).unwrap(),
+            b"photo"
+        );
+        std::fs::write(root.join(&manifest.source_metadata[0].path), b"bad sidecar").unwrap();
+        dev.fail_pull.clear();
+        let repaired = run_backup_items(
+            &mut dev,
+            &["dcim".into()],
+            dest.path(),
+            Some(root),
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(repaired.complete, "{:?}", repaired.errors);
+    }
+
+    #[test]
+    fn disappeared_unverified_payload_is_recorded_as_a_loss_instead_of_done() {
+        let mut dev = dev_full();
+        let dest = tempfile::tempdir().unwrap();
+        let mut sink: ProgressSink = Box::new(|_| {});
+        let result = run_backup_items(
+            &mut dev,
+            &["dcim".into()],
+            dest.path(),
+            None,
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        let root = Path::new(&result.dir);
+        std::fs::remove_file(root.join("sdcard/DCIM/a.jpg")).unwrap();
+        dev.remove_file("/sdcard/DCIM/a.jpg");
+        let retry = run_backup_items(
+            &mut dev,
+            &["dcim".into()],
+            dest.path(),
+            Some(root),
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(!retry.complete);
+        let manifest = load_manifest(root).unwrap();
+        assert!(manifest.items[0]
+            .entries
+            .iter()
+            .any(|e| e.remote == "/sdcard/DCIM/a.jpg" && e.error.is_some()));
+    }
+    #[test]
+    fn a_never_received_failure_that_disappears_is_not_a_lost_backup_receipt() {
+        let mut dev = dev_full();
+        dev.add_file("/sdcard/DCIM/failed.jpg", b"failed", 42, 0o644);
+        dev.fail_pull("/sdcard/DCIM/failed.jpg");
+        let dest = tempfile::tempdir().unwrap();
+        let mut sink: ProgressSink = Box::new(|_| {});
+        let result = run_backup_items(
+            &mut dev,
+            &["dcim".into()],
+            dest.path(),
+            None,
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(!result.complete);
+        let root = Path::new(&result.dir);
+        dev.remove_file("/sdcard/DCIM/failed.jpg");
+        dev.fail_pull.clear();
+        let retry = run_backup_items(
+            &mut dev,
+            &["dcim".into()],
+            dest.path(),
+            Some(root),
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(retry.complete, "{:?}", retry.errors);
+    }
+    #[test]
+    fn unchanged_content_with_new_mtime_converges_and_keeps_current_attributes() {
+        let mut dev = dev_full();
+        let dest = tempfile::tempdir().unwrap();
+        let mut sink: ProgressSink = Box::new(|_| {});
+        let result = run_backup_items(
+            &mut dev,
+            &["dcim".into()],
+            dest.path(),
+            None,
+            &CancelFlag::new(),
+            &mut sink,
+        )
+        .unwrap();
+        let root = Path::new(&result.dir);
+        let mut manifest = load_manifest(root).unwrap();
+        manifest.items[0].status = ItemStatus::Partial;
+        manifest.items[0].errors.push("interrupted".into());
+        save_manifest_atomic(&manifest, root).unwrap();
+        dev.add_file("/sdcard/DCIM/a.jpg", b"photo", 99, 0o644);
+        for _ in 0..2 {
+            let retry = run_backup_items(
+                &mut dev,
+                &["dcim".into()],
+                dest.path(),
+                Some(root),
+                &CancelFlag::new(),
+                &mut sink,
+            )
+            .unwrap();
+            assert!(retry.complete, "{:?}", retry.errors);
+        }
+        let manifest = load_manifest(root).unwrap();
+        let snapshot =
+            super::super::source_metadata::load(root, &manifest.source_metadata[0]).unwrap();
+        assert_eq!(
+            snapshot
+                .entries
+                .iter()
+                .find(|a| a.remote == "/sdcard/DCIM/a.jpg")
+                .unwrap()
+                .modification_time,
+            99
+        );
     }
 }

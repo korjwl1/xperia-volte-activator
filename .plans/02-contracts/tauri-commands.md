@@ -34,7 +34,11 @@ invoke('device_list') → DeviceStatus[]            // ✅ 구현: adb_client �
 //   - serialMasked: 앞 6자 + **** (문자 단위)
 //   - prep: { developerOptions(settings global development_settings_enabled), usbDebugging(adb_enabled), oemUnlockAllowed(getprop sys.oem_unlock_allowed) } — 판별 불가 null
 //   - SIM state: gsm.sim.state 원값 — ABSENT=미삽입, PIN_REQUIRED 등은 그대로 전달(프론트 simStateLabel)
-//   - SIM type: dumpsys isub "Active subscriptions" 구간의 isEmbedded 실측 (구독 없는 슬롯은 1=물리/2=eSIM 가정)
+//   - SIM type: physical | esim | unknown. dumpsys isub "Active subscriptions" 구간의 isEmbedded 실측(0/1 또는 false/true).
+//     구독 없음·조회 실패·지원하지 않는 형식·충돌은 unknown. 슬롯 번호로 물리/eSIM을 추측하지 않는다.
+//   - SIM 슬롯 수는 논리 SIM 용량: telephony.active_modems.max_count 우선, dsds/dsda 구성 또는 보고된 상태/구독 슬롯으로 폴백.
+//     단일 SIM은 한 슬롯만 반환, 듀얼 SIM의 빈 슬롯은 유지. 미보고 상태는 UNKNOWN, 최대 2개 슬롯 지원(초과 시 오류).
+//     ro.telephony.sim_slots.count(물리 UICC 슬롯 수) 및 빈 슬롯의 지원 형태는 별도 정보이며 현재 구독 type과 혼동하지 않는다.
 //   - SIM volte: TelephonyDebugService 덤프의 ImsPhone mMmTelCapabilities Voice(*#*#4636#*#* IMS 상태와 동일 출처)
 //       "on"=IMS 음성 등록 / "off"=미등록 / "unknown"=덤프 판독 불가·SIM 없음 (실측 ~1.2s)
 //   - SIM carrier: gsm.sim.operator.alpha 쉼표 구분 슬롯 값 ("[,SK Telecom]"), 비어 있으면 <key>.2 폴백
@@ -189,6 +193,8 @@ invoke('plan_generate', { profile, toggles, deviceStatus }) → PlanStep[]   // 
 
 ## backup (M3 — 설계 `.plans/04-engine/backup-engine.md`, 사용자 승인 2026-10-03)
 
+2026-10-06 후속 사용자 요청: SMS 앱의 contacts*.json 추가 수집·연락처 기록 병합을 제거했다. 연락처는 기존 VCF 백업·복원으로 처리하고, SMS 수집은 남아 있는 연락처 JSON을 무시한다. 기존 계약 시그니처·기본 실전 플래그는 유지한다.
+
 **구현 상태**: `backup_run`·`backup_cancel`·`backup_manifest_check`·`smsie_prepare`·`smsie_collect`·`restore_run`·`smsie_restore_stage`·`smsie_restore_finish` ✅ 구현(src-tauri/src/backup/ — FakeADBDevice 단위 테스트로 검증, 실기기 미검증).
 완결 게이트(§3-3): wizard가 언락/리락 시작 전 이번 실행 summary 또는 `backup_manifest_check`(파일·해시 대조) 통과를 강제 — 백업 미선택 계획은 기존 이중 확인 모달로.
 
@@ -203,6 +209,8 @@ invoke('backup_delete', { dir }) → void — 완료 화면에서 사용자 확�
 // 실행: 항목별 열거 → pull(sha256 동시 계산) → manifest 원자 저장 → quarantine 격리 → 설정·연락처 덤프 → sms-ie 산출물 수령
 // 이벤트 'backup:progress': { itemId, phase: 'scan'|'copy'|'quarantine'|'settings'|'contacts'|'smsie',
 //   file: string|null, filesDone, filesTotal, bytesDone, bytesTotal }
+// scan: filesDone=0, filesTotal=현재 발견 파일 수, bytesDone=bytesTotal=0.
+// file은 폴더·파일 확인 수 안내이며 복사된 파일 경로가 아니다. scan은 항목 복사 진행률 0으로 표시한다.
 // BackupSummary = { deviceKey: string|null, complete, files, bytes, errors: string[], dir,
 //   items: { id, status: 'pending'|'done'|'partial'|'skipped', files, bytes }[] }
 //   complete = 전수 열거 완료 + 오류 0 (§6-2) — 파괴 단계 게이트의 입력
@@ -371,3 +379,11 @@ invoke('firmware_dir_check', { dir, partition }) → { file, path, fingerprint, 
   release 실행 파일에서 첫 화면·OMD 화면이 CSP 위반·콘솔 오류 없이 동작함을 WebView2 원격 디버깅으로 확인(2026-10-05).
 
 2026-10-06 복원: restore_run과 smsie_restore_stage는 manifest.deviceKey를 현재 ro.serialno SHA-256과 대조한 뒤 기기에 쓴다. 원본 키가 없는 구형 백업은 자동 복원을 거부한다. 파일 복원은 /sdcard의 고유 임시 폴더에 tar를 모두 받고 성공 후 파일별 rename, 성공·실패 모두 정리를 시도한다. 교체 중 실패해도 이미 교체된 파일은 완전한 파일이며 나머지는 재실행 대상이다. 임시 폴더 정리 실패는 오류로 표시한다. 연락처 0개는 전송 없이 성공하고 실제 가져오기 후 contacts_restore_finish가 고정 임시 파일을 정리한다.
+
+2026-10-06 문자 백업 안내: 기존 smsie_prepare/collect/restore_stage/finish 시그니처는 유지한다. smsie_prepare는 /sdcard/volte_sms_backup 생성 후 MainActivity를 ADB로 연다. smsie_collect는 이 폴더만 읽고 선택 항목의 messages*.zip/calls*.json을 검증하여 PC smsie/에 수집한다. confirmComplete=true는 사용자가 앱의 성공 안내를 확인한 뒤에만 보낸다. 날짜·중복 번호가 달라도 접두사·확장자로 분류하며 암호화·잘린 ZIP/JSON은 완료로 판정하지 않는다. restore_stage는 같은 기기의 백업을 검증·전송한 뒤 앱을 열고 실제 파일명과 가져오기 버튼 안내를 반환한다. 새 자동 클릭 명령이나 보조 앱은 추가하지 않는다.
+
+2026-10-06 앱 데이터 제외 계약: BackupSummary와 manifest v1에 `omittedApps: {package:string,reasons:string[],removedFiles:number,removedBytes:number,cleanupPending:boolean}[]`를 추가한다. 구형 manifest의 기본값은 빈 배열이다. backup_run 종료 시 원본 읽기 권한 오류 앱의 PC Android/data 사본 전체와 격리 tar 사본을 제거하고 복원 영수증에서 제외한다. APK/다른 항목은 유지한다. pending 정리가 남거나 다른 오류가 있으면 complete=false이며 복원을 거부한다. 정리가 끝난 정상 보관 범위만 complete=true로 반환하고 프론트는 제외 목록 안내 후 [다음]을 기다린다. 신규 Tauri 명령 없이 기존 backup_run/check/smsie_collect 요약을 사용한다. PC 정리 개발 CLI 명령은 dev-cli 문서를 따른다.
+
+2026-10-06 리뷰 후속: backup_manifest_check({dir, runId?:string|null})은 Events 공통 실행 경로에서 PC-only 전수 검증 진행(backup:progress, phase=verify)과 backup_cancel의 실행별 취소를 지원한다. AppHandle은 Tauri 주입이며 CLI는 같은 Events helper를 호출한다. smsie_probe({serial?:string|null, backupDir:string})->boolean은 같은 기기 확인 후 선택한 SMSIE 파일 존재 목록만 조회하며 전송/삭제하지 않는다. facade의 smsieCollect는 ApiResult<SmsIeOutcome>으로 실제 오류를 보존한다. backupPrepare/Run/Delete 및 smsiePrepare/Probe/Collect의 facade-only backupOnly 인자는 명시적 단독 실전 백업 경로를 선택한다(IPC 인자가 아니며 다른 쓰기 엔진에는 적용되지 않음). BackupSummary의 sourceMetadata는 itemId/path/sha256/entries/directories/unavailableBirthTimes/payloadMismatches/complete/errors 영수증 배열이다. Manifest v1의 sourceMetadata는 optional/default empty로 구형 백업과 호환한다. sidecar 자체는 version=1 Snapshot이다.
+
+2026-10-06: sourceMetadata Receipt에 captureContext 추가(default legacy strict). after-copy-enrichment는 참고 수집으로 body complete/restore gate를 막지 않으며, before-copy 기록과 분리한다. facade backupManifestCheck는 native 오류를 예외로 전달하여 null/완결 아님으로 숨기지 않는다.

@@ -11,9 +11,40 @@ use crate::{
     message_devices::{
         adb_message_transport::ADBMessageTransport,
         adb_transport_message::{ADBTransportMessage, ADBTransportMessageHeader},
-        message_commands::MessageCommand,
     },
 };
+
+// A USB packet size is not a libusb transfer limit. Batch packets while staying
+// inside the current ADB frame. A ZLP can terminate the preceding USB transfer;
+// tolerate a bounded number without permitting an infinite no-progress loop.
+const BULK_CHUNK: usize = 64 * 1024;
+fn read_bulk_exact(
+    data: &mut [u8],
+    mut read: impl FnMut(&mut [u8]) -> Result<usize>,
+) -> Result<()> {
+    let mut offset = 0;
+    let mut empty = 0;
+    while offset < data.len() {
+        let end = (offset + BULK_CHUNK).min(data.len());
+        let count = read(&mut data[offset..end])?;
+        if count == 0 {
+            empty += 1;
+            if empty <= 4 {
+                continue;
+            }
+        }
+        if count == 0 || count > end - offset {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "incomplete USB frame",
+            )
+            .into());
+        }
+        empty = 0;
+        offset += count;
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug)]
 struct Endpoint {
@@ -162,8 +193,15 @@ impl USBTransport {
         let mut offset = 0;
         let data_len = data.len();
         while offset < data_len {
-            let end = (offset + max_packet_size).min(data_len);
+            let end = (offset + BULK_CHUNK).min(data_len);
             let write_amount = handle.write_bulk(endpoint.address, &data[offset..end], timeout)?;
+            if write_amount == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "USB write made no progress",
+                )
+                .into());
+            }
             offset += write_amount;
 
             log::trace!("wrote chunk of size {write_amount} - {offset}/{data_len}");
@@ -192,6 +230,33 @@ impl ADBTransport for USBTransport {
         log::debug!("got write endpoint: {write_endpoint:?}");
         self.write_endpoint = Some(write_endpoint);
 
+        // A previous process may have died in a sync transfer. Drain only BEFORE
+        // issuing our fresh CNXN so queued old frames cannot impersonate its reply.
+        let address = self
+            .read_endpoint
+            .as_ref()
+            .ok_or(RustADBError::USBNoDescriptorFound)?
+            .address;
+        let mut stale = vec![0; BULK_CHUNK];
+        let mut drained = false;
+        for _ in 0..64 {
+            match device.read_bulk(address, &mut stale, Duration::from_millis(10)) {
+                Ok(_) => {}
+                Err(rusb::Error::Timeout) => {
+                    drained = true;
+                    break;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        if !drained {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "old USB frames did not drain",
+            )
+            .into());
+        }
+
         self.handle = Some(Arc::new(device));
 
         Ok(())
@@ -203,10 +268,8 @@ impl ADBTransport for USBTransport {
             return Ok(());
         }
 
-        let message = ADBTransportMessage::try_new(MessageCommand::Clse, 0, 0, &[])?;
-        if let Err(e) = self.write_message(message) {
-            log::error!("error while sending CLSE message: {e}");
-        }
+        // CLSE addresses a stream, not the transport; CLSE(0,0) queues an invalid
+        // response for the next client. Sessions close their own stream IDs.
 
         if let Some(handle) = &self.handle {
             let endpoint = self.read_endpoint.as_ref().or(self.write_endpoint.as_ref());
@@ -217,6 +280,8 @@ impl ADBTransport for USBTransport {
                 }
             }
         }
+
+        self.handle = None;
 
         Ok(())
     }
@@ -245,27 +310,20 @@ impl ADBMessageTransport for USBTransport {
     fn read_message_with_timeout(&mut self, timeout: Duration) -> Result<ADBTransportMessage> {
         let endpoint = self.get_read_endpoint()?;
         let handle = self.get_raw_connection()?;
-        let max_packet_size = endpoint.max_packet_size;
-
         let mut data = [0u8; 24];
-        let mut offset = 0;
-        while offset < data.len() {
-            let end = (offset + max_packet_size).min(data.len());
-            let chunk = &mut data[offset..end];
-            offset += handle.read_bulk(endpoint.address, chunk, timeout)?;
-        }
+        read_bulk_exact(&mut data, |chunk| {
+            Ok(handle.read_bulk(endpoint.address, chunk, timeout)?)
+        })?;
 
         let header = ADBTransportMessageHeader::try_from(data)?;
         log::trace!("received header {header:?}");
 
+        if header.data_length()>16*1024*1024 {return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"ADB payload exceeds 16 MiB limit").into());}
         if header.data_length() != 0 {
             let mut msg_data = vec![0_u8; header.data_length() as usize];
-            let mut offset = 0;
-            while offset < msg_data.len() {
-                let end = (offset + max_packet_size).min(msg_data.len());
-                let chunk = &mut msg_data[offset..end];
-                offset += handle.read_bulk(endpoint.address, chunk, timeout)?;
-            }
+            read_bulk_exact(&mut msg_data, |chunk| {
+                Ok(handle.read_bulk(endpoint.address, chunk, timeout)?)
+            })?;
 
             let message = ADBTransportMessage::from_header_and_payload(header, msg_data);
 
@@ -281,5 +339,46 @@ impl ADBMessageTransport for USBTransport {
         }
 
         Ok(ADBTransportMessage::from_header_and_payload(header, vec![]))
+    }
+}
+
+#[cfg(test)]
+mod bulk_tests {
+    use super::*;
+    #[test]
+    fn reads_fragments_without_crossing_frame_boundary() {
+        let mut data = vec![0; BULK_CHUNK + 7];
+        let mut calls = Vec::new();
+        read_bulk_exact(&mut data, |chunk| {
+            calls.push(chunk.len());
+            let n = chunk.len().min(1023);
+            chunk[..n].fill(42);
+            Ok(n)
+        })
+        .unwrap();
+        assert_eq!(calls[0], BULK_CHUNK);
+        assert_eq!(*calls.last().unwrap(), 71);
+        assert!(data.iter().all(|&v| v == 42));
+    }
+    #[test]
+    fn repeated_zero_length_packets_fail_instead_of_spinning() {
+        assert!(read_bulk_exact(&mut [0; 24], |_| Ok(0)).is_err());
+    }
+    #[test]
+    fn preceding_usb_zlp_is_skipped_without_losing_the_next_header() {
+        let mut calls = 0;
+        let mut header = [0; 24];
+        read_bulk_exact(&mut header, |chunk| {
+            calls += 1;
+            if calls == 1 {
+                Ok(0)
+            } else {
+                chunk.fill(42);
+                Ok(chunk.len())
+            }
+        })
+        .unwrap();
+        assert_eq!(calls, 2);
+        assert_eq!(header, [42; 24]);
     }
 }

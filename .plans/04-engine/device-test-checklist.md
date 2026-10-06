@@ -1,5 +1,8 @@
 # 실기기 검증 체크리스트
 
+- [ ] 2026-10-06 직접 USB SYNC 세션 재사용: 앱 데이터 완료 후 DCIM의 동일 샘플 ABBA 전송 비교, 매회 PC 크기·해시 및 회차간 내용 일치. 실제 세션 재사용 여부와 측정 시간 기록.
+- [ ] 2026-10-06 수정한 세션 재사용·버퍼 저장 엔진으로 DCIM/fs-rest 완료 및 전체 선택 항목 PC 해시 검증. 샘플 비교만으로 전체 백업 완료 주장 금지.
+
 통신 진단 추가 검증(2026-10-05, 미실행):
 
 - [ ] 지원 기기·펌웨어의 구형/신형 IMS 덤프와 전화 앱 IMS 화면 결과를 대조한다. Wi-Fi/NR/다른 SIM 경유 및 기술 미확인 표기를 확인한다.
@@ -139,3 +142,26 @@ status: 진행 전 — 2026-10-05 기준 아래 항목은 모두 **실기기에�
 - [ ] persist.dbg 4종이 모두 성공한 뒤에만 재부팅하고 끊김→재연결을 확인하는가. efs-write 단독 빌드의 OS 재부팅·실전 최종 확인, bootloader 재부팅 거부 확인
 - [ ] 실제 IMS 셀룰러 등록 및 사용자 발신·수신 확인. EFS 리드백·속성 설정 성공과 통화 검증이 구분되는가
 - [ ] 모든 쓰기 기능을 켠 검증용 release(`--features fastboot-write,root-write,efs-write`)에서 선택한 실전 플래그 조합을 확인. 기본 release는 모든 쓰기 기능·REAL_STEPS 꺼짐 유지
+
+- [x] 2026-10-06 앱 준비: /sdcard/volte_sms_backup 생성 및 MainActivity ADB 실행. 실제 폴더·화면 확인 후 체크.
+- [x] 2026-10-06 문자·통화: 사용자 성공 확인 후 날짜 파일 실기기 감지·ZIP/JSON·mtime·PC 해시 검증 및 수집 완료. 연락처 JSON 추가 보관은 후속 사용자 요청으로 제거했고 VCF는 유지한다. 중복 번호는 오프라인 테스트 통과. 성공 확인 전 완료/정리 불가 테스트 통과.
+- [ ] 2026-10-06 복원: 같은 기기·해시·ZIP/JSON 검증 후 고정 폴더 전송·앱 실행, 실제 파일명과 Import Messages / Import Call Log 안내. 복원 실기기 실행은 승인되지 않았으므로 오프라인 테스트만.
+- [ ] 2026-10-06 USB 대용량 재개: bulk 64 KiB, 정상 ZLP 허용·무진행 상한, WRTE/CLSE ACK·push 상태·트랜잭션 종료를 실제 백업 전송에서 확인.
+- [ ] 2026-10-06 USB RECV 경계 독립 파서 수정 후 전체 선택 항목 파일 복사·PC 무결성 검사(21,933개 앱 데이터 폴더 조회는 성공, 이전 파서의 짧은 페이로드 패닉으로 미완료).
+- [x] 2026-10-06 RECV 수정 후 실제 Documents/Music/Movies/Download 수신: 71개 파일 565,557,635바이트 별도 PC SHA256·크기 대조 일치. 전체 14개 완결 검증과는 별도이며 남은 항목 진행 중.
+- [x] 2026-10-06 SIM 슬롯 가정 제거 후 같은 폰 읽기 조회: slot1 LOADED=physical, slot2 NOT_READY=unknown. 판별 불가 유형은 화면·기록에서 추측하지 않음. 기종을 바꾼 실기기 검증은 하지 않았음.
+- [x] 2026-10-06 사진 샘플 세션 재사용: 동일 8개·66,710,218바이트씩 ABBA 4회 PC 크기·해시 및 회차 간 해시 일치. 동일 버퍼/동기화에서 per-file 30.10/30.63 MiB/s, batch 34.77/34.22 MiB/s. 전체 전송/USB 최대 대역폭 판정은 하지 않음.
+- [ ] 2026-10-06 재연결: CNXN 뒤 늦은 이전 CLSE/WRTE/OKAY를 처리하는 수정 코드의 실기기 확인. 기존 코드의 전환 직후 CLSE 오류와 재시도 성공은 관찰했고, 수정 코드는 오프라인 회귀 5개 포함 vendor USB 단위 테스트 33개 통과. 현재 백업 중 강제 중단으로 오류를 재현하지 않음.
+- [x] 2026-10-06 권한 거부 종료: 같은 Sony 폰의 기존 권한 거부 경로를 수정한 실행 파일로 읽기 전용 샘플 조회. SYNC RECV Permission denied는 유지되고 SYNC_BATCH_BROKEN/종료 순서 오류 없이 끝났다. 분할 FAIL 이후 같은 연결의 다음 파일 정상 수신·누락/다른 스트림 종료 응답 차단은 오프라인 회귀 2개 포함 vendor USB 35개 통과. 원래 권한 거부 파일을 성공으로 바꾸거나 권한 변경을 하지 않음. 전체 재개 백업과 최종 PC 검사는 별도 확인한다.
+- [x] 2026-10-06 PC 병렬 해시: 기존 백업의 일반 파일 11개·1,073,722,564바이트를 같은 SSD 하드링크로 검사. release 순차/최대 4개 작업자, 캐시 예열 후 ABBA 4회 모두 complete·크기 일치. 평균 순차 0.681초, 병렬 0.217초(약 3.14배). Windows 캐시를 포함하는 표본이며 전체 전수 검사나 HDD에서 같은 배수를 보장하지 않는다.
+- [x] 2026-10-06 전체 PC 병렬 해시 검사 완료. USB 복사 종료 뒤 PC 검사만 전환했고 194,630,644,037바이트 사본을 171.502초에 검사했다. 크기/해시 불일치 없음, 파일 2개·폴더 1개 원본 Permission denied는 app-data partial/전체 complete=false로 유지한다.
+- [ ] 2026-10-06 파일 단위 재개 실기기: 정상 영수증의 재전송 생략, 크기/mtime 변경 및 손상 파일만 재전송, 기존 사본 보존·취소·진행 이벤트를 작은 표본으로 확인. 오프라인 회귀에서 정상 일반/tar pull 생략과 변경·실패·손상·시각 미확인 파일 재전송 및 최종 검증을 확인했으며, 이미 진행 중인 대용량 복사를 다시 시작하지 않는다.
+- [x] 2026-10-06 기존 거부 경로 읽기 진단: 대상 기기 해시 대조 후 shell UID/그룹, 대상·부모 mode/UID/GID, head/ls로 원본·정규 경로를 확인했다. 파일 2개 mode 700, 폴더 mode 770 앱 소유로 shell 읽기 거부 조건 확인. 기기 권한/내용 변경 없음. 잠금/USB/PC 저장 공간 문제로 안내하지 않는다.
+
+- [ ] 2026-10-06 단계별 대기 GUI: 실전 백업·후속 엔진 사이에 [다음] 전 실행 없음, 앱 재시작 후 제외 안내/대기 복원, 확인·Esc 후 자동 진행 없음. mock/실전 facade 오프라인 회귀는 통과했으며 전체 GUI 실기기 전환 테스트는 별도다.
+- [x] 2026-10-06 기존 PC 백업의 권한 오류 앱 데이터 전체 정리: 원본 권한 오류 3개 패키지의 PC 앱 데이터 삭제 완료. 정상 영수증 243개·373,569,106바이트 및 이전 중단의 임시 파일 1개·30바이트 제거. 나머지 72,471개 파일의 영수증·크기·mtime·ctime·파일 id와 APK 12개 보존 확인. manifest omittedApps cleanupPending=false, 보관 범위 complete=true·194,257,074,931바이트. 기존 전수 해시 검사 증거를 유지하고 PC만 정리했으며 폰 복원/쓰기는 실행하지 않았다.
+- [x] 2026-10-06 후속 연락처 JSON 제외: PC smsie/contacts 날짜 JSON 1개·3,391,180바이트 삭제 및 연락처 영수증/총량 갱신. VCF SHA-256·다른 항목 영수증·제외 앱 감사 기록 보존 확인. 현재 72,470개·194,253,683,751바이트. 손상된 연락처 JSON이 있어도 SMS 완결/VCF에 영향 없음 및 날짜·중복 번호·대소문자 파일 읽기 생략은 FakeADBDevice 회귀로 검증했다. 폰 데이터는 변경하지 않았다.
+
+2026-10-06 review follow-up: new source attribute capture/GUI backupOnly/probe serialization/cancellable PC verify/updated APK/corrupt tar repairs have offline regression tests. Prior 194GB copy does not validate the new GUI entry or metadata restoration. No destructive live restore/unlock test is implied. Live metadata enrichment, when performed, must be marked after-copy-enrichment; unavailable birth time and unrecoverable past attributes remain explicit.
+
+2026-10-06 최종 수정 검증 범위: 원본 속성 sidecar, GUI 백업만 실행, SMS probe/준비 충돌, tar 복구 및 제외 진단 정리, ADB 오류 후 정리는 오프라인 회귀 검증이다. 기존 D: 백업은 사용자 지시로 삭제됐다. 새 전체 실기기 백업, 재연결·강제 종료 재개, 실제 메타데이터 조회 지원값, 초기화 뒤 전체 복원은 아직 새 코드로 검증하지 않았다.

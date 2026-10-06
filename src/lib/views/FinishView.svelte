@@ -7,7 +7,6 @@
   import { CircleCheck, CircleX, RotateCcw, HardDrive, TriangleAlert, Trash2 } from "@lucide/svelte/icons";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { Checkbox } from "$lib/components/ui/checkbox";
-  import { REAL_STEPS } from "$lib/data/runMode";
 
   const succeeded = $derived(wizard.runSteps.filter((s) => s.status === "done").length);
   const failed = $derived(wizard.runSteps.filter((s) => s.status === "failed").length);
@@ -16,7 +15,7 @@
   // 백업 단계가 실제로 완료된 경우에만 "백업 보관 중" 표시
   const backedUp = $derived(wizard.runSteps.some((s) => s.id === "backup" && s.status === "done"));
   // 목 모드(실전 백업 꺼짐)는 실제 백업 폴더가 없다 — 삭제도 표시만 바뀐다
-  const mockBackup = !REAL_STEPS.backup;
+  const mockBackup = $derived(!wizard.backupLive);
   let deleteConfirmOpen = $state(false);
   // 초기화 후 복구가 끝나지 않았으면 이중 확인(백업이 유일한 사본)
   let keepAck = $state(false);
@@ -102,6 +101,10 @@
           <div class="min-w-0 flex-1">
             <div class="text-sm font-medium">{wizard.backupDeleteState === "deleted" ? (mockBackup ? "백업 삭제됨(목업)" : "백업 삭제됨") : "백업 보관 중"}</div>
             <div class="text-xs text-muted-foreground font-mono truncate">{wizard.backupDir || wizard.backupPath}</div>
+            {#if wizard.backupSummary?.sourceMetadata?.length && wizard.backupDeleteState !== "deleted"}
+              <p class="mt-1 text-[11px] text-muted-foreground">원본 소유자·권한·파일 및 폴더 시각의 수집 기록을 함께 보관했습니다. 생성 시각을 제공하지 않은 항목은 미확인으로 기록합니다. Android 권한에 따라 속성 복원은 제한될 수 있습니다.</p>
+              {#if wizard.backupSummary.sourceMetadata.some(r=>!r.complete)}<p class="mt-1 text-[11px] text-warning">일부 속성은 수집하지 못했습니다. 사후 속성 수집의 누락은 기존 내용 백업의 복원 가능 상태를 바꾸지 않습니다.</p>{/if}
+            {/if}
             {#if wizard.backupDeleteState === "failed"}
               <div class="text-[11px] text-destructive">{wizard.backupDeleteError}</div>
             {/if}

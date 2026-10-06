@@ -13,7 +13,7 @@ export const mockDeviceStatus: DeviceStatus = {
   bootloader: "locked",
   rooted: false,
   sims: [
-    { slot: 1, type: "physical", carrier: null, state: "ABSENT", volte: "unknown", ims: { status: "no-sim", registration: "unknown", voice: null, sms: null, transport: "unknown", technology: "unknown" } },
+    { slot: 1, type: "unknown", carrier: null, state: "ABSENT", volte: "unknown", ims: { status: "no-sim", registration: "unknown", voice: null, sms: null, transport: "unknown", technology: "unknown" } },
     { slot: 2, type: "esim", carrier: "SK Telecom", state: "LOADED", volte: "off", ims: { status: "not-registered", registration: "not-registered", voice: false, sms: false, transport: "unknown", technology: "unknown" } },
   ],
   prep: { developerOptions: true, usbDebugging: true, oemUnlockAllowed: true },

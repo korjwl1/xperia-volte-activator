@@ -15,6 +15,7 @@ impl<T: ADBMessageTransport> ADBMessageDevice<T> {
     pub(crate) fn push<R: Read, A: AsRef<str>>(&mut self, stream: R, path: A) -> Result<()> {
         let mut session = self.open_synchronization_session()?;
 
+        let result=(|| {
         let path_header = format!("{},0777", path.as_ref());
 
         let send_buffer = MessageSubcommand::Send.with_arg(u32::try_from(path_header.len())?);
@@ -29,8 +30,8 @@ impl<T: ADBMessageTransport> ADBMessageDevice<T> {
         )?)?;
 
         session.push_file(stream)?;
-        self.end_transaction(&mut session)?;
-
         Ok(())
+        })();
+        self.finish_sync_request(session,result)
     }
 }

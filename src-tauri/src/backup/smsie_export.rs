@@ -50,7 +50,7 @@ pub(super) fn validate(path: &Path, item: &str) -> Result<(), String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     if item == "calllog" {
         if file.metadata().map_err(|e| e.to_string())?.len() > MAX_JSON {
-            return Err("통화 기록 JSON이 허용 크기(128 MiB)를 초과했습니다".into());
+            return Err("내보내기 JSON이 허용 크기(128 MiB)를 초과했습니다".into());
         }
         return validate_calls(file);
     }

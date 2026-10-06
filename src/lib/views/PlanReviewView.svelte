@@ -23,7 +23,7 @@
   let pathAlertTimer: ReturnType<typeof setTimeout> | undefined;
   let efsNeedsSave = $state(true);
   const procedureProblem = $derived(patchProcedureProblem(wizard.device?.model ?? "", wizard.volteConfig.sims.flatMap(s => s.carrier ? [s.carrier] : [])));
-  const efsBlocked = $derived(REAL_STEPS.efs && wizard.hasPatchTarget && (efsNeedsSave || procedureProblem !== null));
+  const efsBlocked = $derived(!wizard.opts.backupOnly && REAL_STEPS.efs && wizard.hasPatchTarget && (efsNeedsSave || procedureProblem !== null));
   $effect(() => () => clearTimeout(pathAlertTimer));
 
   const bootloaderKnown = $derived(wizard.device?.bootloader === "locked" || wizard.device?.bootloader === "unlocked");
@@ -131,7 +131,7 @@
   // 실행 순서 — 실제 실행과 같은 계획(wizard.plan)에서 파생
   // hazard: 초기화·펌웨어/부트 이미지 기록·모뎀 설정 수정 — 툴팁·확인 모달 대상(domain/plan stepHazard)
   const planSteps = $derived(wizard.plan.map((s) => ({ title: s.title, wipe: s.wipe, hazard: stepHazard(s) })));
-  const patching = $derived(wizard.hasPatchTarget);
+  const patching = $derived(!wizard.opts.backupOnly && wizard.hasPatchTarget);
   // 패치 대상 슬롯의 SIM 문제(없음·PIN 잠김·통신사 미확인) — 기기·선택에 따라 고정
   const simProblems = $derived(
     wizard.volteConfig.sims
@@ -150,7 +150,7 @@
   const canLaunch = $derived(!efsBlocked && hazardAck && (anyBackupChecked || !hasWipe || noBackupAck));
 
   function confirm() {
-    if (efsBlocked) return;
+    if (efsBlocked || planSteps.length === 0 || wizard.journalBlocked || wizard.pendingJournal) return;
     // 방어: 백업 선택 + 경로 미지정 or 용량 부족
     // 용량 계산 중에는 여유 공간 판단이 불완전하므로 실행 보류
     if (anyBackupChecked && (!wizard.backupPath.trim() || diskWarning || diskUnknown || sizesLoading)) {
@@ -189,13 +189,13 @@
         >
           백업 및 복구
         </button>
-        <button
+        {#if !wizard.opts.backupOnly}<button
           class="flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors
             {activeTab === 'rooting' ? 'bg-background elev-1 text-foreground' : 'text-muted-foreground hover:text-foreground'}"
           onclick={() => (activeTab = "rooting")}
         >
           루팅
-        </button>
+        </button>{/if}
       </div>
 
       <div class="flex-1 min-h-0 overflow-y-auto">
@@ -263,7 +263,7 @@
             </div>
           {/each}
 
-          <div class="h-px bg-border mb-3"></div>
+          {#if !wizard.opts.backupOnly}<div class="h-px bg-border mb-3"></div>
 
           <div class="space-y-1.5">
             <OptionCard
@@ -272,7 +272,7 @@
               desc="모든 작업 완료 후 백업한 데이터를 자동으로 복원합니다"
               onToggle={(v) => (wizard.opts.restore = v)}
             />
-          </div>
+          </div>{/if}
 
         {:else}
           {#if wizard.bootloaderOnly === "unlock"}
@@ -329,7 +329,7 @@
             </div>
           {/if}
         {/if}
-        {#if wizard.hasPatchTarget}
+        {#if patching}
           <div class="mt-4">
             <CommunicationPanel snapshot={wizard.communicationBefore} loading={wizard.communicationLoading} error={wizard.communicationError} slots={wizard.communicationSlots} onRefresh={() => void wizard.refreshCommunication("before")} />
             <p class="mt-2 text-[11px] text-muted-foreground">실행 전 현재 통신을 확인할 수 있습니다. SIM·IMS 상태는 선택한 기록 대상을 바꾸거나 실행을 막지 않습니다.</p>
@@ -374,19 +374,19 @@
         {/each}
         </TooltipProvider>
       </div>
-      {#if procedureProblem}
+      {#if !wizard.opts.backupOnly && procedureProblem}
         <div class="shrink-0 border-t bg-warning-container/40 px-4 py-3 text-[12px] text-warning">
           {procedureProblem}
         </div>
       {/if}
-      {#if wizard.workflow.support.notes.length > 0}
+      {#if !wizard.opts.backupOnly && wizard.workflow.support.notes.length > 0}
         <div class="shrink-0 border-t bg-warning-container/40 px-4 py-3 space-y-1 text-[11px] leading-relaxed text-muted-foreground">
           {#each wizard.workflow.support.notes as note}
             <p>{note}</p>
           {/each}
         </div>
       {/if}
-      {#if simProblems.length > 0}
+      {#if !wizard.opts.backupOnly && simProblems.length > 0}
         <div class="shrink-0 border-t bg-warning-container/40 px-4 py-3 space-y-1">
           <div class="flex items-center gap-1.5 text-[12px] font-semibold text-warning">
             <TriangleAlert size={13} class="shrink-0" />{simProblems.map((p) => `SIM${p.slot} ${p.issue}`).join(" · ")}
@@ -415,8 +415,8 @@
   {/if}
 
   <footer class="h-14 shrink-0 border-t bg-muted/40 flex items-center justify-between px-6">
-    <Button variant="ghost" size="sm" onclick={() => (wizard.view = "step1")}>← 이전</Button>
-    <Button size="sm" onclick={confirm} disabled={efsBlocked}>실행</Button>
+    <Button variant="ghost" size="sm" onclick={() => (wizard.view = wizard.opts.backupOnly ? "device" : "step1")}>← 이전</Button>
+    <Button size="sm" onclick={confirm} disabled={efsBlocked || planSteps.length === 0 || wizard.journalBlocked || !!wizard.pendingJournal}>실행</Button>
   </footer>
 </div>
 

@@ -7,7 +7,7 @@
 
   let { snapshot, loading = false, error = "", slots = [], calls = [], showCalls = false, onRefresh, onCallChange }:
     { snapshot: CommunicationSnapshot | null; loading?: boolean; error?: string; slots?: (1 | 2)[]; calls?: CallCheck[]; showCalls?: boolean; onRefresh?: () => void; onCallChange?: (slot: 1 | 2, item: CallItem, checked: boolean) => void } = $props();
-  const rows = $derived(slots.length ? slots.map(slot => snapshot?.sims.find(s => s.slot === slot) ?? ({ slot, type: "physical", carrier: null, state: "UNKNOWN", volte: "unknown" } satisfies SimInfo)) : snapshot?.sims ?? []);
+  const rows = $derived(slots.length ? slots.map(slot => snapshot?.sims.find(s => s.slot === slot) ?? ({ slot, type: "unknown", carrier: null, state: "UNKNOWN", volte: "unknown" } satisfies SimInfo)) : snapshot?.sims ?? []);
   const observed = $derived(snapshot?.outcome === "observed");
 </script>
 

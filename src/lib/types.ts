@@ -38,7 +38,8 @@ export interface CommunicationSnapshot {
 
 export interface SimInfo {
   slot: 1 | 2;
-  type: "physical" | "esim";
+  /** Subscription evidence only; missing or conflicting evidence remains unknown. */
+  type: "physical" | "esim" | "unknown";
   carrier: string | null; // null = SIM 인식 안 됨 (state 참고)
   /** gsm.sim.state 원값: LOADED / ABSENT / PIN_REQUIRED / PUK_REQUIRED / NETWORK_LOCKED / NOT_READY / CARD_IO_ERROR … */
   state: string;
@@ -257,6 +258,8 @@ export interface BackupSummary {
   dir: string;
   errors: string[];
   items: { id: string; status: string; files: number; bytes: number }[];
+  omittedApps?: { package: string; reasons: string[]; removedFiles: number; removedBytes: number; cleanupPending: boolean }[];
+  sourceMetadata?: { itemId: string; path: string; sha256: string; entries: number; directories: number; unavailableBirthTimes: number; payloadMismatches: number; complete: boolean; errors: string[]; captureContext: string }[];
 }
 
 /** 백업·복구 진행 이벤트 페이로드 — 'backup:progress' / 'restore:progress' */
@@ -336,6 +339,9 @@ export interface RunStep {
 /** 작업 진행 기록 — 끊긴 작업을 같은 폰에서 이어서 진행 (journal.rs, 앱 데이터 폴더)
  *  언락 코드·IMEI는 넣지 않는다 (이어서 진행할 때 다시 입력) */
 export interface RunJournal {
+  /** Completed step whose explicit Next click is still pending. */
+  awaitingNext?: string | null;
+  backupOmissions?: { apps: NonNullable<BackupSummary["omittedApps"]>; pending: boolean };
   version: 1;
   model: string;
   productName: string;
@@ -343,7 +349,7 @@ export interface RunJournal {
   startedAt: string; // ISO
   updatedAt: string;
   config: VolteConfig;
-  opts: { unroot: boolean; relock: boolean; restore: boolean };
+  opts: { unroot: boolean; relock: boolean; restore: boolean; backupOnly?: boolean };
   backupPath: string;
   /** 실전 백업이 만든 백업 폴더(manifest.json 위치) — 복구·이어받기에 사용 */
   backupDir?: string;

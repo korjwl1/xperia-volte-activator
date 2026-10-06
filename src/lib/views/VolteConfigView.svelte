@@ -5,6 +5,7 @@
   import { api } from "$lib/api";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { resolveCarrier, simStateLabel, type CarrierId, type SimTarget } from "$lib/types";
+  import { simTypeLabel } from "$lib/domain/communication";
 
   // LGU_V는 UI에 표시하지 않음 — 기기 모델로 자동 판별 (1 V/5 V면 LGU 선택 시 LGU_V 사용)
   const carriers: { id: CarrierId | null; label: string }[] = [
@@ -113,7 +114,7 @@
               <div>
                 <div class="flex items-center gap-2">
                   <span class="text-base font-bold">SIM{sim.slot}</span>
-                  <Badge variant="outline" class="text-[10px]">{sim.type === "physical" ? "물리" : "eSIM"}</Badge>
+                  <Badge variant="outline" class="text-[10px]">{simTypeLabel(sim.type)}</Badge>
                 </div>
                 <div class="text-sm text-muted-foreground mt-1">{sim.carrier || simStateLabel(sim.state)}</div>
               </div>

@@ -132,6 +132,7 @@ pub fn run() {
             backup::backup_run,
             backup::backup_cancel,
             backup::backup_manifest_check,
+            backup::smsie_probe,
             backup::backup_delete,
             backup::smsie_prepare,
             backup::smsie_collect,

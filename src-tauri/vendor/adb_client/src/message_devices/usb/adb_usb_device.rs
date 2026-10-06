@@ -104,6 +104,15 @@ impl ADBUSBDevice {
 }
 
 impl ADBDeviceExt for ADBUSBDevice {
+    fn needs_reconnect(&self) -> bool {
+        self.inner.needs_reconnect()
+    }
+    fn begin_sync_batch(&mut self) -> Result<bool> {
+        self.inner.begin_sync_batch()
+    }
+    fn end_sync_batch(&mut self) -> Result<()> {
+        self.inner.end_sync_batch()
+    }
     #[inline]
     fn shell_command(
         &mut self,

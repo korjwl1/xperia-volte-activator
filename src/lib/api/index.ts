@@ -66,19 +66,20 @@ export interface Api extends EfsApi {
   contactsRestoreFinish(serial: string | undefined, dir: string): Promise<ApiResult<null>>;
   engineCapabilities(): Promise<ApiResult<EngineCapabilities>>;
   /** 백업 시작 — 지정 폴더 아래 시작 시각 기준 폴더 생성, 절대 경로 반환 */
-  backupPrepare(serial: string | undefined, dest: string): Promise<ApiResult<string>>;
+  backupPrepare(serial: string | undefined, dest: string, backupOnly?: boolean): Promise<ApiResult<string>>;
   /** 백업 실행(자동 항목) — 진행은 onBackupProgress로. 실패 시 error 문구 */
-  backupRun(serial: string | undefined, items: string[], dest: string, runId: string, resumeDir?: string): Promise<ApiResult<BackupSummary>>;
+  backupRun(serial: string | undefined, items: string[], dest: string, runId: string, resumeDir?: string, backupOnly?: boolean): Promise<ApiResult<BackupSummary>>;
   /** 백업 취소 요청 — runId가 있으면 그 실행만(시작 전이면 시작 즉시 멈춤), 없으면 지금 실행 중인 백업 */
   backupCancel(runId?: string): Promise<void>;
   /** 백업 폴더 삭제(완료 화면, 사용자 확인 후) — 이 앱이 만든 backup-* 폴더만. 목 모드는 아무것도 지우지 않음 */
-  backupDelete(dir: string): Promise<ApiResult<null>>;
+  backupDelete(dir: string, backupOnly?: boolean): Promise<ApiResult<null>>;
   /** 기존 백업 폴더 완결 검사(파괴 단계 게이트용) — 폴더가 없으면 null */
-  backupManifestCheck(dir: string): Promise<BackupSummary | null>;
+  backupManifestCheck(dir: string, runId?: string): Promise<BackupSummary | null>;
   /** SMS Import/Export 설치·권한·임시 폴더 준비 — 로그 문구 목록 반환 */
-  smsiePrepare(serial: string | undefined, download: boolean): Promise<ApiResult<string[]>>;
+  smsiePrepare(serial: string | undefined, download: boolean, backupOnly?: boolean): Promise<ApiResult<string[]>>;
   /** SMS Import/Export 산출물 수집 — ready=false면 앱에서 아직 내보내지 않음 */
-  smsieCollect(serial: string | undefined, backupDir: string, confirmComplete?: boolean): Promise<SmsIeOutcome | null>;
+  smsieCollect(serial: string | undefined, backupDir: string, confirmComplete?: boolean, backupOnly?: boolean): Promise<ApiResult<SmsIeOutcome>>;
+  smsieProbe(serial: string | undefined, backupDir: string, backupOnly?: boolean): Promise<ApiResult<boolean>>;
   /** 복구 실행(APK·파일 tar 스트리밍·설정·연락처 전송) — 진행은 onRestoreProgress */
   restoreRun(serial: string | undefined, dir: string, items: string[]): Promise<ApiResult<RestoreOutcome>>;
   /** 문자·통화 기록 수동 복원 준비 — 파일 전송 + 기본 문자 앱 역할 (안내 문구 반환) */
@@ -241,13 +242,13 @@ const hybridApi: Api = {
     return invokeResult<null>("contacts_restore_finish", { serial: serial ?? null, dir });
   },
 
-  async backupPrepare(serial, dest) {
-    if (!REAL_STEPS.backup) return { ok: false, error: "실전 백업이 비활성화되어 있습니다" };
+  async backupPrepare(serial, dest, backupOnly = false) {
+    if (!REAL_STEPS.backup && !backupOnly) return { ok: false, error: "실전 백업이 비활성화되어 있습니다" };
     return await invokeResult<string>("backup_prepare", { serial: serial ?? null, dest });
   },
 
-  async backupRun(serial, items, dest, runId, resumeDir) {
-    if (!REAL_STEPS.backup) return { ok: false, error: "실전 백업이 비활성화되어 있습니다" };
+  async backupRun(serial, items, dest, runId, resumeDir, backupOnly = false) {
+    if (!REAL_STEPS.backup && !backupOnly) return { ok: false, error: "실전 백업이 비활성화되어 있습니다" };
     return await invokeResult<BackupSummary>("backup_run", { serial: serial ?? null, items, dest, resumeDir: resumeDir || null, runId });
   },
 
@@ -255,23 +256,30 @@ const hybridApi: Api = {
     await invokeBackend<null>("backup_cancel", { runId: runId ?? null });
   },
 
-  async backupDelete(dir) {
-    if (!REAL_STEPS.backup) return { ok: true, value: null };
+  async backupDelete(dir, backupOnly = false) {
+    if (!REAL_STEPS.backup && !backupOnly) return { ok: true, value: null };
     return await invokeResult<null>("backup_delete", { dir });
   },
 
-  async backupManifestCheck(dir) {
-    return await invokeBackend<BackupSummary>("backup_manifest_check", { dir });
+  async backupManifestCheck(dir,runId) {
+    const result=await invokeResult<BackupSummary>("backup_manifest_check", { dir, runId: runId ?? null });
+    if(!result.ok) throw new Error(result.error);
+    return result.value;
   },
 
-  async smsiePrepare(serial, download) {
-    if (!REAL_STEPS.backup) return { ok: false, error: "실전 백업이 비활성화되어 있습니다" };
+  async smsiePrepare(serial, download, backupOnly = false) {
+    if (!REAL_STEPS.backup && !backupOnly) return { ok: false, error: "실전 백업이 비활성화되어 있습니다" };
     return await invokeResult<string[]>("smsie_prepare", { serial: serial ?? null, download });
   },
 
-  async smsieCollect(serial, backupDir, confirmComplete = false) {
-    if (!REAL_STEPS.backup) return null;
-    return await invokeBackend<SmsIeOutcome>("smsie_collect", { serial: serial ?? null, backupDir, confirmComplete });
+  async smsieCollect(serial, backupDir, confirmComplete = false, backupOnly = false) {
+    if (!REAL_STEPS.backup && !backupOnly) return { ok: false, error: "실전 백업이 비활성화되어 있습니다" };
+    return await invokeResult<SmsIeOutcome>("smsie_collect", { serial: serial ?? null, backupDir, confirmComplete });
+  },
+
+  async smsieProbe(serial, backupDir, backupOnly = false) {
+    if (!REAL_STEPS.backup && !backupOnly) return { ok: false, error: "실전 백업이 비활성화되어 있습니다" };
+    return await invokeResult<boolean>("smsie_probe", { serial: serial ?? null, backupDir });
   },
 
   async onBackupProgress(cb) {

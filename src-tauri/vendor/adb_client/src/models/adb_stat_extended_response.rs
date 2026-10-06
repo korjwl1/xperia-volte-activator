@@ -94,7 +94,7 @@ static THIRD_LINE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static FOURTH_LINE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^Access: \\((?P<perms>\\d+).*\\)\\s+Uid: \\(\\s(?P<uid>\\d+)/\\s+(?P<uid_name>.*)\\)\\s+Gid: \\(\\s(?P<gid>\\d+)/\\s+(?P<gid_name>.*)\\)$")
+    Regex::new(r"^Access: \((?P<perms>\d+)[^)]*\)\s+Uid: \(\s*(?P<uid>\d+)/\s*(?P<uid_name>[^)]*)\)\s+Gid: \(\s*(?P<gid>\d+)/\s*(?P<gid_name>[^)]*)\)$")
         .expect("wrong syntax for fourth regex")
 });
 
@@ -256,5 +256,17 @@ Change: 2024-11-28 16:27:23.276724566 +0100
         assert_eq!(resp.atime, 0);
         assert_eq!(resp.mtime, 0);
         assert_eq!(resp.ctime, 1_732_807_643);
+    }
+
+    #[test]
+    fn unpadded_android_uid_gid_preserve_large_size_and_mtime() {
+        let response = "  File: /sdcard/volte_sms_backup/messages-2027-01-02 (1).zip\n  Size: 5368709120 Blocks: 10485760 IO Blocks: 4096 regular file\nDevice: fd00h/64768d Inode: 42 Links: 1\nAccess: (0660/-rw-rw----) Uid: (10234/u0_a234) Gid: (1023/media_rw)\nAccess: 1970-01-01 01:00:00.000000000 +0100\nModify: 2024-11-28 16:27:23.276724566 +0100\nChange: 2024-11-28 16:27:23.276724566 +0100\n";
+        let stat = ADBStatExtendedResponse::try_from(response.as_bytes())
+            .unwrap()
+            .unwrap();
+        assert_eq!(stat.size, 5_368_709_120);
+        assert_eq!(stat.mtime, 1_732_807_643);
+        assert_eq!(stat.user.id, 10234);
+        assert_eq!(stat.group.name, "media_rw");
     }
 }

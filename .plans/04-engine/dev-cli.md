@@ -1,5 +1,7 @@
 # 개발용 단계 실행 CLI
 
+2026-10-06 전송 비교 추가: `backup_transfer_probe`는 `serial`, `remoteRoot`, `dest`, `maxFiles`, `maxTotalBytes`를 받는다. 공유 저장소의 읽기만 수행하며 기기 쓰기 허용 옵션은 필요 없다. 1–64개 파일·회차당 최대512 MiB, 실제 백업과 분리된 PC 진단 폴더 사용. 같은 파일을 per-file/batch/batch/per-file 순서로 받아 전송 시간과 크기·PC 재독 해시·회차간 해시 일치를 기록한다. 두 모드는 동일한 버퍼와 내구성 설정이며 세션 재사용 효과를 비교한다. 직접 USB/TCP의 재사용 여부가 결과에 포함된다. 서버 경유는 재사용 미지원이므로 결과의 `sessionReuse=false`를 그대로 표시한다. 실제 큰 사진 전송 비교는 현재 앱 데이터 완료 후 실행 예정이다.
+
 2026-10-05 구현. 실기기 통신은 이번 구현 과정에서 실행하지 않았다. 검토 대상은 README의 Xperia 1 V JP · XQ-DQ44이다.
 
 ## 같은 엔진을 사용한다
@@ -116,3 +118,11 @@ fastboot 명령의 `expectedSerial`은 `device_list`의 `serialKey`(ADB serial)�
 2026-10-06: 명령 카탈로그의 pcOnly는 요청 정의에서 함께 생성한다. engine_capabilities는 폰을 조회하지 않고 현재 Cargo 쓰기 기능을 반환한다. 이벤트 파일을 준비한 뒤 running 기록을 남기며 초기 로그 오류는 failed로 확정한다. history는 손상된 개별 기록을 corrupt 행으로 표시하고 정상 기록을 계속 반환한다. backup_run/backup_manifest_check의 complete:false, smsie_collect의 ready:false 또는 미완결 summary는 성공 종료로 취급하지 않는다. contacts_restore_finish는 수동 가져오기 확인 후 같은 기기·연락처 수를 재검사하고 고정 임시 VCF만 지운다.
 
 `xva-dev-readonly.exe`라는 사본 이름은 부트/EFS Cargo 쓰기 기능을 제외한 빌드를 뜻한다. 일반 파일·문자 복원은 Cargo 기능과 별개이므로 이 빌드에서도 명시적인 --allow-device-write를 주면 실행할 수 있다. 명령별 enabledInBuild와 requiresDeviceWrite를 기준으로 판단한다.
+
+2026-10-06 사용자 승인 실기기 세션: Xperia 1 V(XQ-DQ44)의 14개 백업 항목 전부를 D:\20261006에 저장한다. 기기 쓰기 승인 범위는 백업용 앱 설치·권한·임시 폴더 생성·앱 실행·검증한 임시 산출물 수집 후 정리이며, 언락·플래시·루팅·EFS 작업은 실행하지 않는다. 문자·통화는 smsie_prepare → 사용자 Export Messages / Export Call Log → 내장 저장소/volte_sms_backup/저장 → smsie_collect(confirmComplete=false) 파일 검사 → 사용자 성공 안내 확인 후 smsie_collect(confirmComplete=true). GUI와 CLI는 기존 공통 Rust 함수·동일 manifest를 사용한다. 앱 내부 버튼 자동 클릭과 보조 APK/JAR는 포함하지 않는다. 기본 Cargo features=[]·REAL_STEPS=false 유지. CLI 검증 빌드는 --features dev-cli,fastboot-write,root-write,efs-write를 명시한다.
+
+## 2026-10-06 PC 앱 데이터 제외 정리
+
+`backup_clean_unreadable_apps` 요청: `{"command":"backup_clean_unreadable_apps","args":{"dir":"<absolute finished backup folder>"}}`. 기존 Rust omissions 정책을 PC 폴더에 적용한다. 폰 연결 및 `--allow-device-write`는 필요하지 않으며 공통 OS 작업 잠금을 사용한다. 앱 데이터 원본 읽기 권한 거부 기록이 있는 패키지 전체를 PC에서 제거하고 APK·다른 항목을 유지한다. 반환 BackupSummary의 omittedApps와 complete를 함께 확인한다. 정리 실패 시 cleanupPending이 복원/완결을 차단한다. 임의 삭제 명령·백업 전체 삭제와는 별도다.
+
+2026-10-06: backup_metadata_enrich {serial,dir}는 명시적 대상 기기와 기존 PC 백업을 대조하고 원본 속성만 추가하는 읽기 전용 기기 명령이다. 현재 source-metadata receipt가 있으면 덮어쓰지 않는다. 생성 시각 미지원은 null, 과거 시각 소급 복원 없음. 제품 GUI에는 이 보정 명령을 등록하지 않는다. backup_manifest_check는 GUI와 동일한 진행 가능한 검증 helper를 호출한다.

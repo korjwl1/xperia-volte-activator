@@ -19,6 +19,9 @@ pub enum ADBListItemType {
     Socket(ADBListItem),
     /// The entry is some other type
     Other(ADBListItem),
+    /// The entry name is not valid UTF-8. `name` is a lossy display form only and
+    /// must not be used as a device path; the rest of the listing stays usable.
+    InvalidName(ADBListItem),
 }
 
 impl ADBListItemType {
@@ -48,6 +51,7 @@ impl Display for ADBListItemType {
             Self::Symlink(item) => write!(f, "symlink: {item}"),
             Self::Socket(item) => write!(f, "socket: {item}"),
             Self::Other(item) => write!(f, "other: {item}"),
+            Self::InvalidName(item) => write!(f, "invalid name: {item}"),
         }
     }
 }

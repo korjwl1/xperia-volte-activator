@@ -29,6 +29,8 @@ pub struct FakeADBDevice {
     pub deny_list: BTreeSet<String>,
     /// list()가 보고할 크기 덮어쓰기 — SYNC u32 wrap 시뮬레이션
     pub list_size_override: BTreeMap<String, u32>,
+    /// list()가 UTF-8이 아닌 이름으로 보고할 경로(표시용 이름)
+    pub invalid_names: BTreeSet<String>,
     /// pull()이 실패하게 만들 경로
     pub fail_pull: BTreeSet<String>,
     /// shell_command 응답 규칙 — 명령 시작부 일치 시 텍스트 반환
@@ -36,6 +38,9 @@ pub struct FakeADBDevice {
     /// 실행된 셸 명령 전체 기록
     pub shell_calls: Vec<String>,
     pub pull_calls: Vec<String>,
+    pub sync_batch_calls: Vec<&'static str>,
+    pub sync_batch_active: bool,
+    pub fail_sync_batch_end: bool,
     pub list_calls: Vec<String>,
     pub storage_full: bool,
     /// Some이면 SMS 역할 변경을 모의한다(내부 None은 기본 앱 없음).
@@ -118,6 +123,7 @@ impl FakeADBDevice {
 
     /// 명령 시작부가 prefix와 일치하면 stdout으로 answer 반환
     pub fn answer_shell(&mut self, prefix: &str, answer: &str) {
+        self.shell_answers.retain(|(saved, _)| saved != prefix);
         self.shell_answers
             .push((prefix.to_string(), answer.to_string()));
     }
@@ -200,12 +206,72 @@ impl FakeADBDevice {
             out.write_all(answer.as_bytes())?;
             return Ok(self.shell_exit_codes.get(cmd).copied().unwrap_or(0));
         }
+        if (cmd.starts_with("stat -c '") || cmd.starts_with("stat -L -c '"))
+            && cmd.contains("' -- ")
+        {
+            let args = cmd.split_once("' -- ").unwrap().1;
+            let mut paths = Vec::new();
+            let mut value = String::new();
+            let mut chars = args.chars().peekable();
+            let mut quoted = false;
+            while let Some(c) = chars.next() {
+                match c {
+                    '\'' => quoted = !quoted,
+                    '\\' if !quoted => {
+                        if let Some(next) = chars.next() {
+                            value.push(next);
+                        }
+                    }
+                    ' ' if !quoted => {
+                        if !value.is_empty() {
+                            paths.push(std::mem::take(&mut value));
+                        }
+                    }
+                    _ => value.push(c),
+                }
+            }
+            if !value.is_empty() {
+                paths.push(value);
+            }
+            let mut code = 0;
+            for path in paths {
+                let (mode, size, mtime) = if let Some(file) = self.files.get(&path) {
+                    (0o100000 | file.perm, file.data.len() as u64, file.mtime)
+                } else if self.dirs.contains(&path) {
+                    (0o040000 | 0o2770, 4096, self.now)
+                } else {
+                    writeln!(err, "stat: {path}: No such file")?;
+                    code = 1;
+                    continue;
+                };
+                writeln!(out,"{mode:x}\t10001\t1078\t{size}\t{mtime}\t{mtime}\t{mtime}\t?\t42\t1\t8\tu0_a1\text_data_rw\tu:object_r:fuse:s0\t2023-11-14 22:13:20.123456789 +0000\t2023-11-14 22:13:20.123456789 +0000\t2023-11-14 22:13:20.123456789 +0000\t?")?;
+            }
+            return Ok(code);
+        }
         write!(err, "unknown command: {cmd}")?;
         Ok(1)
     }
 }
 
 impl ADBDeviceExt for FakeADBDevice {
+    fn begin_sync_batch(&mut self) -> Result<bool, RustADBError> {
+        assert!(!self.sync_batch_active, "nested backup batch");
+        self.sync_batch_active = true;
+        self.sync_batch_calls.push("begin");
+        Ok(true)
+    }
+    fn end_sync_batch(&mut self) -> Result<(), RustADBError> {
+        assert!(self.sync_batch_active, "batch ended twice");
+        self.sync_batch_active = false;
+        self.sync_batch_calls.push("end");
+        if self.fail_sync_batch_end {
+            Err(RustADBError::ADBRequestFailed(
+                "injected stream close failure".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
     fn shell_command(
         &mut self,
         command: &dyn AsRef<str>,
@@ -422,6 +488,17 @@ impl ADBDeviceExt for FakeADBDevice {
                     time: self.now,
                     permissions: 0o120777,
                     size: 0,
+                }));
+            }
+        }
+        // UTF-8이 아닌 이름(실제 LIST 해석 결과와 같은 형태)
+        for p in &self.invalid_names {
+            if Self::parent_of(p) == dir {
+                out.push(ADBListItemType::InvalidName(ADBListItem {
+                    name: Self::name_of(p).to_string(),
+                    time: self.now,
+                    permissions: 0o100644,
+                    size: 1,
                 }));
             }
         }

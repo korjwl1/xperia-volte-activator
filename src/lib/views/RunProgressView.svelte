@@ -6,7 +6,7 @@
   import { Switch } from "$lib/components/ui/switch";
   import { Label } from "$lib/components/ui/label";
   import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert";
-  import { Play, Pause, Square, Usb, ChevronsRight, ExternalLink, CircleCheck, OctagonX, CircleHelp, LoaderCircle } from "@lucide/svelte/icons";
+  import { Play, Pause, Square, Usb, ChevronsRight, ExternalLink, CircleCheck, OctagonX, TriangleAlert, CircleHelp, LoaderCircle } from "@lucide/svelte/icons";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { api } from "$lib/api";
   import { LINKS, maskImei } from "$lib/data/links";
@@ -14,7 +14,7 @@
   let imeiCopied = $state(false);
   let abortAsk = $state(false);
   function requestAbort() {
-    if (wizard.runInDanger || wizard.busy > 0 || wizard.manualChecking) abortAsk = true;
+    if (wizard.runInDanger || wizard.busy > 0 || wizard.manualChecking || wizard.manualCurrent?.id === "smsie-export") abortAsk = true;
     else wizard.abort();
   }
   let copiedTimer: ReturnType<typeof setTimeout> | undefined;
@@ -70,25 +70,12 @@
   const overallPct = $derived(Math.round(wizard.overall * 100));
   const currentStep = $derived(wizard.runSteps.find((s) => s.status === "running" || s.status === "manual-wait"));
   const currentFailed = $derived(wizard.runSteps.find((s) => s.status === "failed"));
+  // 실패는 모달 하나로만 알린다(상단 배너 없음). 결정(다시 시도·이대로 진행·중단)도 모달에서 끝난다.
+  const failureModalOpen = $derived(!!wizard.stepError && !wizard.manualCurrent && !wizard.backupOmissionNotice);
+  let continueAsk = $state(false);
 </script>
 
 <div class="flex-1 min-h-0 flex flex-col gap-3 p-4 lg:p-6">
-  {#if wizard.stepError}
-    <Alert variant="destructive" class="shrink-0">
-      <OctagonX size={16} />
-      <AlertTitle>{currentFailed?.title ?? "단계"} 단계가 실패했습니다</AlertTitle>
-      <AlertDescription class="flex flex-col gap-2">
-        <span>{wizard.displayedStepError} — 다음 단계(리락 포함)로 넘어가지 않습니다.</span>
-        <div class="flex gap-2">
-          <Button size="sm" onclick={() => wizard.retryStep()}>이 단계 다시 시도</Button>
-          <Button size="sm" variant="outline" onclick={requestAbort}>중단</Button>
-          {#if wizard.corruptRelockHistory}
-            <Button size="sm" variant="outline" disabled={wizard.busy > 0} onclick={() => wizard.archiveFlashHistory()}>손상 이력 보관 후 복원 조건 다시 확인</Button>
-          {/if}
-        </div>
-      </AlertDescription>
-    </Alert>
-  {/if}
   {#if wizard.usbError}
     <Alert variant="destructive" class="shrink-0">
       <Usb size={16} />
@@ -113,10 +100,10 @@
       <div class="flex items-center justify-between gap-4">
         <div class="min-w-0">
           <div class="text-sm font-semibold truncate">
-            {currentStep?.title ?? (wizard.finished ? "완료" : "대기 중")}
+            {currentStep?.title ?? (wizard.finished ? "완료" : wizard.awaitingNext ? "단계 완료 — 다음 단계 대기" : "대기 중")}
           </div>
           <!-- 단계 사이(진행 중 단계가 잠깐 없는 순간)에도 줄을 남겨 카드 높이가 흔들리지 않게 한다 -->
-          <div class="text-[11px] text-muted-foreground {currentStep ? '' : 'invisible'}">{Math.round((currentStep?.progress ?? 0) * 100)}%</div>
+          <div class="text-[11px] text-muted-foreground truncate {currentStep ? '' : 'invisible'}">{Math.round((currentStep?.progress ?? 0) * 100)}%{#if currentStep && wizard.transferStatus} · {wizard.transferStatus}{/if}</div>
         </div>
         <div class="flex items-center gap-2 shrink-0">
           {#if wizard.simulationControlsVisible}
@@ -130,7 +117,9 @@
           </div>
           {/if}
           {#if !wizard.finished}
-            {#if wizard.running}
+            {#if wizard.awaitingNext}
+              <Button size="sm" disabled={wizard.busy > 0 || wizard.backupOmissionNotice || wizard.usbError || !!wizard.stepError || wizard.firmwareDirState === "loading"} onclick={() => wizard.nextStep()}>다음 → {wizard.nextStepTitle}</Button>
+            {:else if wizard.running}
               <Button size="sm" variant="outline" onclick={() => wizard.pause()}><Pause size={13} class="mr-1" />일시정지</Button>
             {:else if wizard.busy === 0}
               <!-- 기기 작업(엔진·완결 게이트·펌웨어 받기)이 진행 중이면 [이어서]를 두지 않는다 -->
@@ -139,7 +128,7 @@
             {/if}
             <Button size="sm" variant="destructive" onclick={requestAbort}><Square size={12} class="mr-1" />중단</Button>
           {:else}
-            <Button size="sm" onclick={() => wizard.goFinish()}>다음 단계 →</Button>
+            <Button size="sm" disabled={wizard.backupOmissionNotice} onclick={() => wizard.goFinish()}>다음 → 완료 화면</Button>
           {/if}
         </div>
       </div>
@@ -174,12 +163,76 @@
   </Card>
 </div>
 
+{#if wizard.backupOmissionNotice}
+  <Modal title="백업 결과 — 백업할 수 없었던 앱 안내" onClose={() => wizard.acknowledgeBackupOmissions()}>
+    <div class="elev-2 w-full max-w-2xl max-h-[calc(100vh-3rem)] overflow-y-auto rounded-xl bg-background p-5 space-y-3 text-sm">
+      <h3 class="flex items-center gap-2 font-semibold"><TriangleAlert size={18} class="text-warning shrink-0" />일부 앱 데이터는 백업할 수 없었습니다</h3>
+      <p>백업 대상으로 예상했던 다음 앱은 일부 파일·폴더의 읽기 권한이 없어 앱 데이터 전체를 백업할 수 없었습니다.</p>
+      <ul class="space-y-1 rounded-md bg-warning/10 p-3">
+        {#each wizard.backupOmittedApps as app (app.package)}
+          <li class="break-all">{app.package}</li>
+        {/each}
+      </ul>
+      <p>불완전한 데이터를 복구하지 않도록 해당 앱의 PC 앱 데이터 사본을 모두 삭제했습니다. APK 백업은 삭제하지 않았으므로, APK도 백업했다면 앱 재설치는 가능합니다.</p>
+      <p class="text-muted-foreground">필요한 데이터는 해당 앱에서 별도로 내보내거나 동기화해 주세요. 이 안내를 닫아도 다음 작업은 시작되지 않습니다.</p>
+      <div class="flex justify-end"><Button onclick={() => wizard.acknowledgeBackupOmissions()}>확인</Button></div>
+    </div>
+  </Modal>
+{/if}
+
+{#if failureModalOpen}
+  <!-- 결정은 이 모달에서 끝난다: 다시 시도 / 이대로 진행 / 중단. 그냥 닫으면 중단 -->
+  <Modal title={wizard.backupPermissionBlocked ? '백업 — 앱 파일 접근 불가' : `${currentFailed?.title ?? "작업"} 오류 — 조치가 필요합니다`} onClose={() => { continueAsk = false; requestAbort(); }}>
+    <div class="elev-2 w-full max-w-2xl max-h-[calc(100vh-3rem)] overflow-y-auto rounded-xl bg-background p-5 space-y-3 text-sm">
+      <h3 class="flex items-center gap-2 font-semibold"><TriangleAlert size={18} class="text-warning shrink-0" />{wizard.backupPermissionBlocked ? '백업 — 앱 파일 접근 불가' : `${currentFailed?.title ?? "작업"} 오류 — 조치가 필요합니다`}</h3>
+      <p class="{wizard.backupPermissionBlocked ? 'text-warning' : 'text-destructive'} whitespace-pre-wrap break-words">{wizard.displayedStepError}</p>
+      {#if wizard.backupPermissionBlocked}
+        <ol class="list-decimal pl-5 space-y-2">
+          <li>표시된 파일·폴더는 폰이 ADB 읽기를 거부한 항목입니다. 수집된 PC 사본은 보존됩니다.</li>
+          <li>필요한 데이터는 해당 앱의 내보내기 또는 동기화 기능으로 별도로 보관해 주세요.</li>
+          <li>읽기 권한 문제가 해결된 경우에 재시도해 주세요. USB 재연결과 백업 반복으로는 이 권한 거부가 해결되지 않습니다.</li>
+        </ol>
+      {:else if currentFailed?.id === "backup"}
+        <ol class="list-decimal pl-5 space-y-2">
+          <li>폰의 잠금을 해제하고 USB 연결·USB 디버깅 허용 상태를 확인해 주세요.</li>
+          <li>PC 백업 저장 위치에 접근할 수 있고 여유 공간이 있는지 확인해 주세요.</li>
+          <li>문자·통화 내보내기 오류라면 SMS Import/Export에서 해당 항목을 내장 저장소의 volte_sms_backup에 저장하고 성공 안내를 확인해 주세요.</li>
+        </ol>
+      {/if}
+      {#if currentFailed?.logs.length}
+        <details class="rounded-md border bg-muted/30">
+          <summary class="cursor-pointer select-none px-3 py-2 text-muted-foreground">로그 보기 (최근 {Math.min(200, currentFailed.logs.length)}줄)</summary>
+          <pre class="max-h-64 overflow-auto px-3 pb-3 text-[11px] leading-relaxed whitespace-pre-wrap break-all">{currentFailed.logs.slice(-200).join("\n")}</pre>
+        </details>
+      {/if}
+      {#if continueAsk}
+        <p class="text-destructive">백업되지 않은 항목이 있는 채로 초기화 단계로 넘어갑니다. 위에 표시된 항목은 초기화 후 복구할 수 없습니다.</p>
+        <div class="flex justify-end gap-2">
+          <Button variant="outline" onclick={() => { continueAsk = false; }}>취소</Button>
+          <Button variant="destructive" onclick={() => { continueAsk = false; wizard.continueAfterFailure(); }}>복구 불가를 이해하고 계속</Button>
+        </div>
+      {:else}
+        <div class="flex flex-wrap justify-end gap-2">
+          {#if wizard.corruptRelockHistory}
+            <Button variant="outline" disabled={wizard.busy > 0} onclick={() => wizard.archiveFlashHistory()}>손상 이력 보관 후 복원 조건 다시 확인</Button>
+          {/if}
+          <Button variant="outline" onclick={requestAbort}>중단</Button>
+          {#if wizard.canContinueAfterFailure}
+            <Button variant="outline" onclick={() => { if (wizard.wipeAhead) continueAsk = true; else wizard.continueAfterFailure(); }}>이대로 진행</Button>
+          {/if}
+          <Button onclick={() => wizard.retryStep()}>{wizard.backupPermissionBlocked ? '접근 문제 해결 후 재시도' : '다시 시도'}</Button>
+        </div>
+      {/if}
+    </div>
+  </Modal>
+{/if}
+
 <!-- 수동 개입 모달 (백업 직전 안내는 전용 화면) -->
 {#if wizard.manualCurrent?.id === "backup-notice"}
   <BackupNotice />
 {:else if wizard.manualCurrent}
   {@const guide = GUIDES[wizard.manualCurrent.id]}
-  <Modal title={wizard.manualCurrent.title} onClose={() => { if (wizard.manualCanDismiss) wizard.abort(); }} class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+  <Modal title={wizard.manualCurrent.title} onClose={() => { if (wizard.manualCanDismiss && wizard.manualCurrent?.id !== "smsie-export") wizard.abort(); }} class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
     <Card class="w-full max-w-lg elev-3 max-h-[calc(100vh-2rem)] flex flex-col">
       <CardHeader class="shrink-0">
         <CardTitle class="text-base">{wizard.manualCurrent.title}</CardTitle>
@@ -199,11 +252,13 @@
           </ol>
         {/if}
         {#if wizard.manualCurrent.id === "smsie-export"}
-          <label class="flex items-start gap-2 rounded-lg border p-3 text-xs">
-            <Checkbox checked={wizard.smsieExportAck} onCheckedChange={(v) => { wizard.smsieExportAck = v === true; }} />
-            폰 앱에서 선택한 문자·통화 기록 모두의 내보내기 성공 안내를 확인했습니다
-          </label>
-          <p class="text-xs text-muted-foreground">파일 검사 후 [확인하고 진행]을 누르면 PC 백업을 완료 처리하고 폰의 임시 사본을 정리합니다.</p>
+          <div class="rounded-lg bg-muted/60 p-3 text-xs space-y-1">
+            <p class="font-medium {wizard.smsieFilesReady ? 'text-success' : 'text-muted-foreground'}">{wizard.smsieFilesReady ? '선택한 문자·통화 파일 발견 — 저장이 끝나면 자동으로 검사·수집하고 넘어갑니다' : 'volte_sms_backup 폴더의 파일 생성 대기'}</p>
+            <p class="text-muted-foreground break-all">PC 저장 위치: {wizard.backupDir ? `${wizard.backupDir}/smsie` : '백업 폴더 준비 중'}</p>
+          </div>
+        {/if}
+        {#if wizard.manualCurrent.id === "smsie-import" && wizard.smsieRestoreDetails}
+          <div class="rounded-lg bg-muted/60 p-3 text-xs whitespace-pre-wrap break-all">{wizard.smsieRestoreDetails}</div>
         {/if}
         {#if wizard.manualCurrent.id === "oem-toggle" && wizard.device}
           {@const p = wizard.device.prep}
@@ -345,7 +400,7 @@
             <LoaderCircle size={13} class="animate-spin shrink-0" />
             {wizard.manualCurrent.id === "ims-check" || wizard.manualCurrent.id === "ims-precheck"
               ? wizard.imsRegistered ? "IMS 등록 확인됨 — 통화 확인 여부를 선택하고 마무리하세요" : "IMS 등록 확인 중 — SIM 없이도 통신 확인을 생략하고 마무리할 수 있습니다"
-              : `${wizard.manualWatching} 자동 감지 중 — 감지되면 바로 다음 단계로 진행합니다`}
+              : wizard.manualCurrent.id === "smsie-export" ? `${wizard.manualWatching} 중 — 저장이 끝나면 자동으로 검사하고 다음 단계로 진행합니다` : `${wizard.manualWatching} 자동 감지 중 — 감지되면 바로 다음 단계로 진행합니다`}
           </div>
         {/if}
         {#if wizard.manualCheckError}
@@ -359,11 +414,14 @@
               ? "입력을 마치면 다음 단계로 진행됩니다"
               : wizard.manualVerifiable
                 ? wizard.manualWatching
-                  ? wizard.manualCurrent.id === "ims-check" || wizard.manualCurrent.id === "ims-precheck" ? "파일 기록과 실제 통신은 별도로 확인합니다" : "감지되면 자동으로 진행합니다 — [확인하고 진행]으로 바로 확인할 수도 있습니다"
+                  ? wizard.manualCurrent.id === "smsie-export" ? "감지되면 자동으로 진행합니다 — [확인하고 진행]으로 바로 확인할 수도 있습니다" : wizard.manualCurrent.id === "ims-check" || wizard.manualCurrent.id === "ims-precheck" ? "파일 기록과 실제 통신은 별도로 확인합니다" : "감지되면 자동으로 진행합니다 — [확인하고 진행]으로 바로 확인할 수도 있습니다"
                   : "폰에서 마친 뒤 [확인하고 진행]을 누르면 확인 후 진행합니다"
                 : "완료하면 다음 단계로 진행됩니다"}
           </span>
           <div class="flex shrink-0 gap-2">
+            {#if wizard.manualCurrent.id === "smsie-export"}
+              <Button variant="outline" disabled={wizard.manualChecking} onclick={requestAbort}>중단</Button>
+            {/if}
             {#if wizard.manualSetupState === "failed" && wizard.manualCurrent.id === "smsie-export"}
               <Button variant="outline" onclick={() => wizard.smsiePrepare()}>준비 다시 시도</Button>
             {/if}
@@ -390,7 +448,7 @@
 {/if}
 
 {#if abortAsk}
-  <Modal title="작업 중단 확인" onClose={() => { abortAsk = false; }}>
+  <Modal title="작업 중단 확인" onClose={() => { abortAsk = false; }} class="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-6">
     <Card class="w-full max-w-md"><CardHeader><CardTitle>작업을 중단할까요?</CardTitle></CardHeader>
       <CardContent class="space-y-4"><p class="text-sm">이미 기기에 보낸 명령은 즉시 취소되지 않을 수 있습니다. 중단 후 기기 상태를 확인해야 합니다.</p>
         <div class="flex justify-end gap-2"><Button variant="outline" onclick={() => { abortAsk = false; }}>계속 진행</Button>

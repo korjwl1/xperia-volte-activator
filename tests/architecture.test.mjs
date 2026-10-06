@@ -4,10 +4,10 @@ import path from "node:path";
 import { after, before, beforeEach, test } from "node:test";
 import { createServer } from "vite";
 
-let server, Wizard, api, flags, originalApi, originalFlags, createTransport, AsyncQueue, decodeJournal, buildPlan, stepHazard, firmwareUpdateProblems;
+let server, Wizard, itemProgress, transferStatusText, api, flags, originalApi, originalFlags, createTransport, AsyncQueue, decodeJournal, buildPlan, stepHazard, firmwareUpdateProblems;
 before(async () => {
   server = await createServer({ server: { middlewareMode: true, watch: null, hmr: false, ws: false }, appType: "custom" });
-  ({ Wizard } = await server.ssrLoadModule("/src/lib/stores/wizard.svelte.ts"));
+  ({ Wizard, itemProgress, transferStatusText } = await server.ssrLoadModule("/src/lib/stores/wizard.svelte.ts"));
   ({ api } = await server.ssrLoadModule("/src/lib/api/index.ts"));
   ({ REAL_STEPS: flags } = await server.ssrLoadModule("/src/lib/data/runMode.ts"));
   ({ createTransport } = await server.ssrLoadModule("/src/lib/api/transport.ts"));
@@ -99,6 +99,19 @@ test("disk journal rejects malformed configuration, cursor and execution structu
   assert.equal(decodeJournal("{"), null);
 });
 
+test("unknown SIM type survives journal reload without being assigned an eSIM slot", () => {
+  const valid = journal();
+  valid.communication = { before: { checkedAt: "2025-01-02T03:04:05Z", outcome: "observed",
+    model: "test-model", firmware: "test-fw", fingerprint: "test-build", android: "14", baseband: "test-modem",
+    sims: [{ slot: 1, type: "unknown", carrier: null, state: "ABSENT", volte: "unknown" },
+      { slot: 2, type: "physical", carrier: "KT", state: "LOADED", volte: "off" }], presets: [] }, latest: null, calls: [] };
+  const saved = decodeJournal(JSON.stringify(valid));
+  assert.equal(saved.communication.before.sims[0].type, "unknown");
+  assert.equal(saved.communication.before.sims[1].type, "physical");
+  valid.communication.before.sims[0].type = "unrecognized";
+  assert.equal(decodeJournal(JSON.stringify(valid)), null);
+});
+
 test("journals for generated unlock, relock and patch plans pass structural validation", () => {
   for (const action of ["unlock", "relock", "patch"]) {
     const w = wizard(), j = journal();
@@ -160,6 +173,25 @@ test("copy counters never mark a failed backup item as a completed checkpoint", 
   assert.ok(!step.logs.some(line => line.includes("[체크포인트]")));
 });
 
+test("backup access warnings preserve the incomplete gate and never mask mixed integrity failures", async () => {
+  const w = wizard(); w.backupDir = "backup"; w.backupPath = "C:/backups";
+  w.groups = [{ id: "files", items: [{ id: "dcim", checked: true }] }];
+  const step = w.runSteps[0]; step.id = "backup";
+  api.onBackupProgress = async () => () => {};
+  api.backupRun = async () => ({ ok: true, value: { dir: "backup", complete: false, files: 1, bytes: 1,
+    errors: ["dcim: private: Permission denied"], items: [{ id: "dcim", status: "partial", files: 1, bytes: 1 }] } });
+  await w.runRealBackup(step);
+  assert.equal(step.status, "failed");
+  assert.equal(w.backupPermissionBlocked, true);
+  assert.match(w.stepError, /별도로 내보내/);
+  assert.equal(w.backupSummary.complete, false);
+  w.backupSummary.errors.push("dcim: photo: 크기/해시 불일치");
+  assert.equal(w.backupPermissionBlocked, false);
+  w.backupSummary.errors.pop();
+  w.stepError = "백업 실패: USB 연결 끊김";
+  assert.equal(w.backupPermissionBlocked, false, "previous permission result cannot hide a later transport failure");
+});
+
 test("stopping during a backup cancels exactly that backup run", async () => {
   const w = wizard(); w.backupDir = "backup"; w.backupPath = "C:/backups";
   w.groups = [{ id: "files", items: [{ id: "dcim", checked: true }] }];
@@ -191,9 +223,27 @@ test("SMS preparation blocks confirmation until it succeeds and permits retry", 
   assert.equal(w.manualCheckError, "permission denied");
   api.smsiePrepare = async () => ({ ok: true, value: [] });
   await w.smsiePrepare();
-  assert.equal(w.manualInputReady, false);
-  w.smsieExportAck = true;
+  // 준비가 끝나면 바로 확인할 수 있다 — 체크박스 확인은 없앴다(파일 검사가 대신한다)
   assert.equal(w.manualInputReady, true);
+});
+
+test("stopping SMS preparation blocks restart until the pending device work settles", async () => {
+  const w = wizard(), prepare = deferred();
+  w.manualCurrent = { id: "smsie-export" };
+  api.smsiePrepare = () => prepare.promise;
+  const pending = w.smsiePrepare();
+  await Promise.resolve();
+  assert.equal(w.busy, 1);
+  w.abort();
+  let starts = 0;
+  w.begin = () => starts++;
+  w.resumeRun();
+  assert.equal(starts, 0);
+  assert.equal(w.busy, 1);
+  prepare.resolve({ ok: true, value: [] });
+  await pending;
+  assert.equal(w.busy, 0);
+  assert.equal(w.manualCurrent, null);
 });
 
 test("reset invalidates pending IMEI and folder responses", async () => {
@@ -338,19 +388,15 @@ test("adversarial complete backup from another phone or changed disk never passe
   }
 });
 
-test("valid SMS files still need the user's export-success confirmation", async () => {
+test("valid SMS files are collected and confirmed by file checks, without a user checkbox", async () => {
   const w = wizard();
   w.manualCurrent = { id: "smsie-export" };
   w.manualSetupState = "done";
   let confirmations = [];
   api.smsieCollect = async (_serial, _dir, confirmed) => {
     confirmations.push(confirmed);
-    return { ready: true, summary: { complete: true } };
+    return { ok: true, value: { ready: true, summary: { complete: true } } };
   };
-  assert.equal(w.manualInputReady, false);
-  assert.ok(await w.verifyManual("smsie-export"));
-  assert.deepEqual(confirmations, []);
-  w.smsieExportAck = true;
   assert.equal(w.manualInputReady, true);
   assert.equal(await w.verifyManual("smsie-export"), null);
   assert.deepEqual(confirmations, [true]);
@@ -692,4 +738,256 @@ test("contact import finishes cleanup after counts pass and never writes after a
   api.contactsRestoreFinish = async () => ({ ok: false, error: "cleanup failed" }); assert.match(await w.verifyManual("contacts-import"), /cleanup failed/);
   const pending = deferred(); api.contactsRestoreCheck = () => pending.promise;
   const stale = w.verifyManual("contacts-import"); w.runGen++; pending.resolve({ backedUp: 0, onDevice: 0 }); await stale; assert.equal(cleanups, 1);
+});
+
+test("mock steps wait for Next and internal callbacks cannot advance the next step", async () => {
+  Object.assign(flags, Object.fromEntries(Object.keys(flags).map(key => [key, false])));
+  const w = wizard();
+  w.begin = Wizard.prototype.begin.bind(w);
+  w.runSteps = ["backup", "restore"].map(id => ({ id, title: id, status: "pending", progress: 0, logs: [], manualDone: 0 }));
+  w.runSteps[0].status = "running"; w.runSteps[0].progress = 1;
+  try {
+    w.tick();
+    assert.equal(w.awaitingNext, "backup");
+    assert.equal(w.running, false);
+    w.begin(); w.resumeRun(); w.tick();
+    assert.equal(w.runSteps[1].status, "pending");
+    assert.equal(w.running, false);
+    w.nextStep(); w.nextStep();
+    assert.equal(w.running, true);
+    w.pause(); w.tick();
+    assert.equal(w.runSteps[1].status, "running");
+    assert.equal(w.cursor, 1);
+    w.runSteps[1].progress = 1; w.tick();
+    assert.equal(w.finished, true);
+    assert.equal(w.awaitingNext, null);
+  } finally { w.pause(); }
+});
+
+test("live backup exclusion notice needs acknowledgement and Next before a second engine starts", async () => {
+  const w = wizard(); w.backupDir = "backup"; w.backupPath = "C:/backups";
+  w.groups = [{ id: "files", items: [{ id: "app-data", checked: true }] }];
+  w.runSteps = ["backup", "restore"].map(id => ({ id, title: id, status: "pending", progress: 0, logs: [], manualDone: 0 }));
+  w.runSteps[0].status = "running";
+  w.begin = Wizard.prototype.begin.bind(w);
+  api.onBackupProgress = async () => () => {};
+  api.backupRun = async () => ({ ok: true, value: { dir: "backup", complete: true, files: 1, bytes: 1, errors: [],
+    items: [{ id: "app-data", status: "done", files: 1, bytes: 1 }],
+    omittedApps: [{ package: "org.example.blocked", reasons: ["Permission denied"], removedFiles: 2, removedBytes: 3, cleanupPending: false }] } });
+  let restores = 0, checks = 0;
+  const capability = deferred();
+  api.engineCapabilities = () => { checks++; return capability.promise; };
+  api.onRestoreProgress = async () => () => {};
+  api.restoreRun = async () => { restores++; return { ok: true, value: { logs: [], failures: [], smsiePending: false } }; };
+  try {
+    await w.runRealBackup(w.runSteps[0]);
+    assert.equal(w.awaitingNext, "backup"); assert.equal(w.backupOmissionNotice, true);
+    w.begin(); w.resumeRun(); w.nextStep(); w.tick();
+    assert.equal(restores, 0); assert.equal(checks, 0);
+    w.acknowledgeBackupOmissions(); w.tick();
+    assert.equal(restores, 0); assert.equal(w.running, false);
+    w.nextStep(); w.nextStep();
+    assert.equal(checks, 1);
+    assert.equal(restores, 0);
+    capability.resolve({ ok: true, value: { fastbootWrite: false, rootWrite: false, efsWrite: false } });
+    await new Promise(r => setImmediate(r));
+    assert.equal(w.running, true);
+    w.pause(); w.tick(); await new Promise(r => setImmediate(r));
+    assert.equal(restores, 1);
+    assert.equal(w.finished, true);
+  } finally { w.pause(); }
+});
+
+test("journal resume retains Next and an unacknowledged omission notice without starting work", () => {
+  const j = journal();
+  const second = { ...j.steps[0], id: "restore", kind: "restore", title: "복원" };
+  j.steps.push(second);
+  Object.assign(j.runSteps[0], { status: "done", progress: 1 });
+  j.runSteps.push({ id: "restore", title: "복원", status: "pending", progress: 0, logs: [], manualDone: 0 });
+  j.cursor = 1; j.awaitingNext = "backup";
+  j.backupOmissions = { pending: true, apps: [{ package: "org.example.blocked", reasons: ["Permission denied"], removedFiles: 2, removedBytes: 3, cleanupPending: false }] };
+  const decoded = decodeJournal(JSON.stringify(j)); assert.ok(decoded);
+  const w = wizard(); w.omdAck=true; w.riskAck=true; w.pendingJournal = decoded; w.resumeJournal();
+  assert.equal(w.awaitingNext, "backup"); assert.equal(w.backupOmissionNotice, true);
+  assert.equal(w.backupOmittedApps[0].package, "org.example.blocked");
+  assert.equal(w.running, false);
+  w.acknowledgeBackupOmissions(); assert.equal(w.awaitingNext, "backup");
+  for (const mutate of [j => { j.awaitingNext = "restore"; }, j => { j.backupOmissions.apps[0].removedBytes = -1; }, j => { j.backupOmissions.pending = "true"; }]) {
+    const bad = structuredClone(j); mutate(bad); assert.equal(decodeJournal(JSON.stringify(bad)), null);
+  }
+});
+
+test("exclusions cannot hide a remaining backup error or claim unfinished deletion succeeded", async () => {
+  for (const pending of [false, true]) {
+    const w = wizard(); w.backupDir = "backup"; w.backupPath = "C:/backups";
+    w.groups = [{ id: "files", items: [{ id: "app-data", checked: true }] }];
+    const step = w.runSteps[0]; step.id = "backup";
+    api.onBackupProgress = async () => () => {};
+    api.backupRun = async () => ({ ok: true, value: { dir: "backup", complete: false, files: 1, bytes: 1,
+      errors: [pending ? "앱 데이터 정리 미완료" : "dcim: 크기/해시 불일치"], items: [],
+      omittedApps: [{ package: "org.example.blocked", reasons: ["Permission denied"], removedFiles: 2, removedBytes: 3, cleanupPending: pending }] } });
+    await w.runRealBackup(step);
+    assert.equal(step.status, "failed"); assert.equal(w.awaitingNext, null);
+    assert.equal(w.backupOmissionNotice, !pending);
+    w.nextStep(); assert.equal(w.finished, false);
+  }
+});
+
+
+test("explicit standalone backup has one live step and never enables write engines", async () => {
+  Object.assign(flags,Object.fromEntries(Object.keys(flags).map(key=>[key,false])));
+  api.journalLoad=async()=>({ok:true,value:null});
+  const w=wizard();await w.startBackupSession();w.ensureOptions(false);
+  assert.equal(w.view,"step2");assert.equal(w.hasAnyTask,true);
+  assert.deepEqual(w.plan.map(s=>s.id),["backup"]);
+  assert.deepEqual(w.executionFlags,{backup:true,restore:false,fastboot:false,root:false,verify:false,efs:false});
+  assert.equal(w.opts.restore,false);assert.equal(w.backupLive,true);
+  w.startSession();assert.equal(w.opts.backupOnly,false);
+});
+
+test("backup-only journals reject every extra engine even when disabled", () => {
+  const j=journal();j.opts={backupOnly:true,restore:false,unroot:false,relock:false};
+  assert.ok(decodeJournal(JSON.stringify(j)));
+  j.steps.push({...j.steps[0],id:"unlock",kind:"unlock",enabled:false});
+  assert.equal(decodeJournal(JSON.stringify(j)),null);
+});
+
+test("SMS confirmation waits for its read-only probe and preserves actual backend errors", async () => {
+  const w=wizard(),poll=deferred();w.manualCurrent={id:"smsie-export"};w.smsieExportAck=true;w.manualSetupState="done";
+  let collections=0;api.smsieCollect=async()=>{collections++;return {ok:false,error:"USB disconnected"};};
+  w.watchManual(w.runSteps[0],"smsie-export","probe",()=>poll.promise,5000,false);
+  const confirming=w.confirmManual();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(collections,0);assert.equal(w.manualChecking,true);
+  poll.resolve(true);await confirming;w.stopWatch();
+  assert.equal(collections,1);assert.match(w.manualCheckError,/USB disconnected/);
+  assert.equal(w.manualCurrent.id,"smsie-export");
+});
+
+test("successful SMS polling clears its own error and preserves a failed collection error", () => {
+  const w=wizard();
+  w.reportSmsieProbe({ok:false,error:"probe offline"});
+  assert.equal(w.manualCheckError,"probe offline");
+  w.reportSmsieProbe({ok:true,value:true});
+  assert.equal(w.manualCheckError,"");
+  w.manualCheckError="collection failed: PC disk full";
+  w.reportSmsieProbe({ok:false,error:"probe offline"});
+  w.reportSmsieProbe({ok:true,value:true});
+  assert.equal(w.manualCheckError,"collection failed: PC disk full");
+  // 같은 잠금 오류 문구라도 수집이 쓴 사유는 감지 성공으로 지워지지 않는다
+  w.manualCheckError="";
+  w.reportSmsieProbe({ok:false,error:"다른 기기 변경 작업이 진행 중입니다"});
+  w.manualCheckError="다른 기기 변경 작업이 진행 중입니다";
+  w.reportSmsieProbe({ok:true,value:true});
+  assert.equal(w.manualCheckError,"다른 기기 변경 작업이 진행 중입니다");
+});
+
+test("other items' errors do not cascade into SMS: export opens first, and completed SMS is reused on retry", async () => {
+  const w=wizard();w.backupDir="backup";w.backupPath="C:/backups";
+  w.groups=[{id:"files",items:[{id:"dcim",checked:true},{id:"sms",checked:true}]}];
+  const step=w.runSteps[0];step.id="backup";let prompts=0;
+  w.openEngineManual=()=>prompts++;api.onBackupProgress=async()=>()=>{};
+  api.backupRun=async()=>({ok:true,value:{dir:"backup",complete:false,files:1,bytes:1,errors:["dcim: IO"],items:[{id:"dcim",status:"partial"},{id:"sms",status:"pending"}]}});
+  // 시도도 안 한 문자를 "미완료"로 함께 실패시키지 않는다 — 문자부터 마치고 남은 오류는 마지막에 알린다
+  await w.runRealBackup(step);assert.equal(prompts,1);assert.notEqual(step.status,"failed");
+  w.stepError="";step.status="running";
+  api.backupRun=async()=>({ok:true,value:{dir:"backup",complete:true,files:2,bytes:2,errors:[],items:[{id:"dcim",status:"done"},{id:"sms",status:"done"}]}});
+  // 문자가 이미 완료면 다시 내보내기를 열지 않는다(호출 수 그대로)
+  await w.runRealBackup(step);assert.equal(prompts,1);assert.equal(step.status,"done");
+});
+
+
+test("cancelling while an SMS probe is pending prevents subsequent collection", async () => {
+  const w=wizard(),poll=deferred();w.manualCurrent={id:"smsie-export"};w.smsieExportAck=true;w.manualSetupState="done";
+  let collections=0;api.smsieCollect=async()=>{collections++;return {ok:true,value:{ready:true,summary:{complete:true}}};};
+  w.watchManual(w.runSteps[0],"smsie-export","probe",()=>poll.promise,5000,false);
+  const confirming=w.confirmManual();w.runGen++;w.stopWatch();poll.resolve(true);await confirming;
+  assert.equal(collections,0);
+});
+
+
+test("standalone entry cannot resume other engines without reviewing warnings", () => {
+ const w=wizard(),j=journal();w.opts.backupOnly=true;w.pendingJournal=j;
+ w.resumeJournal();assert.equal(w.view,"warning");assert.equal(w.running,false);
+ assert.ok(w.journalError);assert.equal(w.pendingJournal,null);
+});
+
+test("zero-step launch and unresolved prior journal cannot start or save a run", () => {
+ const w=wizard();w.opts.backupOnly=true;w.ensureOptions(false);
+ for(const g of w.groups)for(const i of g.items)i.checked=false;
+ w.launch();assert.notEqual(w.view,"step3");
+ const pending=wizard();pending.opts.backupOnly=true;pending.ensureOptions(false);
+ assert.ok(pending.plan.some(step=>step.enabled));
+ pending.pendingJournal=journal();pending.launch();assert.notEqual(pending.view,"step3");
+});
+
+
+test("generated standalone plan survives journal round-trip with its real manual guide", async () => {
+ const w=wizard();await w.startBackupSession();w.ensureOptions(false);
+ const j=journal();j.opts={...w.opts};j.config=structuredClone(w.volteConfig);j.steps=w.plan;
+ j.backupItems=w.checkedBackupItems();j.runSteps=w.plan.map(s=>({id:s.id,title:s.title,status:"pending",progress:0,logs:[],manualDone:0}));
+ assert.ok(j.steps[0].manual.includes("backup-notice"));
+ assert.ok(decodeJournal(JSON.stringify(j)));
+});
+
+test("a native gate error fails the step and cannot authorize resuming past verification",async()=>{
+ const w=wizard();w.runSteps.unshift({id:"backup",title:"백업",status:"done",progress:1,logs:[],manualDone:0});w.cursor=1;
+ const step=w.runSteps[1];w.backupDir="backup-fixture";
+ api.onBackupProgress=async()=>()=>{};api.backupManifestCheck=async()=>{throw new Error("disk denied");};
+ await w.enforceBackupGate(step);
+ assert.equal(step.status,"failed");assert.match(w.stepError,/disk denied/);assert.equal(w.running,false);
+});
+
+test("backup percentage never goes back across scan, metadata, copy and resume verification", () => {
+  const order=["apk","app-data"];
+  const ev=(itemId,phase,filesDone,filesTotal,bytesDone=0,bytesTotal=0)=>({itemId,phase,filesDone,filesTotal,bytesDone,bytesTotal});
+  const run=[ev("apk","scan",0,10),ev("apk","metadata",10,10),ev("apk","copy",0,10,0,100),ev("apk","copy",10,10,100,100),
+    ev("app-data","scan",0,5),ev("app-data","metadata",5,5),ev("app-data","copy",0,5,0,50)];
+  let last=0;for(const p of run){const v=itemProgress(p,order);assert.ok(v>=last,`${p.itemId}/${p.phase}: ${v} < ${last}`);last=v;}
+  // 재개: 모든 항목 PC 검사(앞 10%) 뒤에 복사가 0%로 떨어지지 않는다. 격리 tar 검사는 계산 제외(NaN)
+  const resume=[ev("apk","verify",10,10,100,100),ev("app-data","verify",5,5,50,50),ev("apk","scan",0,1),ev("apk","copy",1,10,10,100)];
+  last=0;for(const p of resume){const v=itemProgress(p,order,"resume");assert.ok(v>=last);last=v;}
+  assert.ok(Number.isNaN(itemProgress(ev("quarantine","verify",1,2,1,2),order,"resume")));
+});
+
+test("current transfer shows item name with done / total files", () => {
+  assert.match(transferStatusText({itemId:"apk",phase:"copy",filesDone:12,filesTotal:92,bytesDone:1,bytesTotal:9,file:"base.apk"}),/\[12 \/ 92\]$/);
+  assert.match(transferStatusText({itemId:"app-data",phase:"verify",filesDone:3,filesTotal:1000,bytesDone:0,bytesTotal:0}),/PC 검사 \[3 \/ 1,000\]$/);
+  assert.equal(transferStatusText({itemId:"apk",phase:"done",filesDone:92,filesTotal:92,bytesDone:9,bytesTotal:9}),"");
+});
+
+test("continue after a failed backup finishes the step and the wipe gate honors that decision only for the same phone", async () => {
+  const w=wizard();
+  w.runSteps=[{id:"backup",title:"백업",status:"failed",progress:0.4,logs:[],manualDone:0},{id:"unlock",title:"언락",status:"pending",progress:0,logs:[],manualDone:0}];
+  w.cursor=0;w.backupDir="backup-fixture";w.stepError="백업 미완결 — dcim: IO";
+  w.backupSummary={complete:false,errors:["dcim: IO"],items:[]};
+  assert.ok(w.canContinueAfterFailure);assert.ok(w.wipeAhead);
+  w.continueAfterFailure();
+  assert.equal(w.runSteps[0].status,"done");assert.equal(w.stepError,"");assert.ok(w.backupIncompleteAccepted);
+  const unlock=w.runSteps[1];w.cursor=1;
+  api.onBackupProgress=async()=>()=>{};
+  api.backupManifestCheck=async()=>({complete:false,errors:["dcim: IO"],deviceKey:"AA",items:[]});
+  w.deviceKeyHex=async()=>"aa";let resumed=0;w.begin=()=>resumed++;
+  await w.enforceBackupGate(unlock);assert.equal(resumed,1);assert.notEqual(unlock.status,"failed");
+  // 다른 폰이면 인정했어도 통과하지 않는다
+  w.deviceKeyHex=async()=>"bb";unlock.status="running";
+  await w.enforceBackupGate(unlock);assert.equal(unlock.status,"failed");
+});
+
+test("SMS export advances by itself once the files are seen twice and pass collection — no checkbox", async () => {
+  const w=wizard();w.opts.backupOnly=true;w.backupDir="backup";
+  w.groups=[{id:"files",items:[{id:"sms",checked:true}]}];
+  const step=w.runSteps[0];step.id="backup";step.status="manual-wait";
+  let collects=0;const confirms=[];
+  api.smsiePrepare=async()=>({ok:true,value:["준비"]});
+  api.smsieProbe=async()=>({ok:true,value:true});
+  api.smsieCollect=async(_s,_d,confirm)=>{collects++;confirms.push(confirm);return {ok:true,value:{ready:true,summary:{complete:true,errors:[],items:[]}}};};
+  let tick;const original=globalThis.setInterval;globalThis.setInterval=(fn)=>{tick=fn;return 1;};
+  try {
+    await w.openManual(step,"smsie-export");
+    for (let i=0;i<5 && w.manualSetupState!=="done";i++) await new Promise(r=>setTimeout(r,0));
+    assert.equal(w.manualSetupState,"done");
+    await tick();assert.equal(collects,0,"one sighting is not enough — the app may still be writing");
+    await tick();assert.equal(collects,1);assert.deepEqual(confirms,[true]);
+    assert.equal(w.manualCurrent,null,"advanced without any checkbox or button");
+  } finally { globalThis.setInterval=original; }
 });

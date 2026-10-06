@@ -1,5 +1,8 @@
 import type { CallCheck, ImsDiagnostic, SimInfo } from "$lib/types";
 
+export const simTypeLabel = (type: SimInfo["type"]): string =>
+  type === "physical" ? "물리" : type === "esim" ? "eSIM" : "유형 미확인";
+
 export const CALL_ITEMS = [
   { id: "outgoing", label: "발신 연결" },
   { id: "incoming", label: "다른 전화에서 수신" },

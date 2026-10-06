@@ -57,7 +57,11 @@ impl ADBServerDevice {
                     let name_len = connection.read_u32::<LittleEndian>()?;
                     let mut name_buf = vec![0_u8; name_len as usize];
                     connection.read_exact(&mut name_buf)?;
-                    let name = String::from_utf8(name_buf)?;
+                    // Same as the direct transport: keep the listing, flag the bad name.
+                    let (name, valid_name) = match String::from_utf8(name_buf) {
+                        Ok(name) => (name, true),
+                        Err(error) => (String::from_utf8_lossy(error.as_bytes()).into_owned(), false),
+                    };
 
                     // First 9 bits are the file permissions
                     let permissions = mode & 0b1_1111_1111;
@@ -69,7 +73,11 @@ impl ADBServerDevice {
                         size,
                     };
 
-                    list_items.push(ADBListItemType::from_mode_and_entry(mode, entry));
+                    list_items.push(if valid_name {
+                        ADBListItemType::from_mode_and_entry(mode, entry)
+                    } else {
+                        ADBListItemType::InvalidName(entry)
+                    });
                 }
                 "DONE" => {
                     return Ok(list_items);

@@ -11,6 +11,15 @@ use std::{
 };
 
 impl<T: ADBMessageTransport> ADBDeviceExt for ADBMessageDevice<T> {
+    fn needs_reconnect(&self) -> bool {
+        self.needs_reconnect()
+    }
+    fn begin_sync_batch(&mut self) -> Result<bool> {
+        self.begin_sync_batch()
+    }
+    fn end_sync_batch(&mut self) -> Result<()> {
+        self.end_sync_batch()
+    }
     #[inline]
     fn shell_command(
         &mut self,

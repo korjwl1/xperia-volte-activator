@@ -1,6 +1,14 @@
 //! 백업 경로를 읽거나 지우기 전에 루트 밖 경로와 심볼릭 링크 탈출을 거부한다.
 use std::path::{Path, PathBuf};
 
+pub(super) fn read_error(error: std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        error.to_string()
+    } else {
+        format!("PC_READ_IO|{error}")
+    }
+}
+
 pub fn relative_path(value: &str) -> Result<PathBuf, String> {
     let normalized = value.replace('\\', "/");
     if normalized.is_empty()
@@ -19,11 +27,11 @@ pub fn relative_path(value: &str) -> Result<PathBuf, String> {
 pub fn existing_file(root: &Path, relative: &str) -> Result<PathBuf, String> {
     let root = root
         .canonicalize()
-        .map_err(|e| format!("백업 루트 확인 실패: {e}"))?;
+        .map_err(|e| format!("백업 루트 확인 실패: {}", read_error(e)))?;
     let path = root
         .join(relative_path(relative)?)
         .canonicalize()
-        .map_err(|e| format!("백업 파일 확인 실패({relative}): {e}"))?;
+        .map_err(|e| format!("백업 파일 확인 실패({relative}): {}", read_error(e)))?;
     if !path.starts_with(&root) || !path.is_file() {
         return Err(format!("백업 루트 안의 파일이 아닙니다: {relative}"));
     }

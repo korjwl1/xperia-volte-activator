@@ -13,43 +13,30 @@ use crate::{
 
 impl<T: ADBMessageTransport> ADBMessageDevice<T> {
     pub(crate) fn pull<A: AsRef<str>, W: Write>(&mut self, source: A, output: W) -> Result<()> {
-        let mut session = self.open_synchronization_session()?;
+        let mut session = self.take_sync_session()?;
         let source = source.as_ref();
+        let result = (|| {
+            let adb_stat_response = session.stat_with_explicit_ids(source)?;
 
-        let adb_stat_response = session.stat_with_explicit_ids(source)?;
+            if adb_stat_response.file_perm == 0 {
+                return Err(RustADBError::UnknownResponseType(
+                    "mode is 0: source file does not exist".to_string(),
+                ));
+            }
 
-        if adb_stat_response.file_perm == 0 {
-            return Err(RustADBError::UnknownResponseType(
-                "mode is 0: source file does not exist".to_string(),
-            ));
-        }
-
-        self.get_transport_mut().write_message_with_timeout(
-            ADBTransportMessage::try_new(
-                MessageCommand::Okay,
+            let recv_buffer = MessageSubcommand::Recv.with_arg(u32::try_from(source.len())?);
+            let mut request = recv_buffer.encode();
+            request.extend_from_slice(source.as_bytes());
+            session.send_and_expect_okay(ADBTransportMessage::try_new(
+                MessageCommand::Write,
                 session.local_id(),
                 session.remote_id(),
-                &[],
-            )?,
-            std::time::Duration::from_secs(4),
-        )?;
+                &request,
+            )?)?;
 
-        let recv_buffer = MessageSubcommand::Recv.with_arg(u32::try_from(source.len())?);
-        session.send_and_expect_okay(ADBTransportMessage::try_new(
-            MessageCommand::Write,
-            session.local_id(),
-            session.remote_id(),
-            &recv_buffer.encode(),
-        )?)?;
-        session.send_and_expect_okay(ADBTransportMessage::try_new(
-            MessageCommand::Write,
-            session.local_id(),
-            session.remote_id(),
-            source.as_bytes(),
-        )?)?;
-
-        session.recv_file(output)?;
-        self.end_transaction(&mut session)?;
-        Ok(())
+            session.recv_file(output)?;
+            Ok(())
+        })();
+        self.finish_sync_request(session, result)
     }
 }

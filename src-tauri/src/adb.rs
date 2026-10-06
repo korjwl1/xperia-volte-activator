@@ -239,7 +239,7 @@ pub(crate) fn with_first_device<T>(
     }
     let mut guard = lock_usb(Duration::from_secs(30))?;
     let result = run_usb(&mut guard, wanted, f);
-    if result.is_err() {
+    if result.is_err() || guard.as_ref().is_some_and(ADBDeviceExt::needs_reconnect) {
         *guard = None;
     }
     result.map_err(|e| match wanted {
@@ -457,9 +457,33 @@ fn slot_prop(p: &HashMap<String, String>, key: &str, idx: usize) -> String {
         .unwrap_or_default()
 }
 
+/// Logical SIM capacity, distinct from physical UICC slot count and inserted SIM count.
+fn sim_slot_count(p: &HashMap<String, String>, embedded: &HashMap<u8, bool>) -> Result<u8, String> {
+    let capacity = p
+        .get("telephony.active_modems.max_count")
+        .and_then(|v| v.trim().parse::<usize>().ok());
+    let configured = match p.get("persist.radio.multisim.config").map(|v| v.trim()) {
+        Some("dsds" | "dsda") => Some(2),
+        Some("tsts") => Some(3),
+        _ => None,
+    };
+    let states = p
+        .get("gsm.sim.state")
+        .filter(|v| !v.trim().is_empty())
+        .map_or(0, |v| v.split(',').count());
+    let observed = usize::from(embedded.keys().copied().max().unwrap_or(0));
+    let count = capacity
+        .or(configured)
+        .unwrap_or_else(|| states.max(observed).max(1));
+    if count > 2 {
+        return Err("현재 앱은 최대 2개 논리 SIM 슬롯을 지원합니다".into());
+    }
+    Ok(count as u8)
+}
+
 /// `dumpsys isub`의 "simSlotIndex=N portIndex=P isEmbedded=E" 줄에서 슬롯별 eSIM 여부
 fn parse_embedded_slots(out: &str) -> HashMap<u8, bool> {
-    let mut map = HashMap::new();
+    let mut map: HashMap<u8, Option<bool>> = HashMap::new();
     for line in out.lines() {
         let mut slot: Option<i32> = None;
         let mut embedded: Option<bool> = None;
@@ -467,16 +491,28 @@ fn parse_embedded_slots(out: &str) -> HashMap<u8, bool> {
             if let Some(v) = tok.strip_prefix("simSlotIndex=") {
                 slot = v.parse().ok();
             } else if let Some(v) = tok.strip_prefix("isEmbedded=") {
-                embedded = Some(v == "1");
+                embedded = match v {
+                    "1" | "true" => Some(true),
+                    "0" | "false" => Some(false),
+                    _ => None,
+                };
             }
         }
         if let (Some(s), Some(e)) = (slot, embedded) {
-            if s >= 0 {
-                map.insert((s + 1) as u8, e);
+            if (0..2).contains(&s) {
+                map.entry((s + 1) as u8)
+                    .and_modify(|previous| {
+                        if *previous != Some(e) {
+                            *previous = None;
+                        }
+                    })
+                    .or_insert(Some(e));
             }
         }
     }
-    map
+    map.into_iter()
+        .filter_map(|(slot, embedded)| embedded.map(|e| (slot, e)))
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -486,7 +522,7 @@ pub struct SimOut {
     #[serde(rename = "type")]
     sim_type: &'static str,
     carrier: Option<String>,
-    /// gsm.sim.state 원값 (LOADED / ABSENT / PIN_REQUIRED / …), 비어 있으면 ABSENT
+    /// gsm.sim.state 원값 (LOADED / ABSENT / PIN_REQUIRED / …), 비어 있으면 UNKNOWN
     state: String,
     /// "on" = 셀룰러 IMS 음성(VoLTE) / "wifi" = Wi-Fi 통화로만 등록 / "off" = 미등록 / "unknown" = 판별 불가
     volte: &'static str,
@@ -555,11 +591,9 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
         dev,
         "getprop; echo __SU__; which su || true; echo __ISUB__; \
          dumpsys isub | sed -n '/^Active subscriptions:/,/^All subscriptions:/p' \
-           | grep -oE 'simSlotIndex=-?[0-9]+ portIndex=-?[0-9]+ isEmbedded=[01]' || true; echo __IMS__; \
-         ims_dump=$(dumpsys activity service com.android.phone/.TelephonyDebugService 2>&1); ims_status=$?; \
-         case \"$ims_dump\" in *'Permission Denial'*|*'not found'*|*'No services match'*|*'Error dumping'*|*'Exception'*) ims_status=1;; esac; \
-         echo __IMS_STATUS__=$ims_status; printf '%s\\n' \"$ims_dump\" \
-           | grep -E 'mPhoneId=|mMmTelCapabilities=|mImsMmTelRegistrationState|mImsRegistrationTech|handleImsRegistered|handleImsRegistering|handleImsUnregistered' || true; echo __DEV__; \
+           | grep -oE 'simSlotIndex=-?[0-9]+( portIndex=-?[0-9]+)? isEmbedded=(true|false|[01])' || true; echo __IMS__; \
+         { dumpsys activity service com.android.phone/.TelephonyDebugService 2>&1; echo __IMS_RC__=$?; } \
+           | grep -E '^__IMS_RC__=|^(Permission Denial|No services match|Can.t find service|Error dumping)|mPhoneId=|mMmTelCapabilities=|mImsMmTelRegistrationState|mImsRegistrationTech|handleImsRegistered|handleImsRegistering|handleImsUnregistered' || true; echo __DEV__; \
          settings get global development_settings_enabled; settings get global adb_enabled",
     )?;
     let (props_raw, rest) = raw.split_once("__SU__").unwrap_or((&raw, ""));
@@ -575,7 +609,16 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
     );
     let embedded = parse_embedded_slots(isub_raw);
     let ims_voice = parse_ims_voice(ims_raw);
-    let ims_query_ok = ims_raw.lines().any(|l| l.trim() == "__IMS_STATUS__=0");
+    // 덤프는 수천 줄이라 셸 변수·printf 인자로 넘기면 "Argument list too long"(Android sh의 printf는 외부 명령)으로
+    // 버려진다 — 파이프로 grep에 바로 넘긴다. 실패는 종료 코드와 줄 맨 앞의 dumpsys 오류 문구로만 판단한다
+    // (정상 덤프 안의 로그에도 "Exception"·"not found"가 흔히 들어 있다).
+    let ims_query_ok = ims_raw.lines().any(|l| l.trim() == "__IMS_STATUS__=0")
+        || (ims_raw.lines().any(|l| l.trim() == "__IMS_RC__=0")
+            && !ims_raw.lines().any(|l| {
+                ["Permission Denial", "No services match", "Can't find service", "Error dumping"]
+                    .iter()
+                    .any(|m| l.starts_with(m))
+            }));
     let p = parse_getprop(props_raw);
     let get = |k: &str| p.get(k).cloned().unwrap_or_default();
 
@@ -610,22 +653,26 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
         slot_prop(&p, "gsm.sim.operator.numeric", 1),
     ];
 
-    let sims = (1..=2u8)
+    let sims = (1..=sim_slot_count(&p, &embedded)?)
         .map(|slot| {
             let idx = (slot - 1) as usize;
             let state = states
                 .get(idx)
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
-                .unwrap_or("ABSENT")
+                .unwrap_or("UNKNOWN")
                 .to_string();
             let loaded = state == "LOADED";
-            // 활성 구독이 있으면 실측값, 없으면 슬롯 1=물리 / 2=eSIM (XQ-DQ44 구성) 가정
-            let is_esim = embedded.get(&slot).copied().unwrap_or(slot == 2);
+            // Slot numbers do not determine SIM type. Missing/conflicting evidence stays unknown.
+            let sim_type = match embedded.get(&slot) {
+                Some(true) => "esim",
+                Some(false) => "physical",
+                None => "unknown",
+            };
             let ims = ims_diagnostics(&state, ims_query_ok, ims_voice.get(&slot));
             SimOut {
                 slot,
-                sim_type: if is_esim { "esim" } else { "physical" },
+                sim_type,
                 carrier: loaded.then(|| {
                     if alphas[idx].is_empty() {
                         "통신사 확인 불가".to_string()
@@ -1262,6 +1309,82 @@ pub async fn settings_overview(serial: Option<String>) -> Result<SettingsOvervie
 #[cfg(test)]
 mod tests {
     #[test]
+    fn logical_sim_capacity_does_not_fabricate_second_slot_on_single_sim_devices() {
+        use crate::backup::fake_device::FakeADBDevice;
+        for (props, expected) in [
+            ("[gsm.sim.state]: [ABSENT]", 1),
+            ("[gsm.sim.state]: [LOADED]", 1),
+            ("[gsm.sim.state]: [ABSENT,ABSENT]", 2),
+            (
+                "[persist.radio.multisim.config]: [dsds]\n[gsm.sim.state]: [ABSENT]",
+                2,
+            ),
+            (
+                "[telephony.active_modems.max_count]: [1]\n[gsm.sim.state]: [ABSENT,ABSENT]",
+                1,
+            ),
+            (
+                "[telephony.active_modems.max_count]: [2]\n[gsm.sim.state]: [ABSENT]",
+                2,
+            ),
+            ("[telephony.active_modems.max_count]: [0]", 0),
+        ] {
+            let mut dev = FakeADBDevice::new();
+            dev.answer_shell("getprop;", &format!("[ro.product.manufacturer]: [Sony]\n[ro.product.model]: [test-model]\n{props}\n__SU__\n__ISUB__\n__IMS__\n__DEV__\n1\n1\n"));
+            let output = super::device_status(&mut dev, "test-device").unwrap();
+            assert_eq!(output.sims.len(), expected, "{props}");
+            assert!(output.sims.iter().all(|sim| sim.sim_type == "unknown"));
+            if expected == 2 && !props.contains("ABSENT,ABSENT") {
+                assert_eq!(output.sims[1].state, "UNKNOWN");
+            }
+        }
+        let p = super::parse_getprop("[persist.radio.multisim.config]: [tsts]");
+        assert!(super::sim_slot_count(&p, &std::collections::HashMap::new()).is_err());
+    }
+
+    #[test]
+    fn sim_type_uses_subscription_evidence_without_slot_assumptions() {
+        use crate::backup::fake_device::FakeADBDevice;
+        for (evidence, expected) in [
+            ("", ["unknown", "unknown"]),
+            ("simSlotIndex=0 isEmbedded=1\nsimSlotIndex=1 isEmbedded=0", ["esim", "physical"]),
+            ("simSlotIndex=0 isEmbedded=false\nsimSlotIndex=1 isEmbedded=true", ["physical", "esim"]),
+            ("simSlotIndex=-1 isEmbedded=1\nsimSlotIndex=1 isEmbedded=invalid", ["unknown", "unknown"]),
+            ("simSlotIndex=0 isEmbedded=1\nsimSlotIndex=0 isEmbedded=0\nsimSlotIndex=0 isEmbedded=1", ["unknown", "unknown"]),
+        ] {
+            let mut dev = FakeADBDevice::new();
+            dev.answer_shell("getprop;", &format!("[ro.product.manufacturer]: [Sony]\n[ro.product.model]: [test-model]\n[gsm.sim.state]: [LOADED,LOADED]\n__SU__\n__ISUB__\n{evidence}\n__IMS__\n__DEV__\n1\n1\n"));
+            let output = super::device_status(&mut dev, "test-device").unwrap();
+            assert_eq!([output.sims[0].sim_type, output.sims[1].sim_type], expected, "{evidence}");
+        }
+        // An invalid or out-of-range slot cannot wrap into a valid slot.
+        assert!(super::parse_embedded_slots("simSlotIndex=256 isEmbedded=1").is_empty());
+    }
+
+    #[test]
+    fn piped_ims_dump_with_exception_logs_is_not_a_query_failure() {
+        // 실기기(XQ-DQ44) 덤프: 정상 종료지만 SIM 로그 줄에 "Exception"이 있다. dumpsys 자체 오류만 실패다.
+        use crate::backup::fake_device::FakeADBDevice;
+        for (ims, ok) in [
+            ("       mPhoneId=0\n  mMmTelCapabilities=MmTel Capabilities - [Voice: false SMS: false]\n   mImsMmTelRegistrationState = 1\n  2026-10-06 - UiccProfile[0]: Error in SIM access with exception IccException\n__IMS_RC__=0\n", true),
+            ("No services match: com.android.phone/.TelephonyDebugService\n__IMS_RC__=0\n", false),
+            ("mPhoneId=0\n__IMS_RC__=1\n", false),
+        ] {
+            let mut dev = FakeADBDevice::new();
+            dev.answer_shell("getprop;", &format!("[ro.product.manufacturer]: [Sony]\n[ro.product.model]: [XQ-DQ44]\n[gsm.sim.state]: [LOADED,ABSENT]\n__SU__\n__ISUB__\n__IMS__\n{ims}__DEV__\n1\n1\n"));
+            let output =
+                serde_json::to_value(super::device_status(&mut dev, "SELECTED").unwrap()).unwrap();
+            let status = output["sims"][0]["ims"]["status"].as_str().unwrap().to_string();
+            if ok {
+                assert_eq!(status, "registering", "{ims}");
+                assert_eq!(output["sims"][0]["volte"], "off"); // 음성 false = VoLTE 꺼짐
+            } else {
+                assert_eq!(status, "query-failed", "{ims}");
+            }
+        }
+    }
+
+    #[test]
     fn device_status_exposes_ims_query_failure_without_stale_success() {
         use crate::backup::fake_device::FakeADBDevice;
         for status in ["0", "1", "missing"] {
@@ -1577,5 +1700,30 @@ Filesystem     1K-blocks      Used Available Use% Mounted on\n\
         assert_eq!(product_name("Xperia 1 V", "XQ-DQ44"), "Xperia 1 V");
         assert_eq!(product_name("", "XQ-EC72"), "Xperia 1 VI");
         assert_eq!(product_name("", "XQ-ZZ99"), "XQ-ZZ99");
+    }
+
+    /// 실기기 전용 읽기 진단 — IMS 덤프 명령의 종료 코드와 실패 판정 단어가 덤프 몇째 줄에 있는지만 본다.
+    #[test]
+    #[ignore = "requires a connected phone; reads only"]
+    fn live_ims_dump_failure_markers() {
+        let out = super::with_first_device(&None, |dev| {
+            super::shell(
+                dev,
+                "{ dumpsys activity service com.android.phone/.TelephonyDebugService 2>&1; echo __RC__=$?; } \
+                   | grep -nE 'Permission Denial|not found|No services match|Error dumping|Exception|^__RC__=|mImsMmTelRegistrationState|mMmTelCapabilities|mPhoneId=|handleImsRegistered|mImsRegistrationTech' \
+                   | cut -c1-120 | head -40; \
+                 echo __LINES__; { dumpsys activity service com.android.phone/.TelephonyDebugService 2>&1; } | wc -l; \
+                 echo __HEAD__; dumpsys activity service com.android.phone/.TelephonyDebugService 2>&1 | head -n 3 | cut -c1-120",
+            )
+        })
+        .expect("read-only IMS dump diagnostics failed");
+        println!("{out}");
+        // 앱이 실제로 쓰는 기기 상태 조회 결과의 SIM별 VoLTE·IMS 판정
+        let status = super::with_first_device(&None, |dev| super::device_status(dev, ""))
+            .expect("read-only device status failed");
+        let value = serde_json::to_value(status).unwrap();
+        for sim in value["sims"].as_array().unwrap() {
+            println!("SIM{} state={} volte={} ims={}", sim["slot"], sim["state"], sim["volte"], sim["ims"]);
+        }
     }
 }

@@ -37,6 +37,8 @@ pub struct Skip {
 #[derive(Debug, Default)]
 pub struct WalkResult {
     pub files: Vec<WalkedEntry>,
+    /// Includes empty and package folders; source attributes are collected separately.
+    pub directories: Vec<String>,
     /// 심볼릭 링크·특수 파일 — 백업하지 않고 기록만(§6-2 소스 변경·누락 투명화)
     pub skipped: Vec<Skip>,
     /// 열거 실패(권한 등) — 오류 0이 아니면 완결 불가
@@ -64,20 +66,62 @@ pub fn walk_cancellable(
     skip: &dyn Fn(&str) -> bool,
     cancel: &super::puller::CancelFlag,
 ) -> WalkResult {
+    walk_with_progress(dev, root, skip, cancel, &mut |_, _| {})
+}
+
+pub fn walk_with_progress(
+    dev: &mut dyn ADBDeviceExt,
+    root: &str,
+    skip: &dyn Fn(&str) -> bool,
+    cancel: &super::puller::CancelFlag,
+    on_progress: &mut dyn FnMut(u64, u64),
+) -> WalkResult {
+    if let Err(error) = dev.begin_sync_batch() {
+        return WalkResult {
+            errors: vec![format!(
+                "목록 전송 준비 실패: {}",
+                crate::backup::scrub(&error.to_string())
+            )],
+            ..Default::default()
+        };
+    }
+    let mut out = walk_in_batch(dev, root, skip, cancel, on_progress);
+    if let Err(error) = dev.end_sync_batch() {
+        out.errors.push(format!(
+            "목록 전송 종료 실패: {}",
+            crate::backup::scrub(&error.to_string())
+        ));
+        cancel.set();
+    }
+    out
+}
+
+fn walk_in_batch(
+    dev: &mut dyn ADBDeviceExt,
+    root: &str,
+    skip: &dyn Fn(&str) -> bool,
+    cancel: &super::puller::CancelFlag,
+    on_progress: &mut dyn FnMut(u64, u64),
+) -> WalkResult {
     let mut out = WalkResult::default();
     let mut queue: Vec<String> = vec![root.to_string()];
     let mut depth: BTreeMap<String, u32> = BTreeMap::new();
     depth.insert(root.to_string(), 0);
+    let mut visited = 0u64;
     while let Some(dir) = queue.pop() {
         if cancel.cancelled() {
             out.errors.push("열거가 취소됐습니다".into());
             break;
         }
+        visited += 1;
+        on_progress(visited, out.files.len() as u64);
         let entries = match dev.list(&dir) {
             // adbd의 LIST는 열 수 없는 폴더(권한·없음)도 빈 목록으로 답한다 — 비었으면 셸로 실제 상태를 확인
             Ok(l) if l.is_empty() => {
-                if let Err(e) = confirm_empty(dev, &dir) {
-                    out.errors.push(e);
+                match confirm_empty(dev, &dir) {
+                    Err(e) => out.errors.push(e),
+                    Ok(true) => out.directories.push(dir.clone()),
+                    Ok(false) => {}
                 }
                 continue;
             }
@@ -87,9 +131,14 @@ pub fn walk_cancellable(
                     "{dir}: 열거 실패({})",
                     crate::backup::scrub(&e.to_string())
                 ));
+                if e.to_string().contains("SYNC_BATCH_BROKEN|") {
+                    cancel.set();
+                    break;
+                }
                 continue;
             }
         };
+        out.directories.push(dir.clone());
         for e in entries {
             if cancel.cancelled() {
                 out.errors.push("열거가 취소됐습니다".into());
@@ -135,6 +184,14 @@ pub fn walk_cancellable(
                     });
                     continue;
                 }
+                // 이 이름 하나만 받을 수 없다 — 같은 폴더의 나머지는 계속 열거하고, 누락은 오류로 남긴다
+                ADBListItemType::InvalidName(i) => {
+                    out.errors.push(format!(
+                        "{}: 파일 이름이 UTF-8이 아니어서 받을 수 없습니다",
+                        join(&dir, &i.name)
+                    ));
+                    continue;
+                }
             };
             let path = join(&dir, &item.name);
             if skip(&path) {
@@ -147,6 +204,7 @@ pub fn walk_cancellable(
             });
         }
     }
+    on_progress(visited, out.files.len() as u64);
     out.files.sort_by(|a, b| a.remote.cmp(&b.remote));
     out
 }
@@ -174,12 +232,13 @@ fn sh_quote(s: &str) -> String {
 const MISSING_MARK: &str = "__XV_MISSING__";
 
 /// LIST가 빈 폴더 — 실제로 비었거나 없는 경우만 통과. 읽을 수 없거나(권한) 항목이 보이면 오류(완결 불가)
-fn confirm_empty(dev: &mut dyn ADBDeviceExt, dir: &str) -> Result<(), String> {
+fn confirm_empty(dev: &mut dyn ADBDeviceExt, dir: &str) -> Result<bool, String> {
     let q = sh_quote(dir);
     let cmd = format!("if [ ! -e {q} ]; then echo {MISSING_MARK}; else ls -A -- {q}; fi");
     match crate::device_io::shell(dev, &cmd) {
         Err(e) => Err(format!("{dir}: 폴더를 읽을 수 없습니다(권한) — {e}")),
-        Ok(out) if out.trim() == MISSING_MARK || out.trim().is_empty() => Ok(()),
+        Ok(out) if out.trim() == MISSING_MARK => Ok(false),
+        Ok(out) if out.trim().is_empty() => Ok(true),
         Ok(_) => Err(format!(
             "{dir}: 폴더 목록을 받지 못했습니다(안에 항목이 있음) — 읽기 권한 문제일 수 있습니다"
         )),
@@ -194,6 +253,25 @@ pub fn join(dir: &str, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scan_progress_reports_discovery_even_for_empty_directories() {
+        let mut d = FakeADBDevice::new();
+        d.add_dir("/sdcard/Download/empty");
+        d.add_file("/sdcard/Download/a.txt", b"a", 1700000000, 0o600);
+        let mut updates = vec![];
+        let r = walk_with_progress(
+            &mut d,
+            "/sdcard/Download",
+            &|_| false,
+            &super::super::puller::CancelFlag::new(),
+            &mut |dirs, files| updates.push((dirs, files)),
+        );
+        assert!(r.errors.is_empty());
+        assert_eq!(updates.last(), Some(&(2, 1)));
+        assert!(updates.len() >= 3);
+        assert!(d.pull_calls.is_empty());
+    }
 
     #[test]
     fn cancelled_walk_never_lists_a_directory() {
@@ -304,5 +382,20 @@ mod tests {
             "{}",
             r.errors[0]
         );
+    }
+
+    #[test]
+    fn invalid_utf8_name_is_one_error_and_siblings_are_still_listed() {
+        let mut d = FakeADBDevice::new();
+        d.add_dir("/sdcard/Music/sub");
+        d.add_file("/sdcard/Music/a.mp3", b"a", 0, 0o644);
+        d.add_file("/sdcard/Music/sub/b.mp3", b"b", 0, 0o644);
+        d.invalid_names.insert("/sdcard/Music/bad-\u{fffd}.mp3".into());
+        let r = walk(&mut d, "/sdcard/Music", &|_| false);
+        let mut files: Vec<_> = r.files.iter().map(|f| f.remote.as_str()).collect();
+        files.sort();
+        assert_eq!(files, ["/sdcard/Music/a.mp3", "/sdcard/Music/sub/b.mp3"]);
+        assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
+        assert!(r.errors[0].contains("UTF-8"));
     }
 }

@@ -42,3 +42,15 @@ DeviceHero(gradient 히어로 + 폰 SVG 일러스트 + 반투명 상태 칩) / U
 - [작업 시작](wizard.startSession): 기기를 고정. 이전과 다른 기기면 SIM·펌웨어 선택, 동의, 입력값(언락 코드·펌웨어)을 새로 시작
 - 화면을 떠난 뒤 도착한 기기 조회 결과는 버림 — 작업 중 선택 기기가 바뀌지 않음
 - 모드 감지(부트로더·플래시)는 Sony USB 장치가 정확히 1대일 때만 통과 — 여러 대면 분리 안내
+2026-10-06 SIM 유형: 구독 정보의 isEmbedded로만 물리/eSIM을 표시한다. 정보 없음·오류·충돌 시 '유형 미확인'이며 슬롯 번호로 가정하지 않는다. eSIM 확인 시에만 점선 테두리. 비주얼: 기존 SIM 카드 구조 유지, 미확인은 중립 배지.
+2026-10-06 단일 SIM: 카드 수는 보고된 논리 SIM 용량에 따라 생성한다. 두 슬롯을 고정 생성하지 않으며 듀얼 SIM의 빈 슬롯은 유지한다. 미보고 SIM 상태는 UNKNOWN. 비주얼: 기존 카드 each 구조 유지. 지원 형태(UICC/eUICC)와 현재 구독 유형은 구별하며, 현 구현은 구독 유형만 표시한다. 백업 실행 파일은 작업 중 교체하지 않는다.
+
+2026-10-06: [백업만 실행]은 기존 기록 조회 후 단독 실전 백업 옵션(step2)으로 진입한다. 패치/언락 선택 불필요. 기본 REAL_STEPS 유지. 비주얼: 기존 MD3 Button, 밀도/고정 pane 유지.
+
+2026-10-07 (사용자 지시): 사이드바 VoLTE 배지 표시 규칙을 바꿨다. 내부 SIM `volte` 판정(on/wifi/off/unknown)은 그대로이고, 배지 표시만 다음과 같다.
+- **✓:** 셀룰러 IMS 음성 등록이 확인된 경우
+- **?:** IMS 조회 자체가 실패한 경우(`ims.status=query-failed`) 또는 SIM 정보가 없는 경우
+- **✗:** 그 밖의 모든 경우. 등록이 확인되지 않으면 지금 VoLTE는 안 되는 상태다.
+
+2026-10-07 후속(사용자 지시, 위 3단계 규칙을 대체): VoLTE는 켜짐과 꺼짐만 표시한다. 첫 화면 SIM 카드는 IMS 상세 진단(등록·음성·SMS·전송 기술) 줄을 없애고, `cellularReady`일 때 "VoLTE 활성", 아니면 "VoLTE 비활성"만 보인다. 사이드바 배지도 ✓/✗ 두 가지다. 상세 IMS 진단은 VoLTE 적용 후 확인 단계(CommunicationPanel)에만 남는다.
+- 2026-10-07 IMS 조회 수정(실기기 XQ-DQ44 확인): 기존 명령은 덤프를 셸 변수에 담아 `printf '%s\n' "$ims_dump"`로 grep에 넘겼다. Android sh의 printf는 외부 명령이라 5,713줄 덤프에서 "Argument list too long"이 나 IMS 줄이 전부 버려졌다. 또 정상 덤프의 SIM 로그 줄에 있는 "Exception" 때문에 실패로도 판정됐다. 이제 `{ dumpsys …; echo __IMS_RC__=$?; } | grep`으로 바로 넘기고, 실패는 종료 코드와 줄 맨 앞의 dumpsys 오류 문구로만 판단한다. 실기기 결과: SIM1 registering·voice=false → VoLTE 꺼짐, SIM2 sim-not-ready. 읽기 전용 진단 `adb::tests::live_ims_dump_failure_markers`(ignored)를 추가했다.

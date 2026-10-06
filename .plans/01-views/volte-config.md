@@ -39,3 +39,4 @@ status: implemented
 - 기종별 참고 사항은 wizard.workflow(data/devices.ts deviceWorkflow)에서 생성한다. IV의 KT·LG U+ 실패/성공 보고는 해당 통신사 선택 때만, III·PRO-I 후속 앱 설정은 리락 선택 때만, II 외부 PDC는 EFS 선택 때만 표시한다. 부트 파티션은 모델 표로 선택하며 SIM 감지나 최신 펌웨어 여부로 작업을 바꾸지 않는다.
 - II/IV는 일반 EFS 경로를 허용한다. PDC·모뎀 교체·Pixel IMS 설치를 새로 구현하지 않으며, 별도 상세 글 598708/591068의 404를 확인하고 공개 사용자 보고/작성자 댓글로 안내 출처를 교체했다.
 - 리락만 선택해도 같은 펌웨어의 순정 이미지 복원을 포함하며, VoLTE 유지 보장 문구를 제거했다. 표 밖 모델은 지원 미확인으로 표시한다.
+2026-10-06 SIM 유형 배지: physical=물리, esim=eSIM, unknown=유형 미확인. 구독 정보가 없는 슬롯을 eSIM으로 표시하지 않는다. 비주얼: 기존 outline 배지 유지.

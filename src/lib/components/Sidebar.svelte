@@ -85,11 +85,8 @@
           {wizard.device.bootloader === "locked" ? "🔒 잠김" : wizard.device.bootloader === "unlocked" ? "🔓 언락" : "?"}
         </Badge>
         <Badge variant="outline" class="text-[10px] px-1.5 py-0">
-          {wizard.device.sims.some((s) => s.volte === "on")
-            ? "VoLTE ✓"
-            : wizard.device.sims.some((s) => s.volte === "off")
-              ? "VoLTE ✗"
-              : "VoLTE ?"}
+          <!-- 켜짐/꺼짐만: 셀룰러 IMS 음성 등록이 확인되면 ✓, 아니면 ✗ -->
+          {wizard.device.sims.some((s) => s.volte === "on") ? "VoLTE ✓" : "VoLTE ✗"}
         </Badge>
       </div>
     </div>

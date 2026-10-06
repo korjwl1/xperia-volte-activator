@@ -33,6 +33,16 @@ pub enum ItemStatus {
     Skipped,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OmittedApp {
+    pub package: String,
+    pub reasons: Vec<String>,
+    pub removed_files: u64,
+    pub removed_bytes: u64,
+    pub cleanup_pending: bool,
+}
+
 /// 파일 항목 1개 — 완결 판정의 원자 단위(§6-2 전수 열거)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -126,6 +136,10 @@ pub struct Manifest {
     /// Current backup selection; exclusion never destroys a completed restore receipt.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub excluded_items: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub omitted_apps: Vec<OmittedApp>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_metadata: Vec<super::source_metadata::Receipt>,
 }
 
 impl Manifest {
@@ -142,6 +156,8 @@ impl Manifest {
             android: android.to_string(),
             items: Vec::new(),
             excluded_items: Vec::new(),
+            omitted_apps: Vec::new(),
+            source_metadata: Vec::new(),
         }
     }
 
@@ -150,6 +166,12 @@ impl Manifest {
     pub fn complete(&self) -> bool {
         let selected: Vec<_> = self.items.iter().filter(|i| self.is_selected(i)).collect();
         !selected.is_empty()
+            && self.omitted_apps.iter().all(|app| !app.cleanup_pending)
+            && self
+                .source_metadata
+                .iter()
+                .filter(|r| r.required() && selected.iter().any(|i| i.id == r.item_id))
+                .all(|r| r.complete)
             && selected.iter().all(|i| {
                 i.status == ItemStatus::Done
                     && i.errors.is_empty()
@@ -157,20 +179,59 @@ impl Manifest {
             })
     }
 
-    /// (선택 항목 중) 완결되지 않은 항목id → 대표 사유 첫 줄. 진행 전(Pending) 항목도 사유로 보인다.
+    /// All distinct selected-item failures, including individual failed entries.
     pub fn error_summary(&self) -> Vec<String> {
-        self.items
-            .iter()
-            .filter(|i| self.is_selected(i))
-            .filter_map(|i| match i.status {
-                ItemStatus::Partial => Some(match i.errors.first() {
-                    Some(e) => format!("{}: {e}", i.id),
-                    None => format!("{}: 미완료", i.id),
-                }),
-                ItemStatus::Pending => Some(format!("{}: 미완료", i.id)),
-                _ => None,
-            })
-            .collect()
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for receipt in &self.source_metadata {
+            if receipt.required()
+                && self
+                    .items
+                    .iter()
+                    .any(|i| i.id == receipt.item_id && self.is_selected(i))
+            {
+                out.extend(
+                    receipt
+                        .errors
+                        .iter()
+                        .map(|e| format!("{}: {e}", receipt.item_id)),
+                );
+            }
+        }
+        for app in self.omitted_apps.iter().filter(|app| app.cleanup_pending) {
+            out.push(format!(
+                "app-data: {}: 제외한 앱 데이터 정리 미완료",
+                app.package
+            ));
+        }
+        for item in self.items.iter().filter(|item| self.is_selected(item)) {
+            let before = out.len();
+            let errors = item
+                .errors
+                .iter()
+                .cloned()
+                .chain(item.entries.iter().filter_map(|entry| {
+                    entry
+                        .error
+                        .as_ref()
+                        .map(|error| format!("{}: {error}", entry.remote))
+                }));
+            for error in errors {
+                let message = format!("{}: {error}", item.id);
+                if seen.insert(message.clone()) {
+                    out.push(message);
+                }
+            }
+            if before == out.len()
+                && matches!(item.status, ItemStatus::Partial | ItemStatus::Pending)
+            {
+                let message = format!("{}: 미완료", item.id);
+                if seen.insert(message.clone()) {
+                    out.push(message);
+                }
+            }
+        }
+        out
     }
 
     pub fn total_files(&self) -> u64 {
@@ -219,6 +280,8 @@ pub struct BackupSummary {
     pub errors: Vec<String>,
     /// 항목별 상태(id → done/partial)
     pub items: Vec<ItemBrief>,
+    pub omitted_apps: Vec<OmittedApp>,
+    pub source_metadata: Vec<super::source_metadata::Receipt>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -239,6 +302,8 @@ impl From<&Manifest> for BackupSummary {
             bytes: m.total_bytes(),
             dir: String::new(), // 호출부에서 채운다
             errors: m.error_summary(),
+            omitted_apps: m.omitted_apps.clone(),
+            source_metadata: m.source_metadata.clone(),
             items: m
                 .items
                 .iter()

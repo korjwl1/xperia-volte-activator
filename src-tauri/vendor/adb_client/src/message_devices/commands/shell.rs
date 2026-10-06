@@ -1,11 +1,11 @@
-use std::io::{ErrorKind, Read, Write};
+use std::io::{Read, Write};
 
 use crate::models::ADBLocalCommand;
 use crate::{
     Result, RustADBError,
     message_devices::{
         adb_message_device::ADBMessageDevice, adb_message_transport::ADBMessageTransport,
-        adb_transport_message::ADBTransportMessage, commands::utils::ShellMessageWriter,
+        adb_transport_message::ADBTransportMessage,
         message_commands::MessageCommand,
     },
 };
@@ -23,6 +23,7 @@ impl<T: ADBMessageTransport> ADBMessageDevice<T> {
             Vec::new(),
         ))?;
 
+        let result=(|| {
         loop {
             let message = session.recv_and_reply_okay()?;
             if message.header().command() == MessageCommand::Clse {
@@ -35,6 +36,12 @@ impl<T: ADBMessageTransport> ADBMessageDevice<T> {
         }
 
         Ok(None)
+        })();
+        if result.is_err() {
+            session.mark_incomplete(true);
+            if session.close_sync().is_err() {self.sync_broken=Some("SYNC_BATCH_BROKEN|Shell stream failed; reconnect required".into());}
+        }
+        result
     }
 
     /// Starts an interactive shell session on the device.
@@ -62,48 +69,46 @@ impl<T: ADBMessageTransport> ADBMessageDevice<T> {
     fn bidirectional_session(
         &mut self,
         local_command: &ADBLocalCommand,
-        mut reader: &mut dyn Read,
+        reader: &mut dyn Read,
         mut writer: Box<dyn Write + Send>,
     ) -> Result<()> {
-        let session = self.open_session(local_command)?;
-
-        let local_id = session.local_id();
-        let remote_id = session.remote_id();
-
-        let mut transport = self.get_transport_mut().clone();
-
-        // Reading thread, reads response from adbd
-        std::thread::spawn(move || -> Result<()> {
+        let mut session = self.open_session(local_command)?;
+        let result=(|| {
+            let mut buffer=vec![0;64*1024];
+            let mut diagnostic=Vec::<u8>::new();
             loop {
-                let message = transport.read_message()?;
-
-                // Acknowledge for more data
-                let response =
-                    ADBTransportMessage::try_new(MessageCommand::Okay, local_id, remote_id, &[])?;
-                transport.write_message(response)?;
-
-                match message.header().command() {
-                    MessageCommand::Write => {
-                        writer.write_all(&message.into_payload())?;
-                        writer.flush()?;
+                let count=reader.read(&mut buffer)?;
+                if count==0 {break;}
+                let message=ADBTransportMessage::try_new(MessageCommand::Write,session.local_id(),session.remote_id(),&buffer[..count])?;
+                session.get_transport_mut().write_message(message)?;
+                loop {
+                    let message=session.recv_and_reply_okay()?;
+                    match message.header().command() {
+                        MessageCommand::Okay=>break,
+                        MessageCommand::Write=>{let payload=message.into_payload(); diagnostic.extend_from_slice(&payload);if diagnostic.len()>8192 {diagnostic.drain(..diagnostic.len()-8192);}writer.write_all(&payload)?;writer.flush()?;},
+                        MessageCommand::Clse=>return Err(RustADBError::ADBRequestFailed(format!("Service closed before input completed: {}",String::from_utf8_lossy(&diagnostic).trim()))),
+                        _=>unreachable!(),
                     }
-                    MessageCommand::Okay => {}
-                    _ => return Err(RustADBError::ADBShellNotSupported),
                 }
             }
-        });
-
-        let transport = self.get_transport_mut().clone();
-        let mut shell_writer = ShellMessageWriter::new(transport, local_id, remote_id);
-
-        // Read from given reader (that could be stdin e.g), and write content to device adbd
-        if let Err(e) = std::io::copy(&mut reader, &mut shell_writer) {
-            match e.kind() {
-                ErrorKind::BrokenPipe => return Ok(()),
-                _ => return Err(RustADBError::IOError(e)),
+            if matches!(local_command,ADBLocalCommand::Shell) {
+                session.mark_incomplete(true);
+                return session.close_sync();
             }
+            loop {
+                let message=session.recv_and_reply_okay()?;
+                match message.header().command() {
+                    MessageCommand::Clse=>return Ok(()),
+                    MessageCommand::Write=>{let payload=message.into_payload(); diagnostic.extend_from_slice(&payload);if diagnostic.len()>8192 {diagnostic.drain(..diagnostic.len()-8192);}writer.write_all(&payload)?;writer.flush()?;},
+                    MessageCommand::Okay=>{},
+                    _=>unreachable!(),
+                }
+            }
+        })();
+        if result.is_err() {
+            session.mark_incomplete(true);
+            if session.close_sync().is_err() {self.sync_broken=Some("SYNC_BATCH_BROKEN|Exec stream failed; reconnect required".into());}
         }
-
-        Ok(())
+        result
     }
 }
