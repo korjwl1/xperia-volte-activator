@@ -1,48 +1,24 @@
 # Xperia VoLTE Activator
 
-Sony Xperia의 VoLTE 패치 과정을 통합하는 Windows용 도구입니다. Tauri 2, SvelteKit, TypeScript, Rust로 개발하며 EFS/NV 처리는 내장 Rust 모듈을 사용합니다.
+Sony Xperia의 백업, 부트로더 작업, 루팅과 VoLTE 패치를 연결하는 Windows용 개발 중 도구입니다. Tauri 2·Svelte 5·TypeScript·Rust로 구성하며 ADB와 EFS/NV는 Rust 엔진을 사용합니다.
 
-## 기종별 검토 상태
+## 호환성 검증
 
-현재 전체 절차를 검토하는 단말은 **Xperia 1 V JP 모델(XQ-DQ44)** 한 대입니다. 아래 표는 현재 코드의 기종 정보를 기준으로 정리했으며, 같은 기종의 다른 지역·모델까지 검토한 것으로 간주하지 않습니다.
+전체 GUI 절차의 호환성 테스트가 끝난 기기는 아직 없습니다. 다음 환경에서는 일부 단계의 실기기 동작을 확인했습니다.
 
-- **전체 검토 중**: 해당 단말을 대상으로 전체 워크플로우를 검토하고 있습니다. 실기기 전체 절차 검증은 아직 완료되지 않았습니다.
-- **검토 안 됨**: 해당 단말에서 이 프로그램의 전체 절차를 검토하지 않았습니다. 코드에 기종 분기나 참고 사항이 있어도 검토 완료를 뜻하지 않습니다.
+| 기기 | 확인 환경 | 검증된 범위 |
+|---|---|---|
+| Xperia 1 V JP · **XQ-DQ44** | 펌웨어 **67.2.A.3.178**, SIM1 **SKT**, SIM2 없음 | 언락, 개발 CLI를 통한 Magisk 30.7 루팅·EFS 적용·IMS 등록 및 사용자 VoLTE 발신/수신 확인. 백업은 별도 세션에서 확인 |
 
-<!-- 기종·모델·상태 표 형식 참고: https://github.com/openandroidinstaller-dev/openandroidinstaller/blob/main/README.md -->
+같은 기종의 다른 지역판·펌웨어·통신사까지 검증한 것은 아닙니다. 리락·언루팅·초기화 후 복구·펌웨어 업데이트 및 전체 GUI 연속 실행은 추가 확인이 필요합니다. 정확한 기록과 다른 기기의 상태는 [기기별 메모](docs/devices.md)를 참조하세요.
 
-| 기종 | 지역·모델 코드 | 검토 상태 |
-| --- | --- | --- |
-| **Xperia 1 V** | **JP · XQ-DQ44** | **전체 검토 중** |
-| Xperia 1 V | 그 외 지역·모델(XQ-DQ* 중 XQ-DQ44 제외 포함) | 검토 안 됨 |
-| Xperia 5 V | XQ-DE* | 검토 안 됨 |
-| Xperia 1 VI | XQ-EC* | 검토 안 됨 |
-| Xperia 1 IV | XQ-CT* | 검토 안 됨 |
-| Xperia 5 IV | XQ-CQ* | 검토 안 됨 |
-| Xperia 1 III | XQ-BC* | 검토 안 됨 |
-| Xperia 5 III | XQ-BQ* | 검토 안 됨 |
-| Xperia PRO-I | XQ-BE* | 검토 안 됨 |
-| Xperia 1 II | XQ-AT* | 검토 안 됨 |
-| Xperia 5 II | XQ-AS* | 검토 안 됨 |
-| Xperia 10 IV | XQ-CC* | 검토 안 됨 |
-| Xperia 10 V | XQ-DC* | 검토 안 됨 |
-| Xperia 10 VI | XQ-ES* | 검토 안 됨 |
-| 위에 없는 기종·지역·모델 | — | 검토 안 됨 |
+## 주의 사항
 
-`*`는 모델 코드 접미사를 묶어 표기한 것입니다. 실기기 단계별 검증 항목은 [기기 테스트 체크리스트](.plans/04-engine/device-test-checklist.md)에서 관리합니다.
+- 언락·리락은 기기 데이터를 초기화할 수 있습니다. 기록·복원·EFS 수정 실패는 부팅이나 통신에 영향을 줄 수 있습니다.
+- 앱 데이터의 일부는 Android 권한 때문에 백업·복구할 수 없습니다. 백업 완료가 모든 앱의 완전한 복원을 보장하지 않습니다.
+- 기본 GUI 실행은 시뮬레이션이고 쓰기 Cargo feature는 기본 비활성입니다. 개발 CLI에서 확인한 결과가 일반 빌드의 전체 동작을 보장하지 않습니다.
+- 전체 펌웨어 다운로드·플래시는 아직 미구현입니다. 자동/수동/업데이트 선택 화면도 현재는 계획 단계입니다.
+- EFS 리드백 일치, IMS 등록, 실제 통화 성공은 서로 다른 확인입니다. 로밍·MMS·장기간 안정성은 별도 검증이 필요합니다.
+- 기기 백업·모뎀 설정에는 개인정보가 포함될 수 있습니다. 원본 백업이나 인증 정보는 공개 저장소에 올리지 마세요.
 
-## 개발용 단계 실행
-
-내일 실기기 검토용 CLI는 Cargo `dev-cli` feature로 별도 빌드한다. 앱과 **같은 Rust 엔진**을 호출하므로 엔진을 수정하고 재빌드하면 양쪽에 적용된다. 한 명령씩 실행하고 결과를 남겨 필요한 단계만 다시 실행할 수 있다. 일반 앱의 쓰기 기능 기본값은 유지한다.
-
-```powershell
-cargo run --manifest-path src-tauri/Cargo.toml --bin xva-dev --features dev-cli -- commands
-```
-
-쓰기 feature를 포함한 빌드·단계별 요청·재시작·로그 확인은 [개발 CLI 사용법](.plans/04-engine/dev-cli.md)을 따른다. MSVC 개발 셸이 필요하다. CLI는 Rust 엔진 검토용이며 화면의 전체 단계 전환은 앱에서 따로 검토한다. 단계 순서·대기 시간·기종별 파티션 선택·수동 확인 같은 흐름은 앱(TypeScript 위자드)에만 있어 CLI 결과로 보장되지 않는다. 기기 명령은 GUI 앱을 닫고 실행하고, 초기화 단계는 백업 증명 옵션이 필요하다(사용법 문서의 "실기기 세션 규칙").
-
-오프라인 실패 입력 검증과 수정 내역은 [최종 적대적 리뷰](.plans/04-engine/adversarial-review-20261005.md)에 기록합니다. 이 검토는 실기기 전체 절차 검증을 대체하지 않습니다.
-
-## Recommended IDE Setup
-
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer).
+[시스템 구조와 기능별 동작](docs/structure/overview.md) · [개발/검증 방법](docs/structure/development.md) · [문서 목록](docs/README.md) · [기여 시 작업 규칙](AGENTS.md)
