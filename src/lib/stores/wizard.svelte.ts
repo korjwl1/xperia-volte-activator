@@ -1176,6 +1176,8 @@ export class Wizard {
     return !!list?.some((d) => d.state === "device" && d.serial === this.device?.serial);
   }
 
+  /** 진행 중 단계의 폰 조작 안내(예: 앱 설치 중 Play 프로텍트 창) */
+  runHint = $state("");
   /** 루트 승인 진행 안내(화면·잠금·거부 상태) */
   suGrantHint = $state("");
   private suDenied = false;
@@ -2375,9 +2377,16 @@ export class Wizard {
       void this.persist();
     });
     if (gen !== this.runGen) return un();
+    // 오래된 앱은 설치 중 Play 프로텍트 확인 창이 뜬다(응답할 때까지 설치가 멈춤, 2026-10-08 실기기) — 화면을 켜고 지켜보게 한다
+    if (items.includes("apk")) {
+      void api.screenWake(this.device?.serial);
+      this.runHint = "앱을 설치하는 동안 폰에 Play 프로텍트 확인 창이 뜰 수 있습니다 — 끝날 때까지 폰 화면을 켜 두고, 창이 뜨면 설치를 허용해 주세요";
+      this.log(cur, `[안내] ${this.runHint}`);
+    }
     const r = await api.restoreRun(this.device?.serial, this.backupDir, items).finally(() => {
       un();
       this.transferStatus = "";
+      this.runHint = "";
     });
     if (gen !== this.runGen) return; // 중단·처음으로
     if (!r.ok) {

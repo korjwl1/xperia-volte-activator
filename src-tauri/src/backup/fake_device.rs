@@ -48,6 +48,10 @@ pub struct FakeADBDevice {
     pub ignore_role_changes: bool,
     /// 비행기 모드 상태(기본 꺼짐)
     pub airplane: bool,
+    /// Some이면 `settings get/put`을 흉내 낸다 — 키는 "<namespace> <key>"
+    pub settings: Option<BTreeMap<String, String>>,
+    /// put해도 반영되지 않는(시스템이 되돌리는) 설정
+    pub settings_ignore: BTreeSet<String>,
     pub fail_shell: BTreeSet<String>,
     pub shell_exit_codes: BTreeMap<String, u8>,
     /// 전송 계층 상태 None(USB 직접 연결처럼) — 종료 코드 표식은 그대로 출력된다
@@ -185,6 +189,46 @@ impl FakeADBDevice {
         if self.fail_shell.iter().any(|prefix| cmd.starts_with(prefix)) {
             err.write_all(b"injected shell failure")?;
             return Ok(1);
+        }
+        // 설정 저장소 흉내 — `settings get/put`과 `ime set`(기본 키보드)
+        if let Some(store) = &mut self.settings {
+            if let Some(rest) = cmd.strip_prefix("settings get ") {
+                let value = store.get(rest.trim()).cloned().unwrap_or_else(|| "null".into());
+                writeln!(out, "{value}")?;
+                return Ok(0);
+            }
+            if let Some(rest) = cmd.strip_prefix("settings put ") {
+                let mut parts = rest.splitn(3, ' ');
+                let (ns, key, raw) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+                let id = format!("{ns} {key}");
+                if !self.settings_ignore.contains(&id) {
+                    let value = raw.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(raw);
+                    let mut unescaped = String::new();
+                    let mut chars = value.chars();
+                    while let Some(c) = chars.next() {
+                        unescaped.push(if c == '\\' { chars.next().unwrap_or('\\') } else { c });
+                    }
+                    store.insert(id, unescaped);
+                }
+                return Ok(0);
+            }
+            if let Some(raw) = cmd.strip_prefix("cmd statusbar set-tiles ") {
+                let value = raw.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(raw);
+                store.insert("secure sysui_qs_tiles".into(), value.to_string());
+                return Ok(0);
+            }
+            if let Some(ime) = cmd.strip_prefix("ime set ") {
+                store.insert("secure default_input_method".into(), ime.trim().into());
+                return Ok(0);
+            }
+        }
+        // 설정 백업의 기본 앱·권한·appops 덤프 — 따로 답을 정하지 않은 테스트에는 빈 기기로 답한다
+        if !self.shell_answers.iter().any(|(prefix, _)| cmd.starts_with(prefix.as_str()))
+            && (cmd.starts_with("echo \"android.app.role.")
+                || cmd.starts_with("for p in $(pm list packages -3 | cut -d: -f2); do ")
+                || cmd == "pm list packages -3 -i")
+        {
+            return Ok(0);
         }
         // 비행기 모드(`cmd connectivity airplane-mode [enable|disable]`)
         match cmd {

@@ -418,6 +418,56 @@ fn fix_app_data_owners(
     Ok(())
 }
 
+/// 앱별 원래 설치 출처 — 백업의 settings/installers.txt(`pm list packages -3 -i`).
+/// 기록이 없는 예전 백업은 Play 스토어로 본다. 출처 앱이 이 폰에 없으면 지정하지 않는다.
+struct Installers {
+    recorded: Option<std::collections::HashMap<String, Option<String>>>,
+    available: std::collections::HashSet<String>,
+}
+
+const PLAY_STORE: &str = "com.android.vending";
+
+impl Installers {
+    fn load(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> Self {
+        let recorded = super::paths::existing_file(backup_root, "settings/installers.txt")
+            .ok()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|raw| parse_installers(&raw));
+        let available = crate::device_io::shell(dev, "pm list packages")
+            .map(|t| {
+                t.lines()
+                    .filter_map(|l| l.trim().strip_prefix("package:"))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self { recorded, available }
+    }
+
+    fn installer_for(&self, pkg: &str) -> Option<&str> {
+        let wanted = match &self.recorded {
+            Some(map) => map.get(pkg)?.as_deref()?,
+            None => PLAY_STORE,
+        };
+        (super::sms_role::valid_package(wanted) && self.available.contains(wanted)).then_some(wanted)
+    }
+}
+
+/// `package:<패키지>  installer=<출처|null>` 줄 → 패키지별 출처
+fn parse_installers(raw: &str) -> std::collections::HashMap<String, Option<String>> {
+    raw.lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix("package:")?;
+            let (pkg, installer) = rest.split_once("installer=")?;
+            let installer = installer.trim();
+            Some((
+                pkg.trim().to_string(),
+                (installer != "null" && !installer.is_empty()).then(|| installer.to_string()),
+            ))
+        })
+        .collect()
+}
+
 /// 세션 방식 APK 설치 — split APK 포함(base+split을 한 세션에).
 /// APK를 sync push로 기기 임시 파일에 올린 뒤 경로로 넘긴다. exec stdin으로 흘리면 adb 서버 경로에서
 /// 흐름 제어가 없어 큰 APK가 서버를 죽일 수 있다(2026-10-08 실측, 위 파일 전송 설명 참고).
@@ -425,6 +475,7 @@ fn install_apk_dir(
     dev: &mut dyn ADBDeviceExt,
     pkg: &str,
     mut apks: Vec<PathBuf>,
+    installer: Option<&str>,
     logs: &mut Vec<String>,
     failures: &mut Vec<String>,
 ) {
@@ -434,7 +485,13 @@ fn install_apk_dir(
         return;
     }
     // install-create → 세션 id
-    let text = match crate::device_io::shell(dev, "pm install-create -r -t") {
+    // 원래 설치 출처(예: Play 스토어)를 지정해야 그 스토어가 앱을 자기 앱으로 보고 업데이트한다.
+    // 지정하지 않으면 installer=null로 남아 Play가 자동 업데이트하지 않는다(2026-10-08 실기기).
+    let create = match installer {
+        Some(i) => format!("pm install-create -r -t -i {i}"),
+        None => "pm install-create -r -t".to_string(),
+    };
+    let text = match crate::device_io::shell(dev, &create) {
         Ok(text) => text,
         Err(e) => {
             failures.push(format!("{pkg}: 설치 세션 생성 실패({e})"));
@@ -559,6 +616,7 @@ pub fn run_restore(
     // 1) APK 재설치 (§6-5 첫 순서)
     if items.iter().any(|i| i == "apk") {
         on_progress(StepProgress::start("apk", "apk", 0));
+        let installers = Installers::load(dev, backup_root);
         let mut packages: std::collections::BTreeMap<String, Vec<PathBuf>> =
             std::collections::BTreeMap::new();
         // split APK 하나라도 확인하지 못한 패키지는 불완전 설치가 되므로 설치하지 않는다
@@ -600,7 +658,8 @@ pub fn run_restore(
         }
         let total = packages.len() as u64;
         for (i, (pkg, files)) in packages.into_iter().enumerate() {
-            install_apk_dir(dev, &pkg, files, &mut out.logs, &mut out.failures);
+            let installer = installers.installer_for(&pkg);
+            install_apk_dir(dev, &pkg, files, installer, &mut out.logs, &mut out.failures);
             on_progress(StepProgress {
                 file: Some(pkg),
                 bytes_done: (i + 1) as u64,
@@ -859,6 +918,7 @@ mod tests {
             &mut dev,
             "com.example.app",
             vec![apk],
+            None,
             &mut logs,
             &mut failures,
         );
@@ -889,6 +949,7 @@ mod tests {
                 &mut dev,
                 "com.example.app",
                 vec![apk],
+                None,
                 &mut logs,
                 &mut failures,
             );
@@ -921,6 +982,7 @@ mod tests {
                 &mut dev,
                 "com.example.app",
                 vec![apk],
+                None,
                 &mut logs,
                 &mut failures,
             );
@@ -1106,7 +1168,8 @@ mod tests {
         d.answer_shell("content query --uri content://com.android.contacts/contacts", "No result found.\n");
         d.answer_shell("content query --uri content://media/external/file", "Row: 0 _id=42\n");
         d.answer_shell("am start", "Starting: Intent { act=android.intent.action.VIEW }\n");
-        d.answer_shell("settings put", "");
+        d.settings = Some(Default::default());
+        d.answer_shell("pm list packages", "");
         d.answer_shell("dumpsys deviceidle whitelist +", "");
         d.answer_shell("mkdir", "");
 
@@ -1143,15 +1206,10 @@ mod tests {
             .iter()
             .any(|c| c.contains("pm install-commit 42")));
 
-        // 설정 화이트리스트
-        assert!(d
-            .shell_calls
-            .iter()
-            .any(|c| c.contains("settings put secure sysui_qs_tiles \"internet,bt\"")));
-        assert!(d
-            .shell_calls
-            .iter()
-            .any(|c| c.contains("settings put system screen_brightness \"31\"")));
+        // 사용자 설정 — 적용 후 다시 읽어 확인한 값
+        let store = d.settings.as_ref().unwrap();
+        assert_eq!(store["secure sysui_qs_tiles"], "internet,bt");
+        assert_eq!(store["system screen_brightness"], "31");
         assert!(d
             .shell_calls
             .iter()
@@ -1208,7 +1266,8 @@ mod tests {
         );
         d.answer_shell("pm install-commit", "Success\n");
         d.answer_shell("pm install-abandon", "");
-        d.answer_shell("settings put", "");
+        d.settings = Some(Default::default());
+        d.answer_shell("pm list packages", "");
         d.answer_shell("dumpsys deviceidle whitelist +", "");
         let sink: RestoreSink = Arc::new(|_| {});
         let out = run_restore(&mut d, &root, &items, &sink);
@@ -1467,6 +1526,25 @@ mod tests {
     }
 
     #[test]
+    fn apps_are_installed_with_their_original_store_so_it_keeps_updating_them() {
+        let recorded = parse_installers(
+            "package:com.kakao.talk  installer=com.android.vending\npackage:com.github.tmo1.sms_ie  installer=null\npackage:bad  installer=x;rm\n",
+        );
+        let available: std::collections::HashSet<String> =
+            ["com.android.vending".to_string()].into_iter().collect();
+        let with_record = Installers { recorded: Some(recorded), available: available.clone() };
+        assert_eq!(with_record.installer_for("com.kakao.talk"), Some("com.android.vending"));
+        // 원래 직접 설치한 앱은 출처를 붙이지 않는다
+        assert_eq!(with_record.installer_for("com.github.tmo1.sms_ie"), None);
+        assert_eq!(with_record.installer_for("bad"), None);
+        // 기록이 없는 예전 백업은 Play 스토어로 본다(설치돼 있을 때만)
+        let old = Installers { recorded: None, available };
+        assert_eq!(old.installer_for("anything"), Some("com.android.vending"));
+        let no_play = Installers { recorded: None, available: Default::default() };
+        assert_eq!(no_play.installer_for("anything"), None);
+    }
+
+    #[test]
     fn publish_count_mismatch_is_a_failure() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("f");
@@ -1558,7 +1636,8 @@ mod tests {
         m.items = vec![];
         let tmp = backup_dir_with(m);
         let mut d = test_device();
-        d.answer_shell("settings put", "");
+        d.settings = Some(Default::default());
+        d.answer_shell("pm list packages", "");
         d.answer_shell("dumpsys deviceidle whitelist +", "");
         // tar 스트리밍은 exec → 성공 처리되지만, settings 실패 유도: whitelist 파일 없는 폴더로
         let sink: RestoreSink = Arc::new(|_| {});

@@ -104,6 +104,9 @@
           </div>
           <!-- 단계 사이(진행 중 단계가 잠깐 없는 순간)에도 줄을 남겨 카드 높이가 흔들리지 않게 한다 -->
           <div class="text-[11px] text-muted-foreground truncate {currentStep ? '' : 'invisible'}">{Math.round((currentStep?.progress ?? 0) * 100)}%{#if currentStep && wizard.transferStatus} · {wizard.transferStatus}{/if}</div>
+          {#if currentStep && wizard.runHint}
+            <div class="mt-1.5 rounded-lg bg-muted px-3 py-2 text-[12px] font-medium text-foreground">{wizard.runHint}</div>
+          {/if}
         </div>
         <div class="flex items-center gap-2 shrink-0">
           {#if wizard.simulationControlsVisible}
