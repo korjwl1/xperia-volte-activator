@@ -12,7 +12,7 @@
 - su 거부를 비루팅/순정으로 단정하지 않는 `root_inspect`; 활성 버전과 마커 충돌 검사. KernelSU 세부 포크는 미확정.
 - 공통 su 후보 확장. `/data/adb/ksud`를 su처럼 실행하지 않고 모듈 설치 CLI로만 사용.
 - 모듈별 ZIP 검증, 선행 설치·상호배타 조건, intent/ACK, 재부팅 뒤 활성 관찰, 끄기·제거 예약·수동 오류 재확인.
-- 카페 ZIP 세 개·HMA 프리셋 동봉. 공개 모듈은 런타임 GitHub 최신 stable. 파일 출처/해시는 [manifest 설명](../../src-tauri/assets/root/README.md).
+- AshReXcue KO·PlayStoreFix 두 ZIP·HMA 카페 프리셋 동봉. HMA JSON은 수정 없이 그대로 내보내기/가져오기 안내. OverlayFS를 포함한 공개 모듈은 런타임 GitHub 최신 stable. 파일 출처/해시는 [manifest 설명](../../src-tauri/assets/root/README.md).
 - 별도 `root-tools-write`와 기존 fastboot/REAL_STEPS 게이트. GUI/CLI 공유 엔진, PC 보호·호출 중 닫기/이탈 제한.
 - 업데이트 루트 정책 API는 항상 쓰기 불가 안내이며 미래 버전 사전 패치/실제 플래시에는 연결하지 않음.
 
@@ -27,7 +27,11 @@
 
 ## 검증 및 재개 제한
 
-실제 PC 준비 검증: ReSukiSU v4.2.0-rc3(자산 digest·APK 인증서 핀·ksud), 공개 모듈 10개, 동봉 모듈 3개 모두 검증/캐시 준비 성공. NeoZygisk와 Next, PIF와 Integrity Box의 ID 공유를 발견해 영수증 소유권 검사·기록 없는 충돌 차단을 추가했다. Zygisk Assistant의 기존 공식 릴리스는 digest 필드가 없어 해당 저장소/태그/파일명만 고정 SHA-256으로 bootstrap했다. 다른 무해시 자산 거부는 유지한다. Shamiko의 XZ ZIP 지원을 추가하고 Cargo.lock도 갱신했다. 원본 바이트를 바꾸지 않았다.
+최초 구현 때 실제 PC 준비 검증: ReSukiSU v4.2.0-rc3(자산 digest·APK 인증서 핀·ksud), 당시 공개 모듈 10개·동봉 모듈 3개 모두 검증/캐시 준비 성공. 후속 정책에서 OverlayFS가 공개 모듈로 이동해 현재는 공개 11개·동봉 2개다. NeoZygisk와 Next, PIF와 Integrity Box의 ID 공유를 발견해 영수증 소유권 검사·기록 없는 충돌 차단을 추가했다. Zygisk Assistant의 기존 공식 릴리스는 digest 필드가 없어 해당 저장소/태그/파일명만 고정 SHA-256으로 bootstrap했다. 다른 무해시 자산 거부는 유지한다. Shamiko의 XZ ZIP 지원을 추가하고 Cargo.lock도 갱신했다. 원본 바이트를 바꾸지 않았다.
+
+2026-10-08 소스 정책 후속: OverlayFS의 include_bytes/고정 핀과 저장소 사본을 제거하고 RipperHybrid/Meta-Overlayfsx 최신 stable 조회로 전환했다. HMA JSON은 원본 해시를 유지하고 수동 scope 재구성 안내를 제거했다. PlayStoreFix는 ZIP 스크립트와 공개 BKI v1.4/v1.6.1을 비교했고 공개 v1.6.1 ZIP의 ABX 변환기 10개·LICENSE가 카페판과 동일함을 확인했다. 직접 부모 통합본/수정 이력은 확보하지 못했으므로 작성자별 변경을 단정하지 않는다. [상세 조사](../../docs/structure/play-store-fix.md)를 유지한다.
+
+후속 변경 검증: 기본 쓰기 비활성 Rust root_tools 회귀 12 passed(공식 OverlayFS 출처·digest 누락 거부 포함), 프론트 148 passed, Svelte check 0 errors / 0 warnings. 쓰기 feature 없이 개발 CLI를 재빌드하여 새 PC 캐시에 공식 OverlayFS v1.3.4 다운로드·API 해시/크기·ZIP 검증 성공(external=false, moduleId=meta-overlayfsx)을 확인했다. 같은 CLI의 HMA 내보내기는 카페 원본 SHA-256과 일치했다. 변경 문서 9개·로컬 링크 41개·Mermaid 2개·UTF-8 검사 통과. 실제 폰 작업과 기본 게이트 변경은 없다.
 
 기본 Rust 331 passed / 10 ignored, 쓰기 feature 포함 Rust 346 passed / 10 ignored 및 CLI 통합 3 passed. ignored 실기기/네트워크 검사를 실행하지 않았다. 전체 프론트·타입 검사·프로덕션 빌드와 문서 검증 결과는 최종 검증 기록을 따른다. 브라우저에서 새 수동 화면·그리드·별도 로그 pane·기본 쓰기 비활성을 확인했다.
 

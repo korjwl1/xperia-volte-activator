@@ -31,6 +31,7 @@ pub struct Release {
 }
 
 pub const MODULES: &[(&str, &str)] = &[
+    ("overlayfs", "RipperHybrid/Meta-Overlayfsx"),
     ("neozygisk", "JingMatrix/NeoZygisk"),
     ("rezygisk", "PerformanC/ReZygisk"),
     ("zygisk-next", "LSPosed/ZygiskNext"),
@@ -42,7 +43,7 @@ pub const MODULES: &[(&str, &str)] = &[
     ("hma", "frknkrc44/HMA-OSS"),
     ("shamiko", "LSPosed/LSPosed.github.io"),
 ];
-pub const EXTERNAL: &[&str] = &["overlayfs", "bootloop-protector", "play-store-fix"];
+pub const EXTERNAL: &[&str] = &["bootloop-protector", "play-store-fix"];
 fn safe_token(v: &str) -> bool {
     !v.is_empty()
         && v.len() <= 128
@@ -309,10 +310,6 @@ pub async fn root_package_prepare(id: String, tag: Option<String>) -> Result<Pre
 }
 fn bundled(id: &str) -> Result<(&'static [u8], &'static str), String> {
     match id {
-        "overlayfs" => Ok((
-            include_bytes!("../../assets/root/Meta-Overlayfsx_v1.3.4_13400.zip"),
-            "043e01d944ab40327b64aeba1e8a88c8c616c36f1f6ba7c69216cf418a4832ea",
-        )),
         "bootloop-protector" => Ok((
             include_bytes!(
                 "../../assets/root/AshReXcue_Bootloop_Protector_9.9_KO_SonyUserCommunity.zip"
@@ -404,7 +401,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = persist(
             dir.path(),
-            "overlayfs",
+            "bootloop-protector",
             "user-supplied".into(),
             zip_bytes("overlayfs"),
             false,
@@ -422,6 +419,30 @@ mod tests {
         assert!(validate(&zip_bytes("fake"), true).is_err());
         assert!(!safe_token("../v1"));
         assert!(!manager_name("ReSukiSU_debug.apk"));
+    }
+    #[test]
+    fn overlayfs_uses_official_release_and_rejects_missing_digest_or_foreign_source() {
+        let repo = MODULES.iter().find(|(id, _)| *id == "overlayfs").unwrap().1;
+        assert!(!EXTERNAL.contains(&"overlayfs"));
+        assert!(bundled("overlayfs").is_err());
+        let hash = "043e01d944ab40327b64aeba1e8a88c8c616c36f1f6ba7c69216cf418a4832ea";
+        let mut release = serde_json::json!({
+            "tag_name": "v1.3.4", "draft": false,
+            "assets": [{
+                "name": "Meta-Overlayfsx_v1.3.4_13400.zip",
+                "browser_download_url": "https://github.com/RipperHybrid/Meta-Overlayfsx/releases/download/v1.3.4/Meta-Overlayfsx_v1.3.4_13400.zip",
+                "digest": format!("sha256:{hash}"), "size": 569836
+            }]
+        });
+        let (tag, asset) = select(&release, repo, false).unwrap();
+        assert_eq!(tag, "v1.3.4");
+        assert_eq!(asset.sha256, hash);
+        release["assets"][0]["digest"] = serde_json::Value::Null;
+        assert!(select(&release, repo, false).is_err());
+        release["assets"][0]["digest"] = serde_json::json!(format!("sha256:{hash}"));
+        release["assets"][0]["browser_download_url"] =
+            serde_json::json!("https://example.com/overlayfs.zip");
+        assert!(select(&release, repo, false).is_err());
     }
     #[test]
     fn bundled_assets_match_pins_and_are_valid_modules() {

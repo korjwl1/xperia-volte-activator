@@ -6,11 +6,14 @@
 
 | 파일 | 원본/취득 경로 | 바이트 | SHA-256 |
 |---|---|---:|---|
-| `Meta-Overlayfsx_v1.3.4_13400.zip` | 카페 첨부; [원 프로젝트](https://github.com/RipperHybrid/Meta-Overlayfsx) | 569836 | `043e01d944ab40327b64aeba1e8a88c8c616c36f1f6ba7c69216cf418a4832ea` |
 | `AshReXcue_Bootloop_Protector_9.9_KO_SonyUserCommunity.zip` | 카페 첨부 한국어 빌드; [원 프로젝트](https://github.com/RipperHybrid/AshLooper) | 1034305 | `8d6445c90ecfa237b8c7a09a06f8169bad9035a22858e99fc0741e877668f408` |
 | `SonyUserCommunity_PlayStoreFix_v3.4_Magisk-KernelSU.zip` | 본문 Google Drive 링크; 제작 표기 소니사용자모임, DoubleHack·CITRA·T3SL4 기반 | 3012793 | `3a1caa209914221350baac783d6da645eb60ec5e64f680fbc745e912b0ed6c34` |
 | `HMA-OSS_SonyUserCommunity_2026-10-01.json` | 앞선 세션에서 확보한 카페 첨부 프리셋의 로컬 사본 | 122350 | `99f730a53ba3474b0581bb28622844ece43dd4cdeb479c6ce13b53d6af897dfb` |
 
-ZIP 세 개와 프리셋은 `include_bytes!`로 프로그램에 포함하고 고정 해시를 검사합니다. ZIP은 module.prop·경로/중복/링크·읽기/CRC·압축 해제 크기도 검사한 뒤 캐시에 복사합니다. 원본 자동 갱신은 하지 않습니다. 파일을 교체할 때는 출처/버전/해시·코드 핀·검증 기록을 같은 커밋에서 갱신해야 합니다.
+ZIP 두 개와 HMA 프리셋은 `include_bytes!`로 프로그램에 포함하고 고정 해시를 검사합니다. ZIP은 module.prop·경로/중복/링크·읽기/CRC·압축 해제 크기도 검사한 뒤 캐시에 복사합니다. 원본 자동 갱신은 하지 않습니다. 파일을 교체할 때는 출처/버전/해시·코드 핀·검증 기록을 같은 커밋에서 갱신해야 합니다.
 
-ReSukiSU/Magisk와 공개 GitHub 모듈은 이 폴더에 넣지 않습니다. 선택한 버전 또는 최신 stable의 자산을 실행 시 취득해 검증합니다. HMA 프리셋은 기기 설정을 자동 변경하지 않고 사용자가 선택한 PC 폴더로 내보냅니다. 은행 앱 scope는 사용자가 보강하고 결과를 직접 확인해야 합니다.
+ReSukiSU/Magisk와 공개 GitHub 모듈은 이 폴더에 넣지 않습니다. 선택한 버전 또는 최신 stable의 자산을 실행 시 취득해 검증합니다. **HMA는 위 카페 JSON을 수정 없이 내보내고 폰에서 그대로 가져옵니다.** 목록·scope를 직접 새로 구성하는 절차로 대체하지 않습니다. 프로그램의 PC 내보내기는 폰 설정을 자동 변경하지 않으며, 금융앱 호환 결과는 별도로 확인해야 합니다.
+
+OverlayFS는 사용자 후속 지시에 따라 [공식 GitHub 최신 stable](https://github.com/RipperHybrid/Meta-Overlayfsx/releases/latest)을 실행 시 받습니다. 카페 첨부 사본은 이 폴더와 프로그램 번들에서 제거했습니다. 2026-10-08에 확인한 v1.3.4 자산은 569836바이트, SHA-256 `043e01d944ab40327b64aeba1e8a88c8c616c36f1f6ba7c69216cf418a4832ea`로 기존 사본과 동일합니다. 이것은 확인 당시의 기록이며 버전 고정 핀이 아닙니다. 다음 준비 시 GitHub API의 자산 digest·크기·출처와 다운로드 바이트를 다시 검사합니다.
+
+PlayStoreFix는 단순 한국어판으로 분류하지 않습니다. 공개 BetterKnownInstalled와의 스크립트·바이너리 비교 및 같은 통합본의 외부 취득 여부는 [조사 문서](../../../docs/structure/play-store-fix.md)를 참조하세요.

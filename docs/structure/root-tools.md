@@ -59,7 +59,9 @@ ksud 별도 릴리스 자산이 매번 있다고 가정하지 않습니다. 현�
 
 해시 누락의 유일한 예외는 [Zygisk Assistant v2.1.4](https://github.com/snake-4/Zygisk-Assistant/releases/tag/v2.1.4)의 `Zygisk-Assistant-v2.1.4-1013f8a-release.zip`입니다. 해당 GitHub 자산에는 digest가 없어 2026-10-08 공식 HTTPS 주소에서 취득한 바이트의 고정 핀 `9eca30a269dc676a66f67a9339185dee55cccd47dc1fc8eeea5416124626d67a`를 코드에 넣었습니다. 정확한 저장소·태그·파일명에만 적용하고 다른 무해시 릴리스는 거부합니다. 이것은 배포자가 제공한 암호학적 서명이나 해시가 아닙니다. Shamiko ZIP의 XZ 압축도 원본 그대로 검사하기 위해 [zip 크레이트의 xz 지원](https://docs.rs/zip/8.6.0/zip/)을 켰습니다.
 
-카페 전용 세 ZIP과 HMA JSON은 [동봉 파일·해시·출처](../../src-tauri/assets/root/README.md)를 따라 포함합니다. 배포 갱신 시 고정 핀도 함께 바꿔야 합니다. 공개 모듈을 카페 스냅샷으로 자동 대체하지 않습니다. Zygisk Next는 현재 공개 배포 위치인 [LSPosed/ZygiskNext](https://github.com/LSPosed/ZygiskNext/releases)를 조회합니다.
+AshReXcue KO·PlayStoreFix 두 ZIP과 HMA 카페 JSON은 [동봉 파일·해시·출처](../../src-tauri/assets/root/README.md)를 따라 포함합니다. 배포 갱신 시 고정 핀도 함께 바꿔야 합니다. OverlayFS는 [RipperHybrid/Meta-Overlayfsx](https://github.com/RipperHybrid/Meta-Overlayfsx/releases/latest)의 최신 stable을 실행 시 받고 카페 사본은 번들에 포함하지 않습니다. 2026-10-08 기준 v1.3.4 자산은 기존 사본과 SHA-256이 같지만 이후 버전을 고정하지 않습니다. GitHub 조회/검증 실패 시 동봉 사본으로 대체하지 않습니다. Zygisk Next는 현재 공개 배포 위치인 [LSPosed/ZygiskNext](https://github.com/LSPosed/ZygiskNext/releases)를 조회합니다.
+
+HMA 모듈 자체는 기존 공식 GitHub에서 준비합니다. 설정은 **동봉 카페 JSON 원본을 PC에 저장하고 폰의 HMA에서 그대로 가져오는 방식**입니다. 코드·내보내기·안내에서 프리셋 목록이나 scope를 재작성하지 않으며 사용자에게 직접 구성하는 대체 절차를 요구하지 않습니다. PlayStoreFix는 공개 기반이 있지만 카페 v3.4의 Action·메타데이터 처리까지 같은 공개 통합본은 조사 범위에서 확인하지 못했습니다. 원본 동봉을 유지하며 [구체적인 비교와 조사 한계](play-store-fix.md)를 별도로 기록합니다.
 
 설치 직전 현재 엔진/모듈 목록을 다시 확인합니다. KernelSU 계열은 카페의 구성 순서에 맞춰 OverlayFS 먼저, Zygisk 구현체 택일, PlayIntegrityFork/Integrity Box 택일, TrickyStore→TrickyAddon, Shamiko는 Magisk+Zygisk Next를 요구합니다. 일반 KernelSU의 metamodule 필요 여부는 모듈의 시스템 파일 변경에 달려 있지만 이 설치 도구는 카페 구성의 선행 조건을 보수적으로 적용합니다. [KernelSU 모듈 문서](https://kernelsu.org/guide/module.html)를 참조하세요.
 
@@ -67,7 +69,7 @@ ksud 별도 릴리스 자산이 매번 있다고 가정하지 않습니다. 현�
 
 설치 intent → 고정 임시 ZIP 전송 → 폰 SHA-256 대조 → Magisk/ksud 설치 → 임시 ZIP 정리 → ACK 저장 순서입니다. 새 boot ID와 설치된 모듈의 활성 관찰을 확인하기 전에는 다음 설치를 막습니다. 설치 실패나 ACK 저장 실패는 불확정으로 남고 자동 재시도하지 않습니다. 끄기·제거 예약은 설치 목록의 유효 ID만 받으며 다음 재부팅을 요구합니다. 오류 검토 후 별도 수동 재확인으로 PC 불확정 기록을 해제할 수 있습니다. 이것은 실패한 설치의 성공 판정이 아닙니다.
 
-설정 UI를 자동 누르거나 keybox를 배급하지 않습니다. PIF Action, TrickyAddon WebUI 설정, HMA JSON 가져오기·은행 앱 scope 보강, 앱별 su 권한 승인과 검증은 수동입니다. WebUI/MMRL은 배포 안내 링크입니다. 앱·Google 서비스 데이터를 자동 삭제하지 않습니다. 모듈 설치 완료와 Play Integrity/금융앱 성공을 구분합니다. [Google 판정 기준](https://developer.android.com/google/play/integrity/verdicts)은 개별 금융앱 호환성 보장이 아닙니다.
+설정 UI를 자동 누르거나 keybox를 배급하지 않습니다. PIF Action, TrickyAddon WebUI 설정, 카페 HMA JSON 그대로 가져오기, 앱별 su 권한 승인과 검증은 폰에서 진행합니다. WebUI/MMRL은 배포 안내 링크입니다. 앱·Google 서비스 데이터를 자동 삭제하지 않습니다. 모듈 설치 완료와 Play Integrity/금융앱 성공을 구분합니다. [Google 판정 기준](https://developer.android.com/google/play/integrity/verdicts)은 개별 금융앱 호환성 보장이 아닙니다.
 
 ## Newflasher 업데이트와의 연결 상태
 

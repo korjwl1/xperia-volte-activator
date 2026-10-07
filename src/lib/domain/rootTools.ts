@@ -22,7 +22,7 @@ export async function flashRootImage(api: RootImagePort, serial: string, image: 
   requireResult(await api.fastbootReboot("os", serial));
 }
 export const ROOT_MODULE_CHOICES = [
-  { id: "overlayfs", name: "OverlayFS MetaModule", note: "KernelSU 계열의 첫 단계 · 동봉" },
+  { id: "overlayfs", name: "OverlayFS MetaModule", note: "KernelSU 계열의 첫 단계 · 공식 GitHub" },
   { id: "neozygisk", name: "NeoZygisk", note: "Zygisk 구현체 · ReZygisk/Next와 택일" },
   { id: "rezygisk", name: "ReZygisk", note: "Zygisk 구현체 · NeoZygisk/Next와 택일" },
   { id: "zygisk-next", name: "Zygisk Next", note: "Zygisk 구현체 · Shamiko 조합" },
@@ -30,7 +30,7 @@ export const ROOT_MODULE_CHOICES = [
   { id: "integrity-box", name: "Integrity Box", note: "PlayIntegrityFork와 택일" },
   { id: "tricky-store", name: "TrickyStore", note: "TrickyAddon보다 먼저 설치" },
   { id: "tricky-addon", name: "TrickyAddon", note: "설치 후 WebUI에서 직접 설정" },
-  { id: "hma", name: "HMA-OSS Zygisk", note: "설치 후 프리셋·은행 앱 범위 직접 설정" },
+  { id: "hma", name: "HMA-OSS Zygisk", note: "설치 후 동봉 카페 프리셋 그대로 가져오기" },
   { id: "bootloop-protector", name: "AshReXcue", note: "부트루프 보호 · 한국어 빌드 동봉" },
   { id: "play-store-fix", name: "PlayStoreFix", note: "선택 항목 · 사용자모임 빌드 동봉" },
   { id: "zygisk-assistant", name: "Zygisk Assistant", note: "선택 항목" },

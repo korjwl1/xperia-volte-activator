@@ -44,6 +44,8 @@ GitHub에서 읽는 현재 시스템 설명은 `docs/structure/overview.md`, 기
 
 예외(사용자 요청 2026-10-08 후속, `newflasher-add`): `../root-method.md`와 `../for-rooted-phone.md`를 읽고 **ReSukiSU 버전 선택·반수동 패치·수동 엔진 전환·모듈 준비/설치/재부팅 확인 기능의 코드와 화면 구현·오프라인 검증을 허용**한다. 카페 전용 ZIP·HMA 프리셋은 사용자 지시에 따라 `src-tauri/assets/root/`에 원본·해시·출처를 함께 포함한다. 새로운 기기 변경 기능은 `root-tools-write`(기본 꺼짐), 기존 root/fastboot 게이트와 확인 절차를 유지한다. 실제 폰 연결·조작은 실행하지 않는다. 입력 문서의 무손실·금융앱 호환 보장이나 미검증 기종/버전 범위를 구현 설명에 그대로 옮기지 않는다. 현재 설명은 `docs/structure/root-tools.md`, 계획·검증 기록은 `.plans/04-engine/root-tools.md`.
 
+후속 소스 정책(사용자 요청 2026-10-08): **HMA 카페 JSON 프리셋은 원본 그대로 동봉·내보내기·가져오기 안내를 유지**한다. 직접 목록/범위를 구성하는 절차로 대체하지 않는다. HMA 프로그램은 기존 공식 GitHub 배포를 사용한다. **OverlayFS는 `RipperHybrid/Meta-Overlayfsx`의 GitHub 최신 stable ZIP을 실행 시 조회·다운로드·검증**하며 카페 사본을 동봉하지 않는다. AshReXcue KO와 PlayStoreFix v3.4는 원본 동봉을 유지한다. PlayStoreFix의 공개 기반과 카페판 차이·조사 한계는 `docs/structure/play-store-fix.md`에 기록한다.
+
 예외(사용자 요청 2026-10-08, `newflasher-add` 워크트리): **Newflasher 고정 소스 기반 Rust 네이티브 엔진 구현·오프라인 검증·커밋 허용**. 계획은 `.plans/04-engine/newflasher-native.md`. 메인 폴더의 미커밋 변경·다른 작업 폴더를 수정하지 않는다. 실제 ADB/USB/COM/Flash mode 질의·쓰기·드라이버 설치를 실행하지 않는다. 기기 식별/profile/boot delivery 검증 전에는 하드웨어 플래시 API를 등록하지 않고 기존 기본 쓰기 feature/REAL_STEPS를 유지한다. 공개 문서에는 브랜치 구현과 실기기 미검증을 구분한다.
 
 1. **.plans 문서 의무**: 뷰를 작성·변경하면 대응하는 `.plans/01-views/<view>.md`를 같은 커밋에서 갱신한다.

@@ -190,7 +190,7 @@
           <Button size="sm" variant="outline" disabled={busy} onclick={() => work("HMA 프리셋 저장", exportPreset)}>동봉 HMA 프리셋 PC 저장</Button>
           <Button size="sm" variant="ghost" disabled={busy} onclick={() => api.openExternal("https://github.com/MeowDump/KsuWebUIStandalone/releases")}>WebUI 설치 안내</Button>
           <Button size="sm" variant="ghost" disabled={busy} onclick={() => api.openExternal("https://github.com/MMRLApp/MMRL/releases")}>MMRL 설치 안내</Button></div>
-        <p class="text-xs text-muted-foreground">PIF Action·TrickyAddon 설정·HMA 프리셋 가져오기는 폰에서 직접 진행하세요. HMA에는 KB·우리·하나·카카오뱅크·삼성페이 등 본인 앱을 추가 확인해야 합니다. 앱 데이터·계정은 자동 삭제하지 않습니다.</p>
+        <p class="text-xs text-muted-foreground">PIF Action·TrickyAddon 설정은 폰에서 직접 진행하세요. HMA는 동봉된 카페 프리셋을 그대로 가져오세요. 앱 데이터·계정은 자동 삭제하지 않습니다.</p>
       </section>
     </main>
     <aside class="w-72 shrink-0 flex flex-col rounded-xl bg-muted elev-1 overflow-hidden">

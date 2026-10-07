@@ -23,7 +23,7 @@ firmware_update_root_plan({request:RootUpdateRequest}) → RootUpdatePlan
 ```
 
 - RootState: access granted/unavailable/denied/unknown, engine magisk/kernelsu-family/conflicting/unknown, magiskMarkers/kernelsuMarkers boolean|null. 조회는 기기 읽기이며 su 승인 창이 뜰 수 있다.
-- RootPackage: id/version/path/sha256/moduleId/external. 준비는 PC 다운로드·검증·캐시만, ReSukiSU tag 필수·다른 버전 대체 없음. 카페 전용 3 ZIP은 동봉 원본 핀, 공개 모듈은 지정 저장소 최신 stable. preset export는 선택한 존재하는 절대 PC 폴더에 create_new로 저장한다.
+- RootPackage: id/version/path/sha256/moduleId/external. 준비는 PC 다운로드·검증·캐시만, ReSukiSU tag 필수·다른 버전 대체 없음. AshReXcue KO·PlayStoreFix 2 ZIP은 동봉 원본 핀(external=true), OverlayFS를 포함한 공개 모듈은 지정 저장소 최신 stable(external=false). OverlayFS 저장소는 RipperHybrid/Meta-Overlayfsx이고 조회/검증 실패 시 동봉 대체 없음. preset export는 카페 HMA JSON 바이트를 그대로 선택한 존재하는 절대 PC 폴더에 create_new로 저장한다.
 - Inventory: engine/modules[{id,state}]/rebootRequired/uncertain. 설치·끄기·제거 예약은 root-tools-write+명시 확인+독점 실행권 뒤이며 GUI는 REAL_STEPS.root도 요구한다. 설치 intent/ACK 뒤 새 boot ID·활성 모듈 확인까지 다음 설치 금지. reconcile은 재부팅 뒤 사람의 검토로 PC 불확정 기록만 해제하며 기기에 쓰거나 성공을 보증하지 않는다.
 - Switch: stage/target/fingerprint/stockSha256/partition/modules/bootId/historyOffset. prepare는 root-tools-write+fastboot-write, 살아 있는 단일 루트·이미 언락·현재 순정 IMG를 요구한다. 고정 경로 정리 전 intent 저장. verifyStock은 새 부팅·지문·정리 이후 같은 기기 양 슬롯 이력·su 미감지, finish는 stock-verified 뒤 예상 엔진 감지로 PC 기록 갱신한다. KernelSU 세부 포크는 미확정이다.
 - 외부 IMG 가져오기는 root-tools-write+같은 폰 패치 확인, 현재 지문/순정 부모/변경된 init_boot 헤더·크기·해시 검증과 후속 동일 기기 기록 증명을 만든다. 생성 출처 확인은 사용자 진술이다. APK 설치는 준비한 ReSukiSU 해시/핀·arm64 확인 후 Android 설치 검증을 사용한다.
