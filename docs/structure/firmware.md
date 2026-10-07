@@ -59,6 +59,8 @@ Newflasher 경로의 목적은 필요한 파티션을 제한해 기존 모뎀 �
 
 ## 예정 안내·백업·루팅 유지 흐름
 
+2026-10-08: `firmware_update_root_plan` 안내 계약을 구현했습니다. 관찰값·기존 언락·stock/preserve/install-magisk 선택·백업 선택으로 요건을 계산하며 항상 `writeReady=false`입니다. 실제 업데이트 권한이나 목표 버전 패치 산출물이 아닙니다. 현재 버전의 ReSukiSU 수동 패치·엔진 전환과 업데이트를 구분하며 [루트 도구](root-tools.md)에 구현 범위를 기록합니다.
+
 ```mermaid
 flowchart TB
   Info[업데이트 안내 / 모델과 버전 확인] --> Policy[현재 잠금 상태 유지 / 루팅 정책 선택]

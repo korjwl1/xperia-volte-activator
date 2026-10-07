@@ -16,6 +16,8 @@ mod host;
 mod ims;
 mod journal;
 mod magisk;
+mod root_state;
+mod root_tools;
 mod storage;
 mod tasks;
 mod usbmode;
@@ -112,6 +114,21 @@ pub fn run() {
             firmware::firmware_versions,
             firmware::firmware_dir_check,
             flasher::firmware_package_inspect,
+            flasher::root_plan::firmware_update_root_plan,
+            root_state::root_inspect,
+            root_tools::root_tools_capabilities,
+            root_tools::packages::resukisu_releases,
+            root_tools::packages::root_package_prepare,
+            root_tools::packages::root_preset_export,
+            root_tools::modules::root_modules_inspect,
+            root_tools::modules::root_module_install,
+            root_tools::modules::root_module_action,
+            root_tools::modules::root_module_reconcile,
+            root_tools::switch::root_switch_prepare,
+            root_tools::switch::root_switch_status,
+            root_tools::switch::root_external_patch_import,
+            root_tools::switch::resukisu_install,
+            root_tools::switch::root_switch_finish,
             boot_image::boot_image_check,
             adb::root_check,
             adb::screen_state,

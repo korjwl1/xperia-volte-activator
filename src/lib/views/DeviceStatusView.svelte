@@ -1,5 +1,7 @@
 <script lang="ts">
   import Modal from "$lib/components/Modal.svelte";
+  import RootToolsView from "$lib/views/RootToolsView.svelte";
+  import { Button } from "$lib/components/ui/button";
   import { onMount } from "svelte";
   import { CircleCheck, TriangleAlert, Usb, Smartphone, ArrowRight, Lock, LockOpen } from "@lucide/svelte/icons";
   import { api } from "$lib/api";
@@ -11,6 +13,7 @@
   const GITHUB_URL = "https://github.com/korjwl1";
 
   let devices = $state<DeviceStatus[]>([]);
+  let rootToolsDevice = $state<DeviceStatus | null>(null);
   let loading = $state(true);
   let linkError = $state<string | null>(null); // 연결 수단 점검 실패 — 재시도 팝업 표시
   let linkDismissed = $state(false);
@@ -28,11 +31,11 @@
   let failStreak = 0; // 일시적 조회 실패 1회로 기기 카드가 사라지지 않도록
 
   async function refresh() {
-    if (inFlight) return;
+    if (inFlight || rootToolsDevice) return;
     inFlight = true;
     try {
       const list = await api.deviceList();
-      if (!alive || wizard.view !== "device") return;
+      if (!alive || rootToolsDevice || wizard.view !== "device") return;
       if (list === null) {
         failStreak++;
         if (failStreak < 2) return;
@@ -75,7 +78,9 @@
 </script>
 
 <div class="flex-1 flex flex-col overflow-hidden">
-  {#if loading}
+  {#if rootToolsDevice}
+    <RootToolsView device={rootToolsDevice} onClose={() => { rootToolsDevice = null; void refresh(); }} />
+  {:else if loading}
     <div class="flex-1 flex items-center justify-center text-muted-foreground">확인 중…</div>
 
   {:else if multiDevice}
@@ -205,6 +210,7 @@
             VoLTE 작업 시작
             <ArrowRight size={20} />
           </button>
+          <Button variant="secondary" size="sm" onclick={() => { rootToolsDevice = device; }}>수동 작업 · 루트 엔진 / 모듈</Button>
       </div>
 
       <!-- 크레딧 — 하단 absolute (공간 차지 안 함) -->

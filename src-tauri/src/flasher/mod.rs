@@ -5,6 +5,7 @@
 pub(crate) mod engine;
 pub(crate) mod package;
 pub(crate) mod policy;
+pub(crate) mod root_plan;
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod protocol;
 pub(crate) mod sin;

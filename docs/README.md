@@ -10,6 +10,7 @@
 | [백업과 복구](structure/backup-restore.md) | 수집, 영수증·해시·완결 검사, 재개·복원 제한 |
 | [부트로더](structure/bootloader.md) | 언락·리락, 모드, 양 슬롯 기록과 출처/이력 게이트 |
 | [루팅과 언루팅](structure/root-unroot.md) | Magisk 준비·패치, 순정 이미지 복원, 모델별 파티션 |
+| [수동 루트 엔진과 모듈](structure/root-tools.md) | ReSukiSU 선택·수동 패치, 엔진 전환, 모듈 조건·기록·동봉 출처 |
 | [VoLTE 패치](structure/volte.md) | 프리셋·DIAG·EFS/NV·리드백·기종별 추가 조건 |
 | [펌웨어](structure/firmware.md) | 부트 부분 다운로드·SIN 추출·업데이트 정책 |
 | [통신 확인](structure/communication.md) | IMS/VoLTE 판정, 실제 통화 기록, SIM별 검증 |

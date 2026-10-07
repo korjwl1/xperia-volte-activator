@@ -2,6 +2,37 @@
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string };
 export type Unsubscribe = () => void;
 
+export interface RootState {
+  access: "granted" | "unavailable" | "denied" | "unknown";
+  engine: "magisk" | "kernelsu-family" | "conflicting" | "unknown";
+  magiskMarkers: boolean | null;
+  kernelsuMarkers: boolean | null;
+}
+export interface RootUpdateRequest {
+  root: RootState; unlocked: boolean | null; intent: "stock" | "preserve" | "install-magisk";
+  partition: string; backupSelected: boolean;
+}
+export interface RootUpdatePlan {
+  action: "stock-only" | "magisk-target-patch-then-fastboot" | "blocked";
+  blockers: string[]; requirements: string[]; warnings: string[]; humanAfterBackup: boolean; writeReady: false;
+}
+export interface RootRelease { tag: string; prerelease: boolean; publishedAt: string }
+export interface RootPackage { id: string; version: string; path: string; sha256: string; moduleId: string | null; external: boolean }
+export interface RootModule { id: string; state: "enabled" | "disabled" | "removing" }
+export interface RootModuleInventory { engine: RootState["engine"]; modules: RootModule[]; rebootRequired: boolean; uncertain: boolean }
+export interface RootSwitch {
+  stage: "cleanup-intent" | "cleaned-awaiting-stock" | "stock-verified" | "complete";
+  target: "magisk" | "resukisu"; fingerprint: string; stockSha256: string; partition: string;
+  modules: RootModule[]; bootId: string; historyOffset: number;
+}
+export interface RootImportedImage { path: string; sha256: string; partition: "boot" | "init_boot"; fingerprint: string }
+/** Injected facade operations; domain code has no runtime API dependency. */
+export interface RootImagePort {
+  fastbootGetvar(): Promise<FastbootVars | null>;
+  fastbootFlash(partition: string, path: string, confirm: boolean, expectedSerial: string, expectedSha256: string): Promise<ApiResult<null>>;
+  fastbootReboot(target: "os" | "bootloader" | "fastboot", expectedSerial: string): Promise<ApiResult<null>>;
+}
+
 /** PC-only native flasher inspection; this report never authorizes hardware writes. */
 export interface FirmwarePackageFile {
   relativePath: string;

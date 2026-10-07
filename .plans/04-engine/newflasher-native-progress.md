@@ -1,5 +1,12 @@
 # Newflasher 네이티브 구현 진행 기록
 
+## 2026-10-08 루트 입력 문서 후속
+
+`root-method.md`·`for-rooted-phone.md`를 읽고 사용자 답변 범위대로 수동 ReSukiSU 전환·모듈 도구를 추가했다. [구현 기록](root-tools.md), [현재 설명](../../docs/structure/root-tools.md), [동봉 자료 출처](../../src-tauri/assets/root/README.md).
+
+Newflasher 쪽에는 PC-only `firmware_update_root_plan`을 연결했다. stock 업데이트에 루트/언락을 요구하지 않고, Magisk 유지·기존 언락·같은 폰의 목표 버전 패치 요건과 백업 후 수동 진행 정책을 반환한다. 항상 writeReady=false이며 실제 업데이트/백업 선택 화면/목표 IMG 사전 패치·하드웨어 진입 연결은 남아 있다. 이번 구현의 엔진 전환은 현재 버전 이미지이며 이 제한을 전역 완화하지 않았다.
+
+
 기준일: 2026-10-08. 브랜치/워크트리: `newflasher-add`. 기준 커밋: `7bfd38d`. 전체 설계는 [native 계획](newflasher-native.md)을 따른다. 메인 작업 폴더의 미커밋 백업/ADB/EFS 변경을 가져오지 않았다.
 
 ## 구현한 범위

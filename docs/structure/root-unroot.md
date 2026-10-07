@@ -16,6 +16,8 @@
 
 ## Magisk 루팅
 
+2026-10-08: 패치 전 `root_inspect`와 진행 중인 전환 기록을 추가 검사합니다. 기존 Magisk 유지 또는 su 미감지 상태만 허용하고 KernelSU·권한 거부·불명 상태를 바로 Magisk로 덮지 않습니다. 엔진 교체는 [수동 전환 도구](root-tools.md)의 순정 복원 단계를 거칩니다. 이 가드와 ReSukiSU 경로는 새 코드의 실기기 검증 전입니다.
+
 ```mermaid
 sequenceDiagram
   participant W as 위자드 또는 CLI
@@ -41,6 +43,8 @@ APK는 릴리스 자산 digest·크기와 인증서 핀을 확인하고 캐시�
 XQ-DQ44의 `init_boot` 기록은 fastbootd에서 수행합니다. bootloader의 기록 거부를 무시해 같은 명령을 반복하지 않습니다. 모드·드라이버·슬롯 검사는 [부트로더](bootloader.md)를 참조하세요.
 
 ## 루트 권한 확인
+
+공통 su 경로는 PATH → 실행 가능한 `/debug_ramdisk/su` → `/system/xbin/su` → `/system/bin/su`입니다. KernelSU 계열의 ksud는 일반 su 폴백으로 쓰지 않습니다. 새 `root_inspect`는 권한·버전·마커를 대조하고, 버전/마커 충돌과 세부 포크 미확정을 반환합니다. 기존 boolean `root_check`는 엔진 식별 계약이 아닙니다.
 
 `su -c id`의 uid=0이 근거입니다. 현재 Magisk 환경에서는 PATH에 su가 없고 `/debug_ramdisk/su`만 있을 수 있으므로 공통 `device_io::su!` 경로를 사용합니다.
 

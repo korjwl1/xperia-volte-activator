@@ -8,6 +8,8 @@
 flowchart TB
   User[사용자] --> Views[Svelte 화면 / 앱 셸]
   Views --> Wizard[위자드 상태 / 실행 조정]
+  Views --> Manual[수동 루트 도구 / 개별 호출]
+  Manual --> Facade
   Wizard --> Domain[순수 도메인: 계획 / 판정 / 기록 검증]
   Wizard --> Facade[API facade / transport]
   Facade -->|데스크톱 IPC| Commands[Tauri 명령]
@@ -21,7 +23,7 @@ flowchart TB
   ADB --> Phone[Xperia]
   FB --> Phone
   DIAG --> Phone
-  Engine --> Download[Sony 펌웨어 / 검증된 APK 다운로드]
+  Engine --> Download[Sony 펌웨어 / APK와 모듈 취득·검증]
   Engine --> Inspect[로컬 전체 펌웨어 검사 / flasher]
   Inspect --> PC
   Engine -.-> Flasher[오프라인 코어: Sony Flash mode / 실제 연결 대기]
@@ -43,6 +45,7 @@ flowchart TB
 | `src-tauri/src/adb.rs`, `ims.rs`, `usbmode.rs` | 기기 상태·연결·IMS 해석·USB 모드 |
 | `src-tauri/src/backup`, `fastboot`, `magisk`, `efs` | 백업/복구, 부트 기록, 루팅, 모뎀 설정 엔진 |
 | `firmware.rs`, `boot_image.rs`, `apk_verify.rs` | 다운로드·추출·이미지 출처/해시·APK 입력 검증 |
+| `root_state.rs`, `root_tools/`, `assets/root/` | 클릭 시 엔진 감지·수동 전환/모듈 기록·배포 파일 검증·카페 파일 동봉 |
 | `flasher/` | 로컬 전체 패키지 검사·보존 정책·다중 SIN·S1/전송/기록 코어. Windows 하드웨어 연결은 아직 미노출 |
 | `device_io.rs`, `storage.rs`, `journal.rs`, `guard.rs` | 공유 실행권·파일 저장·진행 기록·PC 보호 |
 | `dev_cli.rs`, `events.rs`, `bin/xva-dev.rs` | 같은 엔진의 명령별 개발 실행·JSON Lines 이벤트 |
@@ -58,6 +61,7 @@ flowchart TB
 | 언락·부트 기록 | 구현, XQ-DQ44 실기기 사례 있음 | [부트로더](bootloader.md) |
 | 리락·언루팅 | 조건부 구현, 전체 실기기 확인 대기 | [부트로더](bootloader.md), [루팅](root-unroot.md) |
 | Magisk 루팅 | 공유 CLI에서 XQ-DQ44 단계별 성공 | [루팅](root-unroot.md) |
+| ReSukiSU·엔진 전환·모듈 | 별도 수동 화면·공유 엔진 구현, 오프라인 검증. 실제 폰 미검증·기본 쓰기 차단 | [루트 도구](root-tools.md) |
 | EFS/VoLTE | 네이티브 엔진 구현. XQ-DQ44/SKT SIM1 등록·통화 성공, 일부 후속 처리의 작업 트리 수정 포함 | [VoLTE](volte.md), [기기 기록](../devices.md) |
 | 부트 이미지 다운로드 | 부분 취득·SIN 추출 구현 | [펌웨어](firmware.md) |
 | 전체 펌웨어 검사/업데이트 | PC 검사·네이티브 오프라인 코어 구현. 전체 취득·실제 기기 플래시·화면 실행 연결 미완료 | [펌웨어](firmware.md) |

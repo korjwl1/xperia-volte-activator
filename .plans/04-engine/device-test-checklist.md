@@ -1,5 +1,21 @@
 # 실기기 검증 체크리스트
 
+## 2026-10-08 수동 루트 도구 — 전부 실기기 미검증
+
+- [ ] Magisk PATH/ramdisk·KernelSU 표준 su 실행 경로, 승인·거부·시간 초과·충돌 마커 판정. 거부를 순정으로 간주하지 않고 기존 DIAG/VoLTE su 동작 회귀 확인
+- [ ] 정확한 모델/지역/펌웨어/커널/ReSukiSU 태그·LKM/GKI 적합성 기록. init_boot 경로 별도 검증, boot 기종은 활성화 전 별도 작업
+- [ ] Magisk→ReSukiSU 및 KernelSU 계열→Magisk: 백업·모듈 목록/intent·고정 정리·양 슬롯 순정 기록·새 OS/지문·새 이력 확인. 기존/한 슬롯/다른 폰 이력·su 거부 차단
+- [ ] 정리 실패/PC 저장 실패/중단 후 자동 재정리 없음, 숨긴 매니저 직접 제거·설정 재구성·복구 절차 확인
+- [ ] 선택 ReSukiSU APK 설치/핀·같은 폰 수동 패치/결과 IMG PC 검증/기기·파티션·해시 게이트/양 슬롯 기록/OS 재승인 확인
+- [ ] OverlayFS metamodule 활성화와 재부팅, Zygisk 택일·PIF/Integrity Box 택일·Store→Addon·Magisk+Next Shamiko 조건 및 외부 설치 확인
+- [ ] 공유 ID zygisksu/playintegrityfix의 설치 영수증 소유권·종류 미확정 차단·끄기/재부팅 후 교체. 도구 밖에서 변경한 모듈은 현재 출처부터 재확인
+- [ ] 모듈 intent/전송 해시/엔진 CLI/ACK·새 boot ID·실제 활성 목록. 미활성·실패·분리/재연결 결과 불확정과 자동 재설치 금지·수동 오류 검토 확인
+- [ ] 끄기·제거 예약·재부팅·HMA JSON 수동 가져오기/사용 앱 범위 확인. 설치 성공과 앱·Play Integrity 결과 구분
+- [ ] 호출 중 기기 목록 고정·이탈/닫기 차단·독점 실행권·PC 보호 및 해제. 기본 빌드 root-tools-write/REAL_STEPS 비활성 유지
+
+PC에서 파일 준비·핀·CRC 검사와 FakeADB 테스트를 통과해도 위 항목을 체크하지 않는다.
+
+
 ## Newflasher 네이티브 (`newflasher-add`, 2026-10-08, 미실행)
 
 - [ ] XQ-DQ44 같은 지역의 source→target 지문·Android·패키지/NOERASE·layout·boot delivery를 검증한 profile을 만든다. 로컬 검사 report를 쓰기 권한으로 사용하지 않는다.

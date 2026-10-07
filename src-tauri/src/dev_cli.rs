@@ -42,6 +42,21 @@ requests! {
     EnvCheck("env_check", false, true, true) {}
     ToolCheck("efs_tool_check", false, true, true) {}
     RootCheck("root_check", false, true, false) { serial: String = "sha256:<serialKey>" }
+    RootInspect("root_inspect", false, true, false) { serial: String = "sha256:<serialKey>" }
+    RootToolsCapabilities("root_tools_capabilities", false, true, true) {}
+    ResukisuReleases("resukisu_releases", false, true, true) {}
+    RootPackagePrepare("root_package_prepare", false, true, true) { id: String = "resukisu", tag: Option<String> = "v4.2.0-rc3" }
+    RootPresetExport("root_preset_export", false, true, true) { dest: String = "<absolute output folder>" }
+    RootModulesInspect("root_modules_inspect", false, true, false) { serial: String = "sha256:<serialKey>" }
+    RootModuleReconcile("root_module_reconcile", false, true, false) { serial: String = "sha256:<serialKey>", confirm: bool = true }
+    FirmwareUpdateRootPlan("firmware_update_root_plan", false, true, true) { request: crate::flasher::root_plan::Request = json!({"root":{"access":"unavailable","engine":"unknown","magiskMarkers":null,"kernelsuMarkers":null},"unlocked":false,"intent":"stock","partition":"init_boot","backupSelected":true}) }
+    RootModuleInstall("root_module_install", true, cfg!(feature="root-tools-write"), false) { serial: String = "sha256:<serialKey>", sha256: String = "<prepared package hash>", confirm: bool = true, confirm_external: bool = true }
+    RootModuleAction("root_module_action", true, cfg!(feature="root-tools-write"), false) { serial: String = "sha256:<serialKey>", module_id: String = "<installed module ID>", action: String = "disable", confirm: bool = true }
+    RootSwitchPrepare("root_switch_prepare", true, cfg!(all(feature="root-tools-write",feature="fastboot-write")), false) { serial: String = "sha256:<serialKey>", stock_path: String = "<checked stock IMG>", target: String = "resukisu", confirm: bool = true }
+    RootSwitchStatus("root_switch_status", false, true, false) { serial: String = "sha256:<serialKey>", verify_stock: bool = false }
+    RootExternalPatchImport("root_external_patch_import", true, cfg!(feature="root-tools-write"), false) { serial: String = "sha256:<serialKey>", stock_path: String = "<checked stock IMG>", patched_path: String = "<same phone patched IMG>", confirm_same_phone: bool = true }
+    ResukisuInstall("resukisu_install", true, cfg!(feature="root-tools-write"), false) { serial: String = "sha256:<serialKey>", sha256: String = "<prepared APK hash>", confirm: bool = true }
+    RootSwitchFinish("root_switch_finish", false, true, false) { serial: String = "sha256:<serialKey>" }
     ScreenState("screen_state", false, true, false) { serial: String = "sha256:<serialKey>" }
     ScreenWake("screen_wake", true, true, false) { serial: String = "sha256:<serialKey>" }
     StorageSizes("storage_sizes", false, true, false) { serial: String = "sha256:<serialKey>" }
@@ -169,6 +184,21 @@ async fn dispatch(req: Request, events: Events) -> Result<Value, Value> {
         Request::EnvCheck {} => packed(env::env_check().await),
         Request::ToolCheck {} => packed(efs::efs_tool_check().await),
         Request::RootCheck { serial } => packed(adb::root_check(Some(serial)).await),
+        Request::RootInspect { serial } => packed(crate::root_state::root_inspect(serial).await),
+        Request::RootToolsCapabilities {} => Ok(crate::root_tools::root_tools_capabilities()),
+        Request::ResukisuReleases {} => packed(crate::root_tools::packages::resukisu_releases().await),
+        Request::RootPackagePrepare { id, tag } => packed(crate::root_tools::packages::root_package_prepare(id,tag).await),
+        Request::RootPresetExport { dest } => packed(crate::root_tools::packages::root_preset_export(dest).await),
+        Request::RootModulesInspect { serial } => packed(crate::root_tools::modules::root_modules_inspect(serial).await),
+        Request::RootModuleReconcile { serial, confirm } => packed(crate::root_tools::modules::root_module_reconcile(serial,confirm).await),
+        Request::FirmwareUpdateRootPlan { request } => packed(crate::flasher::root_plan::firmware_update_root_plan(request)),
+        Request::RootModuleInstall { serial, sha256, confirm, confirm_external } => packed(crate::root_tools::modules::root_module_install(serial,sha256,confirm,confirm_external).await),
+        Request::RootModuleAction { serial, module_id, action, confirm } => packed(crate::root_tools::modules::root_module_action(serial,module_id,action,confirm).await),
+        Request::RootSwitchPrepare { serial, stock_path, target, confirm } => packed(crate::root_tools::switch::root_switch_prepare(serial,stock_path,target,confirm).await),
+        Request::RootSwitchStatus { serial, verify_stock } => packed(crate::root_tools::switch::root_switch_status(serial,verify_stock).await),
+        Request::RootExternalPatchImport { serial, stock_path, patched_path, confirm_same_phone } => packed(crate::root_tools::switch::root_external_patch_import(serial,stock_path,patched_path,confirm_same_phone).await),
+        Request::ResukisuInstall { serial, sha256, confirm } => packed(crate::root_tools::switch::resukisu_install(serial,sha256,confirm).await),
+        Request::RootSwitchFinish { serial } => packed(crate::root_tools::switch::root_switch_finish(serial).await),
         Request::ScreenState { serial } => packed(adb::screen_state(Some(serial)).await),
         Request::ScreenWake { serial } => packed(adb::screen_wake(Some(serial)).await),
         Request::StorageSizes { serial } => packed(adb::storage_sizes(Some(serial)).await),
@@ -542,7 +572,7 @@ fn write_record(path: &Path, value: &Value) -> Result<(), String> {
 }
 fn build_info() -> Value {
     json!({"version":env!("CARGO_PKG_VERSION"), "debug":cfg!(debug_assertions),
-        "features":{"devCli":true,"fastbootWrite":cfg!(feature="fastboot-write"),"rootWrite":cfg!(feature="root-write"),"efsWrite":cfg!(feature="efs-write")}})
+        "features":{"devCli":true,"fastbootWrite":cfg!(feature="fastboot-write"),"rootWrite":cfg!(feature="root-write"),"rootToolsWrite":cfg!(feature="root-tools-write"),"efsWrite":cfg!(feature="efs-write")}})
 }
 
 // ── 실기기 세션 안전장치 — GUI 흐름에만 있던 선행 조건을 CLI에도 같은 기준으로 요구한다 ──
