@@ -623,6 +623,8 @@ pub struct RestoreOutcomeOut {
     pub failures: Vec<String>,
     /// 문자·통화 기록(smsie) 수동 복원이 남아 있는지 — 프론트 수동 개입 표시용
     pub smsie_pending: bool,
+    /// 연락처 가져오기가 폰에 남았는지 — 이미 계정 동기화로 있으면 false(가져오기 단계 생략)
+    pub contacts_pending: bool,
 }
 
 /// 자동 복구 실행 — APK 재설치 → tar 스트리밍 → 설정 → 연락처 전송 (smsie는 수동 단계로)
@@ -663,6 +665,7 @@ pub(crate) async fn restore_run_with_events(
                 failures: out.failures,
                 // 무결성 검증에서 멈췄다면 수동 문자 복원을 이어 안내하지 않는다
                 smsie_pending: smsie_selected && out.verified,
+                contacts_pending: out.contacts_pending,
             })
         })
     };

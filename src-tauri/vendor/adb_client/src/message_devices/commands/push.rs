@@ -13,6 +13,11 @@ use crate::{
 
 impl<T: ADBMessageTransport> ADBMessageDevice<T> {
     pub(crate) fn push<R: Read, A: AsRef<str>>(&mut self, stream: R, path: A) -> Result<()> {
+        self.push_with_mtime(stream, path, 0)
+    }
+
+    /// [xvolte patch] push with the original modification time
+    pub(crate) fn push_with_mtime<R: Read, A: AsRef<str>>(&mut self, stream: R, path: A, mtime: u32) -> Result<()> {
         let mut session = self.open_synchronization_session()?;
 
         let result=(|| {
@@ -29,7 +34,7 @@ impl<T: ADBMessageTransport> ADBMessageDevice<T> {
             &send_buffer,
         )?)?;
 
-        session.push_file(stream)?;
+        session.push_file_with_mtime(stream, mtime)?;
         Ok(())
         })();
         self.finish_sync_request(session,result)

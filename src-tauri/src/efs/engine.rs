@@ -202,7 +202,20 @@ pub fn snapshot<T: Transport>(
     for (i, e) in plan.active().enumerate() {
         s.check_cancel()?;
         let (data, metadata, target) = match &e.target {
-            Target::Nv { id } => (Some(s.nv_read(*id)?), None, e.target.clone()),
+            Target::Nv { id } => match s.nv_read(*id) {
+                Ok(data) => (Some(data), None, e.target.clone()),
+                // NV_NOTACTIVE(5): 값이 한 번도 쓰이지 않은 항목(실기기 XQ-DQ44에서 확인). "없었음"으로 기록한다.
+                // DIAG에는 NV를 비활성으로 되돌리는 명령이 없으므로 복원 시에는 되돌리지 못한다고 경고한다.
+                Err(err) if err.status == Some(NV_NOTACTIVE) => {
+                    snapshot.warnings.push(Warning {
+                        code: "nvInactiveBefore".into(),
+                        target: e.name.clone(),
+                        message: "NV item had no value before upload; rollback cannot make it inactive again".into(),
+                    });
+                    (None, None, e.target.clone())
+                }
+                Err(err) => return Err(err),
+            },
             Target::Efs { path, .. } => {
                 let (parent, name) = path.rsplit_once('/').unwrap();
                 let parent = if parent.is_empty() { "/" } else { parent };
@@ -447,7 +460,7 @@ pub fn load_snapshot(dir: &Path) -> Result<RestorePlan> {
                 }
                 Some(bytes)
             }
-            (None, None) if matches!(e.target, Target::Efs { .. }) && e.metadata.is_none() => None,
+            (None, None) if e.metadata.is_none() => None,
             _ => {
                 return Err(Error::new(
                     "invalidMetadata",
@@ -464,6 +477,9 @@ pub fn load_snapshot(dir: &Path) -> Result<RestorePlan> {
     })
 }
 
+/// Qualcomm NV 상태 — 값이 쓰인 적 없는 항목
+const NV_NOTACTIVE: u32 = 5;
+
 pub fn rollback<T: Transport>(
     s: &mut Session<T>,
     plan: &RestorePlan,
@@ -472,6 +488,8 @@ pub fn rollback<T: Transport>(
     for (i, (entry, data)) in plan.entries.iter().enumerate() {
         s.check_cancel()?;
         let name = match &entry.target {
+            // 업로드 전 값이 없던 NV(nvInactiveBefore) — 비활성으로 되돌릴 수 없어 그대로 둔다(스냅샷 경고에 기록됨)
+            Target::Nv { id } if data.is_none() => format!("NV {id} (no prior value, left as uploaded)"),
             Target::Nv { id } => {
                 let data = data.as_ref().unwrap();
                 s.nv_write(*id, data)?;

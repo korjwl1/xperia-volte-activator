@@ -84,6 +84,8 @@ struct State {
     next_fd: u32,
     write_limit: usize,
     cancel_after_write: Option<Arc<AtomicBool>>,
+    /// 값이 쓰인 적 없는 NV를 실기기처럼 NV_NOTACTIVE(5)로 답한다
+    nv_inactive_missing: bool,
 }
 struct Fake {
     state: Arc<Mutex<State>>,
@@ -147,7 +149,8 @@ impl Fake {
                 }
                 r.extend(id.to_le_bytes());
                 r.extend(st.nv.get(&id).cloned().unwrap_or(vec![0; 128]));
-                r.extend(0u16.to_le_bytes());
+                let inactive = st.nv_inactive_missing && !st.nv.contains_key(&id);
+                r.extend(if inactive { 5u16 } else { 0 }.to_le_bytes());
             }
             0x4b => match req[2] {
                 0 => r = req.clone(),
@@ -527,6 +530,26 @@ fn rollback_roundtrip_restores_file_item_full_nv_and_removes_new_file() {
         2
     );
 }
+#[test]
+fn inactive_nv_is_recorded_as_no_prior_value_and_left_on_rollback() {
+    // 실기기 XQ-DQ44: 스냅샷의 NV 읽기가 NV_NOTACTIVE(5)였다
+    let (mut s, st, _) = setup();
+    st.lock().unwrap().nv_inactive_missing = true;
+    let plan = plan();
+    let dir = tempfile::tempdir().unwrap();
+    let out = engine::snapshot(&mut s, &plan, dir.path(), &mut |_| {}).unwrap();
+    assert!(out.warnings.iter().any(|w| w.code == "nvInactiveBefore" && w.target == "NvItem__00000562"));
+    engine::upload(&mut s, &plan, &mut |_| {}).unwrap();
+    assert!(engine::verify(&mut s, &plan, &mut |_| {}).unwrap().ok);
+    let restore = engine::load_snapshot(dir.path()).unwrap();
+    let writes_before = st.lock().unwrap().requests.iter().filter(|r| r[0] == 0x27).count();
+    engine::rollback(&mut s, &restore, &mut |_| {}).unwrap();
+    let state = st.lock().unwrap();
+    // 비활성으로 되돌릴 방법이 없으므로 NV는 다시 쓰지 않고, 파일은 원래대로(없음) 되돌린다
+    assert_eq!(state.requests.iter().filter(|r| r[0] == 0x27).count(), writes_before);
+    assert!(!state.files.contains_key("/nv/test"));
+}
+
 struct Replay {
     rx: std::io::Cursor<Vec<u8>>,
 }

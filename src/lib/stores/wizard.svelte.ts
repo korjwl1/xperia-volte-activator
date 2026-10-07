@@ -124,21 +124,20 @@ const MANUAL_TEXT: Record<ManualId, Omit<ManualPrompt, "id">> = {
       "저장이 끝나면 앱이 파일을 감지해 PC로 수집·검사하고 자동으로 다음 단계로 넘어갑니다",
     ],
   },
+  // 폰의 연락처가 이미 백업 수 이상이면(계정 동기화) 이 단계는 열리지 않는다
   "contacts-import": {
     title: "연락처 가져오기 (폰 조작)",
     steps: [
-      "백업한 연락처 파일(contacts-restore.vcf)을 폰의 내장 저장소에 올려 두었습니다",
-      "폰의 연락처 앱을 열고 메뉴(⋮ 또는 ☰) → 설정 → '가져오기'를 누릅니다",
-      "'.vcf 파일'을 고르고 내장 저장소에서 contacts-restore.vcf를 선택합니다",
-      "저장할 곳을 묻으면 쓰실 Google 계정(또는 기기)을 고릅니다",
-      "가져오기가 끝나면 [확인하고 진행]을 누르세요 — 폰의 연락처 수가 백업과 맞는지 확인합니다",
+      "폰에 연락처 가져오기 화면을 띄웠습니다 — 저장할 Google 계정(또는 기기)을 고르고 가져오기를 누릅니다",
+      "화면이 안 보이면: 연락처 앱 → 메뉴(⋮ 또는 ☰) → 설정 → 가져오기 → .vcf 파일 → contacts-restore.vcf 선택",
+      "가져오기가 끝나 폰의 연락처 수가 백업과 맞으면 자동으로 진행합니다",
     ],
   },
   "smsie-import": {
     title: "문자·통화 기록 복원 (폰 조작)",
     steps: [
-      "먼저 폰을 비행기 모드로 전환해 주세요 (기본 문자 앱이 바뀌는 동안 수신 문자가 유실되지 않게)",
-      "PC 백업 파일을 검증한 뒤 내장 저장소의 volte_sms_backup 폴더에 올려 두고 앱을 엽니다",
+      "비행기 모드는 자동으로 켭니다 (기본 문자 앱이 바뀐 동안 수신 문자가 유실되지 않게) — 마무리에서 원래대로 돌립니다",
+      "PC 백업 파일을 검증한 뒤 내장 저장소의 volte_sms_backup 폴더에 올려 두고, SMS Import/Export 앱을 열고 폰 화면을 켭니다 — 잠겨 있으면 잠금을 풀어 주세요",
       "Import Messages → 내장 저장소 → volte_sms_backup → messages로 시작하는 .zip 파일 선택",
       "Import Call Log → 내장 저장소 → volte_sms_backup → calls로 시작하는 .json 파일 선택",
       "선택한 항목 모두의 가져오기 성공 안내를 확인한 뒤 [확인하고 진행]을 누릅니다 — 기본 문자 앱을 원래대로 돌립니다",
@@ -1471,6 +1470,8 @@ export class Wizard {
       this.imsUnverified = false;
       this.watchManual(cur, id, "셀룰러 IMS 음성 등록 확인", () => this.imsReady(), 5000, false);
     }
+    if (id === "contacts-import")
+      this.watchManual(cur, id, "연락처 가져오기 확인", async () => (await this.verifyManual("contacts-import")) === null, 3000);
     if (id === "su-grant") {
       this.suDenied = false;
       this.suGrantHint = "";
@@ -1561,6 +1562,8 @@ export class Wizard {
     }
     const r = await api.smsieRestoreStage(this.device?.serial, this.backupDir, this.checkedBackupItems());
     if (gen !== this.runGen) return;
+    // 준비 단계가 SMS Import/Export 앱을 띄운다 — 화면만 켜 두고 잠금 해제·가져오기는 사용자에게 맡긴다(사용자 결정 2026-10-08)
+    if (r.ok) void api.screenWake(this.device?.serial);
     this.manualSetupState = r.ok ? "done" : "failed";
     if (r.ok) {
       this.smsieRestoreDetails = r.value;
@@ -2323,8 +2326,11 @@ export class Wizard {
             if (gen !== this.runGen) return;
             if (!r.ok) return this.failStep(r.error);
             showWarnings(r.value.warnings);
-            if (!r.value.ok) return this.failStep(`SIM${target.slot} 리드백 실패: ${[...r.value.missing, ...r.value.mismatches].join(" / ")}`);
             this.log(cur, `[검증] SIM${target.slot} ${r.value.matched}/${r.value.files} 일치, 제외 ${r.value.skipped}`);
+            // 리드백 불일치는 실패로 보지 않고 로그에만 남긴다(사용자 결정 2026-10-07). 실기기(XQ-DQ44)에서 모뎀 IMS 모듈이
+            // 기록 직후 자기가 관리하는 설정 파일을 다시 저장해 2개가 달랐지만 VoLTE는 등록됐다. 판정은 재부팅 후 IMS 등록으로 한다.
+            // 읽기 자체가 실패하면(r.ok=false) 위에서 실패로 멈춘다.
+            if (!r.value.ok) this.log(cur, `[참고] SIM${target.slot} 리드백 불일치(모뎀이 다시 저장한 항목일 수 있음): ${[...r.value.missing, ...r.value.mismatches].join(" / ")}`);
             this.markSub(cur, index + 1);
           }
           cur.progress = (index + 1) / targets.length;
@@ -2385,7 +2391,7 @@ export class Wizard {
     void this.persist(true);
     // 폰에서 직접 해야 하는 복원 — 연락처 가져오기, 문자·통화 기록 순서
     const manuals: ManualId[] = [];
-    if (items.includes("contacts") && !r.value.failures.some((f) => f.startsWith("연락처"))) manuals.push("contacts-import");
+    if (items.includes("contacts") && r.value.contactsPending) manuals.push("contacts-import");
     if (r.value.smsiePending && this.needSmsie(items)) manuals.push("smsie-import");
     if (manuals.length > 0) {
       const stepDef = this.steps.find((s) => s.id === "restore");

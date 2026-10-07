@@ -46,6 +46,15 @@ const BUFFER_SIZE: usize = 65535;
 impl ADBServerDevice {
     /// Send stream to path on the device.
     pub fn push<R: Read, A: AsRef<str>>(&mut self, stream: R, path: A) -> Result<()> {
+        self.push_mtime_opt(stream, path, None)
+    }
+
+    /// [xvolte patch] push with the original modification time
+    pub fn push_with_mtime<R: Read, A: AsRef<str>>(&mut self, stream: R, path: A, mtime: u32) -> Result<()> {
+        self.push_mtime_opt(stream, path, Some(mtime))
+    }
+
+    fn push_mtime_opt<R: Read, A: AsRef<str>>(&mut self, stream: R, path: A, mtime: Option<u32>) -> Result<()> {
         log::info!("Sending data to {}", path.as_ref());
         self.set_serial_transport()?;
 
@@ -56,10 +65,10 @@ impl ADBServerDevice {
         // Send a send command
         self.transport.send_sync_request(&SyncCommand::Send)?;
 
-        self.handle_send_command(stream, path)
+        self.handle_send_command(stream, path, mtime)
     }
 
-    fn handle_send_command<R: Read, S: AsRef<str>>(&self, input: R, to: S) -> Result<()> {
+    fn handle_send_command<R: Read, S: AsRef<str>>(&self, input: R, to: S, mtime: Option<u32>) -> Result<()> {
         // Append the permission flags to the filename
         let to = to.as_ref().to_string() + ",0777";
 
@@ -81,15 +90,22 @@ impl ADBServerDevice {
 
         // Copy is finished, we can now notify as finished
         // Have to send DONE + file mtime
-        let Ok(last_modified) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) else {
-            return Err(RustADBError::ADBRequestFailed(
-                "SystemTime before UNIX EPOCH!".into(),
-            ));
+        let last_modified = match mtime {
+            Some(mtime) => mtime,
+            None => {
+                let Ok(now) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) else {
+                    return Err(RustADBError::ADBRequestFailed(
+                        "SystemTime before UNIX EPOCH!".into(),
+                    ));
+                };
+                u32::try_from(now.as_secs()).map_err(|_| RustADBError::ConversionError)?
+            }
         };
 
+        // [xvolte patch] sync DONE carries a u32 mtime (upstream wrote 8 bytes, leaving 4 stray bytes)
         let mut done_buffer = Vec::with_capacity(8);
         done_buffer.extend_from_slice(b"DONE");
-        done_buffer.extend_from_slice(&last_modified.as_secs().to_le_bytes());
+        done_buffer.extend_from_slice(&last_modified.to_le_bytes());
         raw_connection.write_all(&done_buffer)?;
 
         // We expect 'OKAY' response from this

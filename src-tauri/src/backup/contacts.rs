@@ -310,23 +310,46 @@ pub fn restore_check(dev: &mut dyn ADBDeviceExt, backup_root: &Path) -> Result<(
     Ok((backed_up, on_device))
 }
 
-/// 복원 — vcf를 기기에 올리고 연락처 앱 가져오기 안내(수동 1탭).
-/// 반환: (올린 경로, 안내 문구) — 실제 가져오기 확인은 사용자 몫(진행 로그에 기록)
+/// 연락처 복원 준비 결과
+#[derive(Debug, PartialEq)]
+pub struct ContactsStaged {
+    /// 폰에서 가져오기가 남았는지(가져오기 화면을 띄웠거나 직접 해야 함)
+    pub pending: bool,
+    pub logs: Vec<String>,
+}
+
+const CONTACTS_REMOTE: &str = "/sdcard/contacts-restore.vcf";
+/// Google 연락처의 vCard 가져오기 화면(실기기 XQ-DQ44 Android 15에서 VIEW text/x-vcard 기본 처리기)
+const VCARD_IMPORT_ACTIVITY: &str =
+    "com.google.android.contacts/com.google.android.apps.contacts.vcard.ImportVCardActivity";
+
+/// 복원 — 폰의 연락처가 이미 백업 수 이상이면(계정 동기화로 돌아온 경우) 가져오기를 건너뛴다.
+/// 아니면 vcf를 올리고 연락처 앱의 가져오기 화면을 그 파일로 바로 띄운다(사용자는 계정 선택·확인만).
+/// 화면을 띄우지 못하면 직접 가져오기를 안내한다. 실제 반영은 restore_check로 확인한다.
 pub fn stage_restore_contacts(
     dev: &mut dyn ADBDeviceExt,
     backup_root: &Path,
-) -> Result<(String, String), String> {
+) -> Result<ContactsStaged, String> {
     let src = super::paths::existing_file(backup_root, "contacts/contacts.vcf")?;
     let bytes = std::fs::read(&src).map_err(|e| format!("contacts.vcf 읽기 실패: {e}"))?;
-    if bytes.is_empty() {
-        return Ok((
-            String::new(),
-            "백업된 연락처가 0개이므로 가져올 파일이 없습니다".into(),
-        ));
+    let backed_up = String::from_utf8_lossy(&bytes).matches("BEGIN:VCARD").count() as u64;
+    if backed_up == 0 {
+        return Ok(ContactsStaged {
+            pending: false,
+            logs: vec!["백업된 연락처가 0개이므로 가져올 파일이 없습니다".into()],
+        });
     }
-    let remote = "/sdcard/contacts-restore.vcf";
+    let on_device = contact_ids(dev)?.len() as u64;
+    if on_device >= backed_up {
+        return Ok(ContactsStaged {
+            pending: false,
+            logs: vec![format!(
+                "폰에 이미 연락처 {on_device}명(백업 {backed_up}명) — 계정 동기화로 돌아온 것으로 보고 가져오기를 건너뜁니다(중복 방지)"
+            )],
+        });
+    }
     let mut reader = &bytes[..];
-    if let Err(error) = dev.push(&mut reader, &remote) {
+    if let Err(error) = dev.push(&mut reader, &CONTACTS_REMOTE) {
         let cleanup = finish_restore_contacts(dev).err();
         return Err(format!(
             "연락처 파일 전송 실패: {error}{}",
@@ -335,13 +358,49 @@ pub fn stage_restore_contacts(
                 .unwrap_or_default()
         ));
     }
-    let note = "연락처 앱 → 설정(⋮) → 가져오기 → .vcf 파일 → contacts-restore.vcf 선택 (수동 1회)"
-        .to_string();
-    Ok((remote.to_string(), note))
+    let mut logs = vec![format!("연락처 파일 전송: {CONTACTS_REMOTE} (폰 {on_device}명, 백업 {backed_up}명)")];
+    match open_vcard_import(dev) {
+        Ok(()) => logs.push("[수동] 폰에 연락처 가져오기 화면을 띄웠습니다 — 저장할 계정을 고르고 가져오기를 누르세요".into()),
+        Err(error) => logs.push(format!(
+            "[수동] 가져오기 화면을 띄우지 못했습니다({error}) — 연락처 앱 → 설정(⋮) → 가져오기 → .vcf 파일 → contacts-restore.vcf 선택"
+        )),
+    }
+    Ok(ContactsStaged { pending: true, logs })
+}
+
+/// 올린 vcf의 MediaStore URI로 가져오기 화면을 연다. Google 연락처가 없으면 기본 처리기에 맡긴다.
+fn open_vcard_import(dev: &mut dyn ADBDeviceExt) -> Result<(), String> {
+    let found = crate::device_io::shell(
+        dev,
+        "content query --uri content://media/external/file --projection _id --where \"_data='/storage/emulated/0/contacts-restore.vcf'\"",
+    )?;
+    let id: String = found
+        .split("_id=")
+        .nth(1)
+        .map(|rest| rest.chars().take_while(char::is_ascii_digit).collect())
+        .unwrap_or_default();
+    if id.is_empty() {
+        return Err("미디어 저장소에서 파일을 찾지 못했습니다".into());
+    }
+    let uri = format!("content://media/external/file/{id}");
+    let base = format!(
+        "am start -a android.intent.action.VIEW -t text/x-vcard -d {uri} --grant-read-uri-permission"
+    );
+    let started = |text: &str| !text.contains("Error") && !text.contains("Exception");
+    let direct = crate::device_io::shell(dev, &format!("{base} -n {VCARD_IMPORT_ACTIVITY}"))?;
+    if started(&direct) {
+        return Ok(());
+    }
+    let fallback = crate::device_io::shell(dev, &base)?;
+    if started(&fallback) {
+        Ok(())
+    } else {
+        Err(fallback.trim().chars().take(200).collect())
+    }
 }
 
 pub fn finish_restore_contacts(dev: &mut dyn ADBDeviceExt) -> Result<(), String> {
-    crate::device_io::shell(dev, "rm -f /sdcard/contacts-restore.vcf").map(|_| ())
+    crate::device_io::shell(dev, &format!("rm -f {CONTACTS_REMOTE}")).map(|_| ())
 }
 
 #[cfg(test)]
@@ -349,15 +408,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn contacts_already_synced_skip_the_import_to_avoid_duplicates() {
+        // 실기기: Google 로그인 후 동기화로 백업과 같은 수(295)가 이미 있었다 — 가져오면 전부 중복된다
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("contacts")).unwrap();
+        std::fs::write(
+            root.path().join("contacts/contacts.vcf"),
+            "BEGIN:VCARD\nEND:VCARD\nBEGIN:VCARD\nEND:VCARD\n",
+        )
+        .unwrap();
+        let mut d = dev(); // 폰에 2명
+        let staged = stage_restore_contacts(&mut d, root.path()).unwrap();
+        assert!(!staged.pending);
+        assert!(d.pushed.is_empty());
+        assert!(!d.shell_calls.iter().any(|c| c.starts_with("am start")));
+    }
+
+    #[test]
     fn empty_contacts_restore_needs_no_push_and_finish_removes_only_its_temp_file() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("contacts")).unwrap();
         std::fs::write(root.path().join("contacts/contacts.vcf"), b"").unwrap();
         let mut d = dev();
-        assert!(stage_restore_contacts(&mut d, root.path())
-            .unwrap()
-            .0
-            .is_empty());
+        assert!(!stage_restore_contacts(&mut d, root.path()).unwrap().pending);
         assert!(d.pushed.is_empty());
         d.answer_shell("rm -f /sdcard/contacts-restore.vcf", "");
         finish_restore_contacts(&mut d).unwrap();

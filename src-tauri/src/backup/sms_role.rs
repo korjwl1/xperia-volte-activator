@@ -9,6 +9,9 @@ pub struct RoleRecord {
     device_key: String,
     #[serde(deserialize_with = "deserialize_holder")]
     pub previous_holder: Option<String>,
+    /// 전환 전 비행기 모드(엔진이 켜고 마무리에서 되돌린다). 예전 기록에는 없다
+    #[serde(default)]
+    pub previous_airplane: Option<bool>,
 }
 
 fn deserialize_holder<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
@@ -48,7 +51,12 @@ pub fn load(dir: &Path, key: &str) -> Result<Option<RoleRecord>, String> {
     Ok(Some(record))
 }
 
-pub fn save(dir: &Path, key: &str, previous_holder: Option<String>) -> Result<(), String> {
+pub fn save(
+    dir: &Path,
+    key: &str,
+    previous_holder: Option<String>,
+    previous_airplane: Option<bool>,
+) -> Result<(), String> {
     if previous_holder.as_ref().is_some_and(|p| !valid_package(p)) {
         return Err("원래 문자 앱 패키지 형식이 잘못됐습니다".into());
     }
@@ -56,6 +64,7 @@ pub fn save(dir: &Path, key: &str, previous_holder: Option<String>) -> Result<()
         version: 1,
         device_key: key.into(),
         previous_holder,
+        previous_airplane,
     };
     let data = serde_json::to_vec(&record).map_err(|e| e.to_string())?;
     crate::storage::atomic_write(&path_for(dir, key)?, &data)
@@ -77,8 +86,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let a = "a".repeat(64);
         let b = "b".repeat(64);
-        save(dir.path(), &a, Some("com.example.sms".into())).unwrap();
-        save(dir.path(), &b, Some("com.other.sms".into())).unwrap();
+        save(dir.path(), &a, Some("com.example.sms".into()), Some(false)).unwrap();
+        save(dir.path(), &b, Some("com.other.sms".into()), None).unwrap();
         assert_eq!(
             load(dir.path(), &a)
                 .unwrap()
@@ -98,14 +107,14 @@ mod tests {
         remove(dir.path(), &a).unwrap();
         assert!(load(dir.path(), &a).unwrap().is_none());
         assert!(load(dir.path(), &b).unwrap().is_some());
-        assert!(save(dir.path(), "../escape", None).is_err());
-        assert!(save(dir.path(), &a, Some("com.sms;rm".into())).is_err());
+        assert!(save(dir.path(), "../escape", None, None).is_err());
+        assert!(save(dir.path(), &a, Some("com.sms;rm".into()), None).is_err());
     }
     #[test]
     fn mismatched_or_invalid_disk_record_is_never_replayed() {
         let dir = tempfile::tempdir().unwrap();
         let key = "a".repeat(64);
-        save(dir.path(), &key, Some("com.example.sms".into())).unwrap();
+        save(dir.path(), &key, Some("com.example.sms".into()), None).unwrap();
         let file = dir.path().join(format!("{key}.json"));
         let raw = std::fs::read_to_string(&file)
             .unwrap()

@@ -46,6 +46,8 @@ pub struct FakeADBDevice {
     /// Some이면 SMS 역할 변경을 모의한다(내부 None은 기본 앱 없음).
     pub sms_role_holder: Option<Option<String>>,
     pub ignore_role_changes: bool,
+    /// 비행기 모드 상태(기본 꺼짐)
+    pub airplane: bool,
     pub fail_shell: BTreeSet<String>,
     pub shell_exit_codes: BTreeMap<String, u8>,
     /// 전송 계층 상태 None(USB 직접 연결처럼) — 종료 코드 표식은 그대로 출력된다
@@ -58,6 +60,12 @@ pub struct FakeADBDevice {
     pub shell_stream_read_limit: Option<usize>,
     /// push로 쓴 파일(복원 검증용)
     pub pushed: BTreeMap<String, Vec<u8>>,
+    /// push_with_mtime으로 받은 mtime
+    pub pushed_mtime: BTreeMap<String, u32>,
+    /// 이 문자열을 포함한 경로의 push는 실패한다
+    pub fail_push: BTreeSet<String>,
+    /// 합치기 스크립트가 단계 폴더에 남았다고 보고할 파일 수(옮기기 실패 모의)
+    pub publish_left: usize,
     /// install 호출 기록
     pub installs: Vec<String>,
     pub reboot_calls: usize,
@@ -177,6 +185,22 @@ impl FakeADBDevice {
         if self.fail_shell.iter().any(|prefix| cmd.starts_with(prefix)) {
             err.write_all(b"injected shell failure")?;
             return Ok(1);
+        }
+        // 비행기 모드(`cmd connectivity airplane-mode [enable|disable]`)
+        match cmd {
+            "cmd connectivity airplane-mode" => {
+                out.write_all(if self.airplane { b"enabled\n" } else { b"disabled\n" })?;
+                return Ok(0);
+            }
+            "cmd connectivity airplane-mode enable" => {
+                self.airplane = true;
+                return Ok(0);
+            }
+            "cmd connectivity airplane-mode disable" => {
+                self.airplane = false;
+                return Ok(0);
+            }
+            _ => {}
         }
         if let Some(holder) = &mut self.sms_role_holder {
             if cmd == "cmd role get-role-holders android.app.role.SMS" {
@@ -349,6 +373,35 @@ impl ADBDeviceExt for FakeADBDevice {
             self.shell_streams.push((base, buf));
         }
         let mut output = b"Success\n".to_vec();
+        // 단계 폴더 합치기 스크립트 — push로 단계 폴더에 올린 파일을 대상 위치로 옮기고 수를 답한다
+        if command.contains("__MOVED=") {
+            let between = |start: &str| {
+                command
+                    .split_once(start)
+                    .and_then(|(_, rest)| rest.split_once("' ||"))
+                    .map(|(value, _)| value.to_string())
+                    .unwrap_or_default()
+            };
+            let stage = format!("{}/", between("cd '"));
+            let dst = between("merge . '");
+            let staged: Vec<String> = self
+                .pushed
+                .keys()
+                .filter(|k| k.starts_with(&stage))
+                .cloned()
+                .collect();
+            for key in &staged {
+                let target = format!("{dst}/{}", &key[stage.len()..]);
+                if let Some(data) = self.pushed.remove(key) {
+                    self.pushed.insert(target.clone(), data);
+                }
+                if let Some(mtime) = self.pushed_mtime.remove(key) {
+                    self.pushed_mtime.insert(target, mtime);
+                }
+            }
+            let left = self.publish_left.min(staged.len());
+            output.extend_from_slice(format!("__MOVED={} __LEFT={left}\n", staged.len() - left).as_bytes());
+        }
         if command.contains("echo __XV_RC=") {
             output.extend_from_slice(
                 format!(
@@ -450,9 +503,18 @@ impl ADBDeviceExt for FakeADBDevice {
     }
 
     fn push(&mut self, stream: &mut dyn Read, path: &dyn AsRef<str>) -> Result<(), RustADBError> {
+        if self.fail_push.iter().any(|p| path.as_ref().contains(p.as_str())) {
+            return Err(RustADBError::ADBRequestFailed(format!("push failed for {}", path.as_ref())));
+        }
         let mut buf = Vec::new();
         stream.read_to_end(&mut buf)?;
         self.pushed.insert(path.as_ref().to_string(), buf);
+        Ok(())
+    }
+
+    fn push_with_mtime(&mut self, stream: &mut dyn Read, path: &dyn AsRef<str>, mtime: u32) -> Result<(), RustADBError> {
+        self.push(stream, path)?;
+        self.pushed_mtime.insert(path.as_ref().to_string(), mtime);
         Ok(())
     }
 

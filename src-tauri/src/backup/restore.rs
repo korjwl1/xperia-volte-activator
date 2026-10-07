@@ -1,15 +1,14 @@
-//! 복구 엔진 — plan.md §6-5 순서: APK 재설치 → tar 스트리밍 복원(mtime 보존, quarantine 포함)
+//! 복구 엔진 — plan.md §6-5 순서: APK 재설치 → 파일 복원(mtime 보존, quarantine 포함)
 //! → 설정 화이트리스트 → deviceidle → 연락처/sms-ie(수동 개입은 명령 층에서).
-//! tar 스트리밍: adb_client `exec`(명령 stdin)으로 `tar -xf - -C <dst>`에 아카이브를 흘린다 —
-//! Windows 파일시스템을 거치지 않고 기기 셸 tar가 mtime·원본 이름을 복원한다(§6-3).
+//! 파일 복원: sync push(백업의 pull과 같은 프로토콜)로 원본 이름·mtime 그대로 단계 폴더에 올린 뒤 합친다.
+//! 앱 데이터는 루트로 앱 소유권을 맞출 수 있을 때만 복원한다.
 
-use crate::backup::quarantine::{append_unix_path, ExactReader};
+use crate::backup::quarantine::ExactReader;
 use crate::backup::runner::StepProgress;
 use crate::backup::{contacts, settings, smsie};
 use adb_client::ADBDeviceExt;
-use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -20,8 +19,6 @@ const RC_MARK: &str = "__XV_RC=";
 /// adb 흐름 제어로 전송 완료 시점에 기기는 대부분을 이미 받았으므로 여유 있게 잡는다.
 const EXEC_DRAIN_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// tar 파이프 버퍼 — 512B 헤더·작은 쓰기마다 채널 송신이 일어나지 않게 모은다
-const PIPE_BUFFER: usize = 256 * 1024;
 
 #[derive(Default)]
 struct CaptureState {
@@ -133,7 +130,7 @@ fn safe_token(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
-/// 복구 진행 콜백 — tar 빌더 스레드에서도 호출되므로 공유 가능해야 한다
+/// 복구 진행 콜백 — 공유 가능해야 한다
 pub type RestoreSink = Arc<dyn Fn(StepProgress) + Send + Sync>;
 
 /// 복구 결과 — 로그 문구와 실패 목록(실패가 있어도 나머지는 진행)
@@ -142,192 +139,165 @@ pub type RestoreSink = Arc<dyn Fn(StepProgress) + Send + Sync>;
 pub struct RestoreOutcome {
     pub logs: Vec<String>,
     pub failures: Vec<String>,
+    /// 폰에서 연락처 가져오기가 남았는지(이미 있으면 false)
+    #[serde(skip)]
+    pub contacts_pending: bool,
     /// 기기에 쓰기 전 무결성 검증을 통과했는지 — 통과 못 하면 아무것도 쓰지 않았다
     #[serde(skip)]
     pub verified: bool,
 }
 
-// ── Write→Read 파이프(유계 채널) — tar 빌더 스레드 → exec stdin ──
+// ── 파일 전송 — sync push(원본 mtime) → 단계 폴더 → 대상 위치로 합치기 ──
+//
+// 실기기(XQ-DQ44, 2026-10-08)에서 exec stdin tar 스트리밍을 버렸다.
+// - toybox 0.8.11 tar는 아카이브 끝 표시에서 끝나지 않고 입력이 닫힐 때까지 읽는데, adb exec는 입력 끝을 알리지 못한다.
+// - adb 서버(35.0.2) 경로의 exec는 큰 stdin을 흐름 제어 없이 받아 std::bad_alloc으로 죽었다.
+// sync push는 같은 서버 경로에서도 흐름 제어됐다(1 GiB 27초). 백업의 pull과 같은 sync 프로토콜이다.
 
-struct PipeWriter {
-    tx: SyncSender<Vec<u8>>,
-}
-
-impl Write for PipeWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.tx
-            .send(buf.to_vec())
-            .map_err(|_| std::io::Error::other("파이프 닫힘"))?;
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-struct PipeReader {
-    rx: Receiver<Vec<u8>>,
-    buf: Vec<u8>,
-    pos: usize,
-}
-
-impl Read for PipeReader {
-    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-        if out.is_empty() {
-            return Ok(0);
-        }
-        if self.pos >= self.buf.len() {
-            match self.rx.recv() {
-                Ok(chunk) => {
-                    self.buf = chunk;
-                    self.pos = 0;
-                }
-                Err(_) => return Ok(0), // EOF
-            }
-        }
-        let n = (self.buf.len() - self.pos).min(out.len());
-        out[..n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
-        self.pos += n;
-        Ok(n)
-    }
-}
-
-type TarBuilder = tar::Builder<BufWriter<PipeWriter>>;
-
-/// 빌더 스레드가 만든 tar를 기기 명령 `cmd`의 stdin으로 흘린다.
-/// 빌더가 실패하면(파일 읽기 등) 기기 쪽 입력이 잘린 것이므로 빌더 오류를 먼저 보인다.
-fn pipe_exec<T: Send + 'static>(
-    dev: &mut dyn ADBDeviceExt,
-    cmd: &str,
-    build: impl FnOnce(&mut TarBuilder) -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    let (tx, rx) = sync_channel::<Vec<u8>>(32);
-    let writer = BufWriter::with_capacity(PIPE_BUFFER, PipeWriter { tx });
-    let mut reader = PipeReader {
-        rx,
-        buf: Vec::new(),
-        pos: 0,
-    };
-    let builder = std::thread::spawn(move || -> Result<T, String> {
-        let mut b = tar::Builder::new(writer);
-        let value = build(&mut b)?;
-        // 끝 표시 + 버퍼 비우기. 여기서 PipeWriter가 해제돼 기기 쪽에 EOF가 간다
-        b.into_inner()
-            .and_then(|mut w| w.flush())
-            .map_err(|e| format!("tar 마무리 실패: {e}"))?;
-        Ok(value)
-    });
-    let exec_result = exec_checked(dev, cmd, &mut reader);
-    // 기기 tar가 먼저 끝나면(오류 등) 읽는 쪽을 닫아 빌더 스레드의 send가 막히지 않게 한다
-    drop(reader);
-    let built = builder
-        .join()
-        .map_err(|_| "tar 빌드 스레드 패닉".to_string())?;
-    match (built, exec_result) {
-        (Err(build), Err(exec)) => Err(format!("{build} (기기 tar: {exec})")),
-        (Err(build), Ok(_)) => Err(build),
-        (Ok(_), Err(exec)) => Err(format!("기기 tar 실패 — {exec}")),
-        (Ok(value), Ok(_)) => Ok(value),
-    }
-}
-
-/// tar 스트리밍 대상 1개 — 로컬 파일, tar 내부 이름, manifest의 원본 mtime·크기
-struct TarFile {
-    path: PathBuf,
+/// 복원 대상 1개 — 원본(로컬 파일 또는 격리 세그먼트 안 위치), 대상 기준 상대 이름, manifest의 mtime·크기
+struct PushFile {
+    source: PushSource,
     name: String,
     mtime: u32,
     size: u64,
 }
 
-/// 진행 콜백 — (보낸 파일 수, 보낸 바이트). 빌더 스레드에서 파일마다 호출된다
-type TarProgress = Arc<dyn Fn(u64, u64) + Send + Sync>;
+enum PushSource {
+    File(PathBuf),
+    /// 격리 tar 세그먼트 안 본문 시작 위치
+    Segment(PathBuf, u64),
+}
+
+impl PushSource {
+    /// 기록된 크기만큼 정확히 읽는 원본 — 짧으면 읽기 오류
+    fn open(&self, size: u64) -> Result<ExactReader<std::fs::File>, String> {
+        let (path, offset) = match self {
+            Self::File(path) => (path, 0),
+            Self::Segment(path, offset) => (path, *offset),
+        };
+        let mut file = std::fs::File::open(path).map_err(|e| format!("열기 실패({e})"))?;
+        if offset > 0 {
+            file.seek(SeekFrom::Start(offset))
+                .map_err(|e| format!("위치 이동 실패({e})"))?;
+        }
+        Ok(ExactReader::new(file, size))
+    }
+}
+
+/// APK 임시 위치 — shell이 쓰고 `pm install-write`가 경로로 읽는다
+const APK_TMP: &str = "/data/local/tmp";
+
+/// 진행 콜백 — (보낸 파일 수, 보낸 바이트)
+type PushProgress = Arc<dyn Fn(u64, u64) + Send + Sync>;
 
 fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// Extract into a unique staging directory on the destination filesystem. Publish only complete
-/// files by rename; a failed stream cannot truncate an existing user file.
-fn staged_extract<T: Send + 'static>(
+/// 단계 폴더를 대상 위치에 합치는 기기 셸 스크립트.
+/// 대상에 없는 폴더는 통째로 옮기고(이름 바꾸기 한 번), 있는 폴더만 안으로 들어가 합친다.
+/// 대상이 폴더인 자리에 파일을 덮어쓰지 않는다. 200개마다 진행을 출력해 연결이 유휴로 끊기지 않게 한다.
+/// 끝에 `__MOVED=<옮긴 파일 수> __LEFT=<단계 폴더에 남은 파일 수>`를 알린다.
+fn publish_script(stage: &str, dst: &str) -> String {
+    r#"cd @STAGE@ || exit 1
+total=$(find . -type f | wc -l)
+c=0
+merge() {
+  local s="$1" d="$2" e n t
+  for e in "$s"/* "$s"/.[!.]* "$s"/..?*; do
+    [ -e "$e" ] || [ -L "$e" ] || continue
+    n=${e##*/}; t="$d/$n"
+    if [ -d "$e" ] && [ ! -L "$e" ]; then
+      if [ -e "$t" ] || [ -L "$t" ]; then
+        { [ -d "$t" ] && [ ! -L "$t" ]; } || return 1
+        merge "$e" "$t" || return 1
+      else
+        mv -- "$e" "$t" || return 1
+      fi
+    else
+      if [ -d "$t" ] && [ ! -L "$t" ]; then return 1; fi
+      # 이미 있는 파일 위로 옮기면 앱 폴더(FUSE)에서는 복사로 처리돼 원본 mtime을 잃는다(실측) — 먼저 지운다
+      if [ -e "$t" ] || [ -L "$t" ]; then rm -f -- "$t" || return 1; fi
+      mv -f -- "$e" "$t" || return 1
+    fi
+    c=$((c+1))
+    if [ $((c % 200)) -eq 0 ]; then echo "__PROGRESS=$c"; fi
+  done
+  return 0
+}
+mkdir -p -- @DST@ && merge . @DST@ || exit 1
+left=$(find . -type f | wc -l)
+echo "__MOVED=$((total-left)) __LEFT=$left""#
+        .replace("@STAGE@", &quote(stage))
+        .replace("@DST@", &quote(dst))
+}
+
+/// 파일을 대상과 같은 마운트 안의 단계 폴더(`<dst>/.xvolte-restore-…`)에 원본 mtime으로 올린 뒤 한 번에 합친다.
+/// 같은 마운트라 합치기가 복사가 아닌 이름 바꾸기다(`/sdcard/Android/data`는 별도 마운트). 실패한 전송이
+/// 기존 사용자 파일을 반쯤 덮어쓰지 않는다. 끝나면 단계 폴더를 지운다.
+fn staged_push(
     dev: &mut dyn ADBDeviceExt,
     dst: &str,
-    names: &[String],
-    produce: impl FnOnce(&mut TarBuilder) -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
+    files: Vec<PushFile>,
+    progress: PushProgress,
+) -> Result<(), String> {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stage = format!(
-        "/sdcard/.xvolte-restore-{}-{}-{}",
+        "{dst}/.xvolte-restore-{}-{}-{}",
         std::process::id(),
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
         NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
     exec_checked(
         dev,
-        &format!("mkdir -- {}", quote(&stage)),
+        &format!("mkdir -p -- {}", quote(&stage)),
         &mut std::io::empty(),
     )?;
-    let result =
-        pipe_exec(dev, &format!("tar -xf - -C {}", quote(&stage)), produce).and_then(|value| {
-            for name in names {
-                let target = format!("{dst}/{name}");
-                let parent = target.rsplit_once('/').ok_or("복원 대상 경로 오류")?.0;
-                exec_checked(
-                    dev,
-                    &format!(
-                        "[ ! -d {} ] && mkdir -p -- {} && mv -f -- {} {}",
-                        quote(&target),
-                        quote(parent),
-                        quote(&format!("{stage}/{name}")),
-                        quote(&target)
-                    ),
-                    &mut std::io::empty(),
-                )?;
-            }
-            Ok(value)
-        });
+    let expected = files.len();
+    let result = (|| {
+        let mut bytes = 0u64;
+        for (i, file) in files.iter().enumerate() {
+            let mut reader = file.source.open(file.size).map_err(|e| format!("{}: {e}", file.name))?;
+            dev.push_with_mtime(&mut reader, &format!("{stage}/{}", file.name), file.mtime)
+                .map_err(|e| format!("{}: 전송 실패({e})", file.name))?;
+            bytes += file.size;
+            progress(i as u64 + 1, bytes);
+        }
+        let out = exec_checked_within(
+            dev,
+            &publish_script(&stage, dst),
+            &mut std::io::empty(),
+            EXEC_DRAIN_TIMEOUT + Duration::from_millis(20 * expected as u64),
+        )?;
+        let field = |key: &str| {
+            out.split_whitespace()
+                .find_map(|w| w.strip_prefix(key))
+                .and_then(|n| n.parse::<usize>().ok())
+        };
+        match (field("__MOVED="), field("__LEFT=")) {
+            (Some(moved), Some(0)) if moved == expected => Ok(()),
+            (moved, left) => Err(format!(
+                "복원 파일 옮기기 수가 맞지 않습니다(예상 {expected}개, 옮김 {}, 남음 {})",
+                moved.map_or("확인 불가".into(), |n| format!("{n}개")),
+                left.map_or("확인 불가".into(), |n| format!("{n}개"))
+            )),
+        }
+    })();
     let cleanup = exec_checked(
         dev,
         &format!("rm -rf -- {}", quote(&stage)),
         &mut std::io::empty(),
     );
     match (result, cleanup) {
-        (Ok(value), Ok(_)) => Ok(value),
-        (Ok(_), Err(error)) => Err(format!("복원 임시 파일 정리 실패: {error}")),
+        (Ok(()), Ok(_)) => Ok(()),
+        (Ok(()), Err(error)) => Err(format!("복원 임시 파일 정리 실패: {error}")),
         (Err(error), Ok(_)) => Err(error),
         (Err(error), Err(cleanup)) => Err(format!("{error}; 임시 파일 정리 실패: {cleanup}")),
     }
 }
 
-/// tar 스트리밍 복원 — `cmd`(tar -xf - … )의 stdin으로 로컬 파일들을 아카이브해 흘린다.
-/// 헤더 크기는 manifest 기록값 — 검증 후 파일이 바뀌어 길이가 달라지면 아카이브가 어긋나므로 오류.
-fn stream_tar(
-    dev: &mut dyn ADBDeviceExt,
-    dst: &str,
-    files: Vec<TarFile>,
-    progress: TarProgress,
-) -> Result<(), String> {
-    let names: Vec<_> = files.iter().map(|f| f.name.clone()).collect();
-    staged_extract(dev, dst, &names, move |b| {
-        let mut bytes = 0u64;
-        for (i, file) in files.iter().enumerate() {
-            let name = &file.name;
-            let mut header = tar::Header::new_gnu();
-            header.set_size(file.size);
-            header.set_mode(0o644);
-            header.set_mtime(file.mtime as u64);
-            let f =
-                std::fs::File::open(&file.path).map_err(|e| format!("{name}: 열기 실패({e})"))?;
-            append_unix_path(b, &mut header, name, ExactReader::new(f, file.size))
-                .map_err(|e| format!("{name}: tar 추가 실패({e})"))?;
-            bytes += file.size;
-            progress(i as u64 + 1, bytes);
-        }
-        Ok(())
-    })
-}
-
-/// 격리 세그먼트에서 복원할 항목 — (원본 경로, 헤더, 본문 위치, 크기)
-type QuarantinePick = (String, tar::Header, u64, u64);
+/// 격리 세그먼트에서 복원할 항목 — (원본 경로, 본문 위치, 크기, mtime)
+type QuarantinePick = (String, u64, u64, u32);
 
 /// 세그먼트의 모든 헤더 경로·유형을 검사하고, 선택한 파일 중 해시가 일치하는 첫 버전만 고른다.
 /// 미선택 본문은 읽지 않고 건너뛴다(entries_with_seek).
@@ -354,18 +324,17 @@ fn pick_quarantined(
             continue;
         }
         let offset = entry.raw_file_position();
-        let header = entry.header().clone();
         let (hash, size) = super::verify::hash_reader(&mut entry)?;
         if size != expected.size || Some(hash.as_str()) != expected.sha256.as_deref() {
             continue;
         }
         picked.insert(remote.clone());
-        picks.push((remote, header, offset, size));
+        picks.push((remote, offset, size, expected.mtime));
     }
     Ok(picks)
 }
 
-/// 격리 파일 복원 — 고른 항목만 새 tar로 만들어 `/sdcard` 기준 상대 이름으로 푼다
+/// 격리 파일 복원 — 고른 항목만 세그먼트 안 위치에서 바로 읽어 `/sdcard` 기준 상대 이름으로 올린다
 /// (일반 파일 복원과 같은 기준 — `/sdcard` 심볼릭 링크를 경로 중간에서 따라가는 데 기대지 않는다).
 fn restore_quarantined(
     dev: &mut dyn ADBDeviceExt,
@@ -377,32 +346,81 @@ fn restore_quarantined(
     if picks.is_empty() {
         return Ok(vec![]); // 이 세그먼트엔 복원할 것이 없다 — 기기 명령을 보내지 않는다
     }
-    let segment = segment.to_path_buf();
-    let names = picks
-        .iter()
-        .map(|(remote, _, _, _)| super::paths::sdcard_relative(remote))
-        .collect::<Result<Vec<_>, _>>()?;
-    staged_extract(dev, "/sdcard", &names, move |output| {
-        let mut file = std::fs::File::open(&segment).map_err(|e| e.to_string())?;
-        let mut included = Vec::with_capacity(picks.len());
-        for (remote, mut header, offset, size) in picks {
-            let name = super::paths::sdcard_relative(&remote)?;
-            file.seek(SeekFrom::Start(offset))
-                .map_err(|e| e.to_string())?;
-            append_unix_path(
-                output,
-                &mut header,
-                &name,
-                ExactReader::new(&mut file, size),
-            )
-            .map_err(|e| format!("{remote}: {e}"))?;
-            included.push(remote);
-        }
-        Ok(included)
-    })
+    let mut files = Vec::with_capacity(picks.len());
+    let mut included = Vec::with_capacity(picks.len());
+    for (remote, offset, size, mtime) in picks {
+        files.push(PushFile {
+            source: PushSource::Segment(segment.to_path_buf(), offset),
+            name: super::paths::sdcard_relative(&remote)?,
+            mtime,
+            size,
+        });
+        included.push(remote);
+    }
+    staged_push(dev, "/sdcard", files, Arc::new(|_, _| {}))?;
+    Ok(included)
 }
 
-/// 세션 방식 APK 설치 — split APK 포함(base+split을 한 세션에). device tmp 파일 없이 stdin으로.
+/// 앱 데이터 복원 준비 — 루트 권한과 설치된 앱의 uid.
+/// 안드로이드 11부터 `Android/data/<앱>`은 그 앱 소유여야 앱이 읽고 쓴다. 실기기(XQ-DQ44)에서 shell이 만든 폴더와 파일은
+/// 소유자 2000·그룹 ext_data_rw(1078)였고, 앱 프로세스는 1078 그룹이 없어 접근하지 못한다. 소유권은 루트로만 맞출 수 있다.
+fn app_data_owners(dev: &mut dyn ADBDeviceExt) -> Result<std::collections::HashMap<String, u32>, String> {
+    let root = crate::device_io::shell_run(dev, crate::device_io::su!("id 2>&1"))?;
+    if root.code != 0 || !String::from_utf8_lossy(&root.stdout).contains("uid=0") {
+        return Err("루트 권한이 없어 앱 데이터를 복원하지 않았습니다 — 안드로이드 11부터 앱 데이터 폴더는 그 앱 소유여야 해서, 루트 없이 넣으면 앱이 읽지 못합니다".into());
+    }
+    parse_package_uids(&crate::device_io::shell(dev, "pm list packages -U")?)
+}
+
+/// `pm list packages -U` → 패키지별 uid
+fn parse_package_uids(text: &str) -> Result<std::collections::HashMap<String, u32>, String> {
+    let owners: std::collections::HashMap<String, u32> = text
+        .lines()
+        .filter_map(|line| {
+            let (pkg, uid) = line.trim().strip_prefix("package:")?.split_once(" uid:")?;
+            let digits: String = uid.chars().take_while(char::is_ascii_digit).collect();
+            Some((pkg.to_string(), digits.parse().ok()?))
+        })
+        .collect();
+    if owners.is_empty() {
+        return Err("설치된 앱 목록을 읽지 못했습니다".into());
+    }
+    Ok(owners)
+}
+
+/// 복원한 앱 데이터 폴더를 앱이 직접 만든 폴더와 같게 맞춘다 — 소유자 앱 uid, 그룹 ext_data_rw(1078),
+/// 저장 공간 계산용 프로젝트 ID(20000+앱 ID), 하위 폴더 상속(P). 실기기 앱 폴더에서 확인한 값이다.
+fn fix_app_data_owners(
+    dev: &mut dyn ADBDeviceExt,
+    packages: &std::collections::BTreeMap<String, u32>,
+) -> Result<(), String> {
+    let mut steps = vec![];
+    for (pkg, uid) in packages {
+        let app_id = uid % 100_000;
+        if !safe_token(pkg) || app_id < 10_000 {
+            return Err(format!("{pkg}: 앱 uid가 올바르지 않습니다({uid})"));
+        }
+        let dir = format!("/data/media/0/Android/data/{pkg}");
+        let project = app_id - 10_000 + 20_000;
+        steps.push(format!(
+            "chown -R {uid}:1078 {dir} && chattr -R -p {project} {dir} && find {dir} -type d -exec chattr +P {{}} +"
+        ));
+    }
+    if steps.is_empty() {
+        return Ok(());
+    }
+    let out = crate::device_io::shell_run(dev, &crate::device_io::su_command(&steps.join(" && ")))?;
+    if out.code != 0 {
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&out.stderr));
+        return Err(format!("종료 코드 {}: {}", out.code, text.trim()));
+    }
+    Ok(())
+}
+
+/// 세션 방식 APK 설치 — split APK 포함(base+split을 한 세션에).
+/// APK를 sync push로 기기 임시 파일에 올린 뒤 경로로 넘긴다. exec stdin으로 흘리면 adb 서버 경로에서
+/// 흐름 제어가 없어 큰 APK가 서버를 죽일 수 있다(2026-10-08 실측, 위 파일 전송 설명 참고).
 fn install_apk_dir(
     dev: &mut dyn ADBDeviceExt,
     pkg: &str,
@@ -461,8 +479,14 @@ fn install_apk_dir(
                 if size == 0 {
                     return Err("빈 APK 파일".into());
                 }
-                let cmd = format!("pm install-write -S {size} {sid} {name} -");
-                exec_checked(dev, &cmd, &mut f)
+                let remote = format!("{APK_TMP}/xvolte-{sid}-{name}");
+                dev.push(&mut f, &remote)
+                    .map_err(|e| format!("기기로 전송 실패({e})"))?;
+                let cmd = format!("pm install-write -S {size} {sid} {name} {remote}");
+                let written = exec_checked(dev, &cmd, &mut std::io::empty());
+                let removed = crate::device_io::shell(dev, &format!("rm -f -- {remote}"));
+                written?;
+                removed.map(|_| String::new()).map_err(|e| format!("임시 APK 정리 실패({e})"))
             });
         if let Err(e) = result {
             failures.push(format!("{pkg}/{name}: 전송 실패({e})"));
@@ -586,7 +610,7 @@ pub fn run_restore(
         }
     }
 
-    // 2) 파일 tar 스트리밍 복원 — fs-rest → 기명 폴더 → app-data 순(덮어쓰기 안전 순서)
+    // 2) 파일 복원(sync push → 단계 폴더 → 합치기) — fs-rest → 기명 폴더 → app-data 순(덮어쓰기 안전 순서)
     // (항목id, 기기 대상 루트)
     let file_phases: &[(&str, &str)] = &[
         ("fs-rest", "/sdcard"),
@@ -599,10 +623,27 @@ pub fn run_restore(
         ("recordings", "/sdcard"),
         ("app-data", "/sdcard/Android/data"),
     ];
+    // 앱 데이터: 설치된 앱의 uid(소유권 맞춤용). 루트가 없거나 조회에 실패하면 None — 앱 데이터는 건너뛴다
+    let app_owners = if items.iter().any(|i| i == "app-data") {
+        match app_data_owners(dev) {
+            Ok(owners) => Some(owners),
+            Err(error) => {
+                out.failures.push(format!("app-data: {error}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
     for (item, dst) in file_phases {
         if !items.iter().any(|i| i == item) {
             continue;
         }
+        if *item == "app-data" && app_owners.is_none() {
+            continue;
+        }
+        let mut skipped_packages = std::collections::BTreeSet::new();
+        let mut restored_packages = std::collections::BTreeMap::new();
         let mut files = vec![];
         for entry in selected
             .items
@@ -618,17 +659,39 @@ pub fn run_restore(
                         .ok_or("앱 데이터 대상 경로가 아닙니다")?
                         .to_string();
                 }
-                Ok(TarFile {
-                    path: super::paths::existing_file(backup_root, &entry.local)?,
+                Ok(PushFile {
+                    source: PushSource::File(super::paths::existing_file(backup_root, &entry.local)?),
                     name,
                     mtime: entry.mtime,
                     size: entry.size,
                 })
             });
-            match result {
-                Ok(file) => files.push(file),
-                Err(error) => out.failures.push(error),
+            let file = match result {
+                Ok(file) => file,
+                Err(error) => {
+                    out.failures.push(error);
+                    continue;
+                }
+            };
+            if let Some(owners) = &app_owners {
+                if *item == "app-data" {
+                    // Android/data 바로 아래 파일(.nomedia 등)은 시스템 몫이다. 앱 폴더는 설치된 앱만 —
+                    // 설치되지 않은 앱 폴더를 shell 소유로 만들어 두면 나중에 설치해도 그 앱이 쓰지 못한다.
+                    let Some((pkg, _)) = file.name.split_once('/') else {
+                        continue;
+                    };
+                    match owners.get(pkg) {
+                        Some(uid) if safe_token(pkg) => {
+                            restored_packages.insert(pkg.to_string(), *uid);
+                        }
+                        _ => {
+                            skipped_packages.insert(pkg.to_string());
+                            continue;
+                        }
+                    }
+                }
             }
+            files.push(file);
         }
         if files.is_empty() {
             continue;
@@ -638,16 +701,30 @@ pub fn run_restore(
         on_progress(StepProgress::start(item, "files", total));
         let item_id = item.to_string();
         let cb = Arc::clone(on_progress);
-        let progress: TarProgress = Arc::new(move |done, bytes| {
+        let progress: PushProgress = Arc::new(move |done, bytes| {
             cb(StepProgress {
                 bytes_done: bytes,
                 bytes_total: total_bytes,
                 ..StepProgress::at(&item_id, "files", done, total)
             });
         });
-        match stream_tar(dev, dst, files, progress) {
+        let placed = staged_push(dev, dst, files, progress);
+        match &placed {
             Ok(()) => out.logs.push(format!("{item} 복원 — 파일 {total}개")),
             Err(e) => out.failures.push(format!("{item}: {e}")),
+        }
+        if *item == "app-data" {
+            if !skipped_packages.is_empty() {
+                out.logs.push(format!(
+                    "[안내] 앱이 설치되지 않아 앱 데이터를 건너뜀: {}",
+                    skipped_packages.into_iter().collect::<Vec<_>>().join(", ")
+                ));
+            }
+            // 옮기다 실패해도 이미 들어간 폴더는 앱 소유로 맞춰야 앱이 쓸 수 있다
+            match fix_app_data_owners(dev, &restored_packages) {
+                Ok(()) => out.logs.push(format!("앱 데이터 소유권 맞춤 — 앱 {}개", restored_packages.len())),
+                Err(e) => out.failures.push(format!("app-data 소유권: {e}")),
+            }
         }
     }
 
@@ -655,7 +732,8 @@ pub fn run_restore(
     let wanted: std::collections::HashMap<&str, &super::model::FileEntry> = selected
         .items
         .iter()
-        .filter(|item| file_phases.iter().any(|(id, _)| *id == item.id))
+        // 앱 데이터 격리분은 소유권을 맞추는 앱 데이터 경로를 거쳐야 하므로 여기서 다루지 않는다(아래에서 안내)
+        .filter(|item| item.id != "app-data" && file_phases.iter().any(|(id, _)| *id == item.id))
         .flat_map(|item| &item.entries)
         .filter(|entry| entry.quarantined)
         .map(|entry| (entry.remote.as_str(), entry))
@@ -697,13 +775,13 @@ pub fn run_restore(
         on_progress(StepProgress::at("settings-all", "settings", 1, 1));
     }
 
-    // 5) 연락처 — vcf 전송 + 수동 가져오기 안내(실제 가져오기는 사용자 확인)
+    // 5) 연락처 — 이미 있으면 건너뛰고, 아니면 vcf 전송 + 가져오기 화면(반영은 사용자 확인 후 restore_check)
     if items.iter().any(|i| i == "contacts") {
         on_progress(StepProgress::start("contacts", "contacts", 1));
         match contacts::stage_restore_contacts(dev, backup_root) {
-            Ok((remote, note)) => {
-                out.logs.push(format!("연락처 파일 전송: {remote}"));
-                out.logs.push(format!("[수동] {note}"));
+            Ok(staged) => {
+                out.logs.extend(staged.logs);
+                out.contacts_pending = staged.pending;
             }
             Err(e) => out.failures.push(format!("연락처: {e}")),
         }
@@ -731,11 +809,11 @@ mod tests {
         let path = root.path().join("f");
         std::fs::write(&path, b"short").unwrap();
         let mut d = test_device();
-        assert!(stream_tar(
+        assert!(staged_push(
             &mut d,
             "/sdcard",
-            vec![TarFile {
-                path,
+            vec![PushFile {
+                source: PushSource::File(path),
                 name: "DCIM/a.jpg".into(),
                 mtime: 0,
                 size: 100
@@ -747,7 +825,8 @@ mod tests {
             .shell_calls
             .iter()
             .any(|c| c.starts_with("rm -rf -- '/sdcard/.xvolte-restore-")));
-        assert!(!d.shell_calls.iter().any(|c| c.contains("mv -f")));
+        assert!(!d.shell_calls.iter().any(|c| c.contains("__MOVED=")));
+        assert!(!d.pushed.keys().any(|k| k == "/sdcard/DCIM/a.jpg"));
     }
     #[test]
     fn foreign_backup_stops_restore_before_any_write() {
@@ -1023,6 +1102,10 @@ mod tests {
             "Success: created install session [42]\n",
         );
         d.answer_shell("pm install-commit", "Success\n");
+        d.answer_shell("rm -f", "");
+        d.answer_shell("content query --uri content://com.android.contacts/contacts", "No result found.\n");
+        d.answer_shell("content query --uri content://media/external/file", "Row: 0 _id=42\n");
+        d.answer_shell("am start", "Starting: Intent { act=android.intent.action.VIEW }\n");
         d.answer_shell("settings put", "");
         d.answer_shell("dumpsys deviceidle whitelist +", "");
         d.answer_shell("mkdir", "");
@@ -1036,20 +1119,9 @@ mod tests {
         ];
         let out = run_restore(&mut d, tmp.path(), &items, &sink);
 
-        // tar 스트리밍: exec 기록에 tar 명령 + 실제 tar 바이트(내용 검증)
-        let (cmd, bytes) = d
-            .shell_streams
-            .iter()
-            .find(|(c, _)| c.starts_with("tar -xf"))
-            .expect("tar 스트리밍 있어야 함");
-        assert!(cmd.contains("/sdcard/.xvolte-restore-"));
-        let mut ar = tar::Archive::new(&bytes[..]);
-        let mut names = Vec::new();
-        for e in ar.entries().unwrap() {
-            let e = e.unwrap();
-            names.push(e.path().unwrap().to_string_lossy().to_string());
-        }
-        assert_eq!(names, vec!["DCIM/Camera/a.jpg".to_string()]);
+        // 파일: sync push(원본 mtime) → 단계 폴더 → 합치기로 제자리에
+        let restored: Vec<_> = d.pushed.keys().filter(|k| k.starts_with("/sdcard/DCIM")).cloned().collect();
+        assert_eq!(restored, vec!["/sdcard/DCIM/Camera/a.jpg".to_string()]);
 
         // APK 세션 설치
         assert!(d
@@ -1059,7 +1131,13 @@ mod tests {
         assert!(d
             .shell_calls
             .iter()
-            .any(|c| c.contains("pm install-write -S 8 42 base.apk -")));
+            .any(|c| c.contains("pm install-write -S 8 42 base.apk /data/local/tmp/xvolte-42-base.apk")));
+        // APK는 stdin이 아니라 기기 임시 파일로 넘기고 지운다(서버 경로 흐름 제어)
+        assert!(d.pushed.contains_key("/data/local/tmp/xvolte-42-base.apk"));
+        assert!(d
+            .shell_calls
+            .iter()
+            .any(|c| c == "rm -f -- /data/local/tmp/xvolte-42-base.apk"));
         assert!(d
             .shell_calls
             .iter()
@@ -1079,8 +1157,12 @@ mod tests {
             .iter()
             .any(|c| c.contains("dumpsys deviceidle whitelist +com.kakao.talk")));
 
-        // 연락처 vcf push
+        // 연락처: 폰에 없으므로 vcf push + 가져오기 화면을 그 파일(MediaStore URI)로 띄우고 남은 일로 표시
         assert!(d.pushed.contains_key("/sdcard/contacts-restore.vcf"));
+        assert!(out.contacts_pending);
+        assert!(d.shell_calls.iter().any(|c| c.starts_with("am start")
+            && c.contains("-d content://media/external/file/42")
+            && c.contains("-n com.google.android.contacts/com.google.android.apps.contacts.vcard.ImportVCardActivity")));
 
         assert!(
             out.failures.is_empty(),
@@ -1151,9 +1233,9 @@ mod tests {
         for (cmd, path) in d
             .spooled
             .iter()
-            .filter(|(c, _)| c.starts_with("tar -xf - -C "))
+            .filter(|(c, _)| c.contains("tar -xf - -C "))
         {
-            let dst = cmd.trim_start_matches("tar -xf - -C ").trim().to_string();
+            let dst = cmd.split("tar -xf - -C ").nth(1).unwrap().trim().to_string();
             let mut ar = tar::Archive::new(std::fs::File::open(path).unwrap());
             for e in ar.entries().unwrap() {
                 let mut e = e.unwrap();
@@ -1330,52 +1412,105 @@ mod tests {
         assert!(e.contains("끝나지 않았습니다"), "{e}");
     }
 
+    /// 실기기: sync push로 큰 파일을 올린다(서버 경로 흐름 제어 확인). `cargo test live_push_large -- --ignored --nocapture`
     #[test]
-    fn tar_names_keep_backslashes_and_long_paths() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("f");
-        std::fs::write(&path, b"abc").unwrap();
-        let long = format!("Download/{}/a\\b.txt", "d".repeat(120));
-        let mut d = test_device();
-        stream_tar(
-            &mut d,
-            "/sdcard",
-            vec![TarFile {
-                path,
-                name: long.clone(),
-                mtime: 1_700_000_000,
-                size: 3,
-            }],
-            Arc::new(|_, _| {}),
-        )
-        .unwrap();
-        let mut archive = tar::Archive::new(
-            d.shell_streams
-                .iter()
-                .find(|(c, _)| c.starts_with("tar -xf"))
-                .unwrap()
-                .1
-                .as_slice(),
-        );
-        let mut entry = archive.entries().unwrap().next().unwrap().unwrap();
-        // Windows에서도 `\`가 `/`로 바뀌지 않고, 100바이트를 넘는 이름도 그대로
-        assert_eq!(entry.path_bytes().as_ref(), long.as_bytes());
-        let mut body = vec![];
-        entry.read_to_end(&mut body).unwrap();
-        assert_eq!(body, b"abc");
+    #[ignore]
+    fn live_push_large() {
+        let size: u64 = std::env::var("XVA_EXEC_BYTES").ok().and_then(|v| v.parse().ok()).unwrap_or(1 << 30);
+        let start = std::time::Instant::now();
+        let out = crate::adb::with_first_device(&None, |dev| {
+            let mut input = std::io::repeat(7).take(size);
+            dev.push_with_mtime(&mut input, &"/data/local/tmp/xva_push_test", 1_700_000_000)
+                .map_err(|e| e.to_string())?;
+            crate::device_io::shell(
+                dev,
+                "stat -c '%s %Y' /data/local/tmp/xva_push_test; rm -f /data/local/tmp/xva_push_test",
+            )
+        });
+        eprintln!("{size} bytes in {:?}: {out:?}", start.elapsed());
+        assert_eq!(out.unwrap().trim(), format!("{size} 1700000000"));
     }
 
     #[test]
-    fn file_shorter_than_its_record_fails_instead_of_misaligning_the_tar() {
+    fn push_keeps_names_and_mtimes_and_publishes_with_one_device_loop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let names = [
+            "a.txt".to_string(),
+            format!("Download/{}/a\\b.txt", "d".repeat(120)),
+            "Documents/파일 이름 (1).pdf".to_string(),
+            ".$Trash$/.$Content$/.1_0".to_string(),
+        ];
+        let mut files = vec![];
+        for (i, (name, size)) in names.iter().zip([0usize, 3, 512, 1537]).enumerate() {
+            let path = tmp.path().join(format!("{i}"));
+            std::fs::write(&path, vec![i as u8; size]).unwrap();
+            files.push(PushFile {
+                source: PushSource::File(path),
+                name: name.clone(),
+                mtime: 1_700_000_000 + i as u32,
+                size: size as u64,
+            });
+        }
+        let mut d = test_device();
+        staged_push(&mut d, "/sdcard", files, Arc::new(|_, _| {})).unwrap();
+        for (i, (name, size)) in names.iter().zip([0usize, 3, 512, 1537]).enumerate() {
+            let target = format!("/sdcard/{name}");
+            // Windows에서도 `\`가 `/`로 바뀌지 않고 긴 이름·한글·`$`도 그대로, 원본 mtime으로
+            assert_eq!(d.pushed[&target], vec![i as u8; size], "{target}");
+            assert_eq!(d.pushed_mtime[&target], 1_700_000_000 + i as u32);
+        }
+        // 단계 폴더는 대상과 같은 마운트 안이고, 합치기는 기기 안 한 번의 루프다(파일마다 명령을 보내지 않는다)
+        let publishes: Vec<_> = d.shell_calls.iter().filter(|c| c.contains("__MOVED=")).collect();
+        assert_eq!(publishes.len(), 1);
+        assert!(publishes[0].contains("cd '/sdcard/.xvolte-restore-"));
+        assert!(d.shell_calls.iter().any(|c| c.starts_with("rm -rf -- '/sdcard/.xvolte-restore-")));
+    }
+
+    #[test]
+    fn publish_count_mismatch_is_a_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("f");
+        std::fs::write(&path, b"abc").unwrap();
+        let mut d = test_device();
+        // 기기가 남은 파일을 보고하면(옮기기 실패) 성공으로 보지 않는다
+        d.publish_left = 1;
+        let file = PushFile { source: PushSource::File(path), name: "a.jpg".into(), mtime: 0, size: 3 };
+        let e = staged_push(&mut d, "/sdcard", vec![file], Arc::new(|_, _| {})).unwrap_err();
+        assert!(e.contains("옮기기 수가 맞지 않습니다"), "{e}");
+    }
+
+    #[test]
+    fn package_uids_parse_and_app_data_owner_fix_matches_app_created_folders() {
+        let owners = parse_package_uids(
+            "package:com.kakao.talk uid:10440\npackage:com.google.android.apps.maps uid:10267\njunk\n",
+        )
+        .unwrap();
+        assert_eq!(owners["com.kakao.talk"], 10440);
+        assert!(parse_package_uids("").is_err());
+        let mut d = test_device();
+        d.answer_shell("\"$(command -v su", "");
+        let packages = std::collections::BTreeMap::from([("com.kakao.talk".to_string(), 10440)]);
+        fix_app_data_owners(&mut d, &packages).unwrap();
+        let cmd = d.shell_calls.iter().find(|c| c.contains("chown -R")).unwrap_or_else(|| panic!("{:?}", d.shell_calls));
+        // 실기기 앱 폴더와 같은 값: 앱 uid, 그룹 1078, 프로젝트 ID 20000+앱 ID, 폴더 상속 P
+        assert!(cmd.contains("chown -R 10440:1078 /data/media/0/Android/data/com.kakao.talk"), "{cmd}");
+        assert!(cmd.contains("chattr -R -p 20440 /data/media/0/Android/data/com.kakao.talk"), "{cmd}");
+        assert!(cmd.contains("chattr +P"), "{cmd}");
+        let bad = std::collections::BTreeMap::from([("a;rm -rf /".to_string(), 10440)]);
+        assert!(fix_app_data_owners(&mut d, &bad).is_err());
+    }
+
+    #[test]
+    fn file_shorter_than_its_record_fails_instead_of_sending_a_short_file() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("f");
         std::fs::write(&path, b"ab").unwrap();
         let mut d = test_device();
-        let e = stream_tar(
+        let e = staged_push(
             &mut d,
             "/sdcard",
-            vec![TarFile {
-                path,
+            vec![PushFile {
+                source: PushSource::File(path),
                 name: "DCIM/a.jpg".into(),
                 mtime: 0,
                 size: 3,
@@ -1454,22 +1589,9 @@ mod tests {
         let mut device = test_device();
         let out = run_restore(&mut device, tmp.path(), &["dcim".into()], &noop_progress());
         assert!(out.failures.is_empty(), "{:?}", out.failures);
-        let mut archive = tar::Archive::new(
-            device
-                .shell_streams
-                .iter()
-                .find(|(c, _)| c.starts_with("tar -xf"))
-                .unwrap()
-                .1
-                .as_slice(),
-        );
-        let entries: Vec<_> = archive.entries().unwrap().map(|e| e.unwrap()).collect();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(
-            entries[0].path().unwrap().to_string_lossy(),
-            "DCIM/Camera/a.jpg"
-        );
-        assert_eq!(entries[0].header().mtime().unwrap(), 1700000000);
+        let restored: Vec<_> = device.pushed.keys().filter(|k| k.starts_with("/sdcard/DCIM")).cloned().collect();
+        assert_eq!(restored, vec!["/sdcard/DCIM/Camera/a.jpg".to_string()]);
+        assert_eq!(device.pushed_mtime["/sdcard/DCIM/Camera/a.jpg"], 1700000000);
     }
 
     #[test]
@@ -1531,29 +1653,16 @@ mod tests {
         let out = run_restore(&mut device, tmp.path(), &["dcim".into()], &noop_progress());
         assert!(out.failures.is_empty(), "{:?}", out.failures);
         // 일반 파일 복원과 같은 기준 — /sdcard 아래 상대 이름
-        assert!(device
-            .shell_streams
+        // 해시가 맞는 새 버전만, 세그먼트 안 위치에서 바로 읽어 올린다(낡은 버전·미선택 항목 제외)
+        let restored: Vec<_> = device
+            .pushed
             .iter()
-            .find(|(c, _)| c.starts_with("tar -xf"))
-            .unwrap()
-            .0
-            .contains("/sdcard/.xvolte-restore-"));
-        let mut archive = tar::Archive::new(
-            device
-                .shell_streams
-                .iter()
-                .find(|(c, _)| c.starts_with("tar -xf"))
-                .unwrap()
-                .1
-                .as_slice(),
-        );
-        let mut entries = archive.entries().unwrap();
-        let mut entry = entries.next().unwrap().unwrap();
-        assert_eq!(entry.path().unwrap().to_string_lossy(), "DCIM/bad?.jpg");
-        let mut bytes = vec![];
-        entry.read_to_end(&mut bytes).unwrap();
-        assert_eq!(bytes, b"new");
-        assert!(entries.next().is_none());
+            .filter(|(k, _)| k.starts_with("/sdcard/") && !k.starts_with("/sdcard/contacts"))
+            .collect();
+        assert_eq!(restored.len(), 1, "{:?}", device.pushed.keys());
+        assert_eq!(restored[0].0, "/sdcard/DCIM/bad?.jpg");
+        assert_eq!(restored[0].1, b"new");
+        assert_eq!(device.pushed_mtime["/sdcard/DCIM/bad?.jpg"], 1700000000);
         let mut all = test_device();
         let result = run_restore(
             &mut all,
@@ -1563,9 +1672,6 @@ mod tests {
         );
         assert!(result.failures.iter().any(|e| e.contains("APK")));
         assert!(!result.failures.iter().any(|e| e.contains("격리")));
-        assert!(all
-            .shell_streams
-            .iter()
-            .any(|(cmd, data)| cmd.starts_with("tar -xf") && !data.is_empty()));
+        assert_eq!(all.pushed.get("/sdcard/DCIM/bad?.jpg").map(Vec::as_slice), Some(b"new".as_slice()));
     }
 }

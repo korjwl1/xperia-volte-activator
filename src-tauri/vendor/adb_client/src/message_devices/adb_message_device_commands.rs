@@ -60,6 +60,10 @@ impl<T: ADBMessageTransport> ADBDeviceExt for ADBMessageDevice<T> {
         self.push(stream, path)
     }
 
+    fn push_with_mtime(&mut self, stream: &mut dyn Read, path: &dyn AsRef<str>, mtime: u32) -> Result<()> {
+        self.push_with_mtime(stream, path, mtime)
+    }
+
     #[inline]
     fn reboot(&mut self, reboot_type: RebootType) -> Result<()> {
         self.reboot(reboot_type)

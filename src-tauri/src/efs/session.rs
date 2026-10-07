@@ -137,7 +137,11 @@ impl<T: Transport> Session<T> {
                                 "diagError"
                             },
                             "DIAG",
-                            format!("Rejected command (0x{:02x})", frame[0]),
+                            format!(
+                                "Rejected command (0x{:02x}) for request {:02x?}",
+                                frame[0],
+                                &req[..req.len().min(8)]
+                            ),
                         ));
                     }
                     continue;
@@ -236,14 +240,21 @@ impl<T: Transport> Session<T> {
                 Err(e) => return Err(e),
             }
         }
-        // Preserve upstream ranges -> zero masks ordering. Only explicit BAD_CMD is optional.
+        // Preserve upstream ranges -> zero masks ordering. Suppression is best-effort like upstream
+        // (DisableLogs/DisableMessages catch every failure): an unexpected but complete reply is a
+        // warning, since unsolicited packets are consumed anyway. Timeout/transport errors poison the
+        // session and still fail. Real device XQ-DQ44 (SM8550) returned a log range list of another shape.
         for messages in [false, true] {
             match self.suppress(messages) {
                 Ok(()) => {}
-                Err(e) if e.code == "unsupported" => warnings.push(format!(
-                    "{} suppression unsupported",
-                    if messages { "Message" } else { "Log" }
-                )),
+                Err(e) if matches!(e.code.as_str(), "unsupported" | "malformed" | "deviceStatus" | "diagError") => {
+                    warnings.push(format!(
+                        "{} suppression skipped: {} ({})",
+                        if messages { "Message" } else { "Log" },
+                        e.message,
+                        e.operation
+                    ))
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -268,7 +279,7 @@ impl<T: Transport> Session<T> {
                 return Err(Error::new(
                     "malformed",
                     "message ranges",
-                    "Invalid range list",
+                    format!("Invalid range list ({} bytes)", r.len()),
                 ));
             }
             for pair in r[8..].as_chunks::<4>().0 {
@@ -290,7 +301,11 @@ impl<T: Transport> Session<T> {
             let r = self.request(&wire::log_ranges())?;
             wire::status(&r, 8, "log ranges")?;
             if r.len() < 14 || (r.len() - 14) % 4 != 0 || r.len() > 78 {
-                return Err(Error::new("malformed", "log ranges", "Invalid range list"));
+                return Err(Error::new(
+                    "malformed",
+                    "log ranges",
+                    format!("Invalid range list ({} bytes)", r.len()),
+                ));
             }
             for (i, pair) in r[14..].as_chunks::<4>().0.iter().enumerate() {
                 let req = wire::log_mask(

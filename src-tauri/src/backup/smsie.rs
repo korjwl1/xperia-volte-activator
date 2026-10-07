@@ -43,19 +43,52 @@ fn stage_role(dev: &mut dyn ADBDeviceExt, state_dir: &Path) -> Result<(), String
             "기본 문자 앱이 복원 중 다른 앱으로 바뀌었습니다 — 설정에서 확인해 주세요".into(),
         );
     }
-    // 재시도/재시작 때 이미 전환된 역할에서 원래 앱 기록을 덮어쓰지 않는다.
-    if record.is_none() {
-        super::sms_role::save(state_dir, &key, current.clone())?;
+    // 재시도/재시작 때 이미 전환된 역할에서 원래 앱·비행기 모드 기록을 덮어쓰지 않는다.
+    let previous_airplane = match &record {
+        Some(r) => r.previous_airplane,
+        None => {
+            let airplane = airplane_mode(dev)?;
+            super::sms_role::save(state_dir, &key, current.clone(), Some(airplane))?;
+            Some(airplane)
+        }
+    };
+    // 기본 문자 앱이 바뀐 동안 수신 문자가 유실되지 않게 비행기 모드를 켠다(사용자 조작 대신, 2026-10-08 실기기 확인)
+    set_airplane_mode(dev, true)?;
+    let switched = (|| {
+        if current.as_deref() != Some(SMSIE_PKG) {
+            run(
+                dev,
+                &format!("cmd role add-role-holder {SMS_ROLE} {SMSIE_PKG}"),
+            )
+            .map_err(|e| format!("기본 문자 앱 전환 실패: {e}"))?;
+        }
+        if current_holder(dev)?.as_deref() != Some(SMSIE_PKG) {
+            return Err("기본 문자 앱 전환 명령 후 실제 역할을 확인하지 못했습니다".into());
+        }
+        Ok(())
+    })();
+    if switched.is_err() && current_holder(dev).ok().flatten() == current && previous_airplane == Some(false) {
+        // 역할이 그대로면 비행기 모드를 둘 이유가 없다 — 원래대로 되돌린다(실패해도 원래 오류를 보인다)
+        let _ = set_airplane_mode(dev, false);
     }
-    if current.as_deref() != Some(SMSIE_PKG) {
-        run(
-            dev,
-            &format!("cmd role add-role-holder {SMS_ROLE} {SMSIE_PKG}"),
-        )
-        .map_err(|e| format!("기본 문자 앱 전환 실패: {e}"))?;
+    switched
+}
+
+/// 비행기 모드 켜짐 여부 — `cmd connectivity airplane-mode`(Android 11+)
+fn airplane_mode(dev: &mut dyn ADBDeviceExt) -> Result<bool, String> {
+    match run(dev, "cmd connectivity airplane-mode")?.trim() {
+        "enabled" => Ok(true),
+        "disabled" => Ok(false),
+        other => Err(format!("비행기 모드 상태를 읽지 못했습니다({other})")),
     }
-    if current_holder(dev)?.as_deref() != Some(SMSIE_PKG) {
-        return Err("기본 문자 앱 전환 명령 후 실제 역할을 확인하지 못했습니다".into());
+}
+
+fn set_airplane_mode(dev: &mut dyn ADBDeviceExt, on: bool) -> Result<(), String> {
+    let verb = if on { "enable" } else { "disable" };
+    run(dev, &format!("cmd connectivity airplane-mode {verb}"))
+        .map_err(|e| format!("비행기 모드 {} 실패: {e}", if on { "켜기" } else { "끄기" }))?;
+    if airplane_mode(dev)? != on {
+        return Err(format!("비행기 모드를 {} 못했습니다", if on { "켜지" } else { "끄지" }));
     }
     Ok(())
 }
@@ -450,8 +483,18 @@ pub fn restore_stage(
             return Err(format!("{id}: 문자·통화 기록 백업이 없습니다"));
         }
     }
-    let problems = super::verify::verify_manifest(backup_root, &mut manifest);
-    if !problems.is_empty() || !manifest.complete() {
+    let mut problems = super::verify::verify_manifest(backup_root, &mut manifest);
+    // 요청한 항목 자체로 판정한다(일반 복원과 같은 기준). manifest.complete()는 마지막 백업 실행의 선택 기준이라,
+    // 갱신 때 문자를 고르지 않으면(excludedItems) 앞서 정상 백업된 문자 기록까지 못 쓰게 만들었다(2026-10-08 실기기).
+    for item in &manifest.items {
+        if item.status != super::model::ItemStatus::Done
+            || !item.errors.is_empty()
+            || item.entries.iter().any(|e| e.error.is_some())
+        {
+            problems.push(format!("{}: 완료되지 않은 백업입니다", item.id));
+        }
+    }
+    if !problems.is_empty() {
         return Err(format!(
             "문자·통화 기록 백업 검증 실패: {}",
             problems.join(" / ")
@@ -499,7 +542,7 @@ pub fn restore_stage(
         .collect::<Vec<_>>()
         .join("\n");
     Ok(format!(
-        "폰을 비행기 모드로 전환했는지 확인하세요(전환 중 수신 문자 유실 방지).\n내장 저장소 → volte_sms_backup에 검증한 파일({list})을 올려 두었습니다.\n{instructions}\n선택한 항목의 성공 안내를 확인한 뒤 [확인하고 진행]을 눌러주세요.",
+        "비행기 모드를 켰습니다(기본 문자 앱이 바뀐 동안 수신 문자 유실 방지 — 마무리에서 원래대로 돌립니다).\n내장 저장소 → volte_sms_backup에 검증한 파일({list})을 올려 두었습니다.\n{instructions}\n선택한 항목의 성공 안내를 확인한 뒤 [확인하고 진행]을 눌러주세요.",
     ))
 }
 
@@ -507,9 +550,9 @@ pub fn restore_stage(
 pub fn restore_finish(dev: &mut dyn ADBDeviceExt, state_dir: &Path) -> Result<Vec<String>, String> {
     let mut log = Vec::new();
     let key = crate::device_io::identity_key(dev)?;
-    let prev = super::sms_role::load(state_dir, &key)?
-        .ok_or("이 기기의 문자 앱 원복 기록이 없습니다 — 설정에서 기본 문자 앱을 확인해 주세요")?
-        .previous_holder;
+    let record = super::sms_role::load(state_dir, &key)?
+        .ok_or("이 기기의 문자 앱 원복 기록이 없습니다 — 설정에서 기본 문자 앱을 확인해 주세요")?;
+    let prev = record.previous_holder.clone();
     let current = current_holder(dev)?;
     if current != prev && current.as_deref() != Some(SMSIE_PKG) {
         return Err(
@@ -537,6 +580,12 @@ pub fn restore_finish(dev: &mut dyn ADBDeviceExt, state_dir: &Path) -> Result<Ve
     }
     if current_holder(dev)? != prev {
         return Err("기본 문자 앱 원복 명령 후 실제 역할을 확인하지 못했습니다".into());
+    }
+    // 문자 앱을 되돌린 뒤에만 비행기 모드를 원래대로 — 그 전에 끄면 문자가 sms-ie로 들어올 수 있다
+    if record.previous_airplane == Some(false) {
+        set_airplane_mode(dev, false)
+            .map_err(|e| format!("{e} — 폰에서 비행기 모드를 직접 꺼 주세요"))?;
+        log.push("비행기 모드를 원래대로 껐습니다 — 통신이 다시 연결됩니다".into());
     }
     super::sms_role::remove(state_dir, &key)?;
     log.push(
@@ -695,6 +744,8 @@ mod tests {
             error: None,
         });
         manifest.record(item);
+        // 실기기: 마지막 백업 갱신에서 문자를 고르지 않아 제외 목록에 있어도, 앞서 정상 백업된 기록은 복원할 수 있다
+        manifest.excluded_items = vec!["sms".into(), "calllog".into()];
         super::super::model::save_manifest_atomic(&manifest, tmp.path()).unwrap();
         std::fs::write(tmp.path().join("smsie/unrecorded.zip"), b"extra").unwrap();
         assert!(restore_stage(
@@ -707,6 +758,8 @@ mod tests {
         .is_err());
         assert!(d.pushed.is_empty());
         restore_stage(&mut d, tmp.path(), &["sms".into()], state.path(), None).unwrap();
+        // 기본 문자 앱이 sms-ie인 동안 수신 문자가 그리로 가지 않게 비행기 모드를 켠다
+        assert!(d.airplane);
         assert!(d.shell_calls.iter().any(|c| c.starts_with("pm grant")));
         assert_eq!(d.pushed.len(), 1);
         assert!(!d
@@ -716,10 +769,14 @@ mod tests {
         assert!(restore_finish(&mut disconnected, state.path()).is_err());
         d.fail_shell.insert("cmd role add-role-holder".into());
         assert!(restore_finish(&mut d, state.path()).is_err());
+        // 문자 앱을 되돌리지 못했으면 비행기 모드도 그대로 둔다
+        assert!(d.airplane);
         d.fail_shell.clear();
         restore_finish(&mut d, state.path()).unwrap();
         assert!(d.shell_calls.iter().any(|c| c
             == "cmd role add-role-holder android.app.role.SMS com.google.android.apps.messaging"));
+        // 원래 꺼져 있었으므로 마무리에서 끈다
+        assert!(!d.airplane);
     }
 
     fn role_device(serial: &str, holder: Option<&str>) -> FakeADBDevice {

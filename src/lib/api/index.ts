@@ -61,7 +61,7 @@ export interface Api extends EfsApi {
   rootCheck(serial?: string): Promise<boolean | null>;
   /** 화면 켜짐·잠금 상태 (읽기 전용) */
   screenState(serial?: string): Promise<ApiResult<{ awake: boolean; locked: boolean }>>;
-  /** 화면 켜기(WAKEUP 키 — 끄지 않음, 잠금은 풀지 않음) — 루팅 실전에서만 */
+  /** 화면 켜기(WAKEUP 키 — 끄지 않음, 잠금은 풀지 않음) — 루팅·복원 실전에서만 */
   screenWake(serial?: string): Promise<ApiResult<null>>;
   /** 직접 지정한 펌웨어 폴더 검사 — <partition>_*.sin 존재 + 부트 이미지 추출 가능 */
   firmwareDirCheck(dir: string, partition: string): Promise<ApiResult<FirmwareDirInfo>>;
@@ -243,7 +243,8 @@ const hybridApi: Api = {
   },
 
   async screenWake(serial) {
-    if (!REAL_STEPS.root) return { ok: false, error: "루팅 실전 실행이 비활성화되어 있습니다" };
+    // 루트 승인·문자 복원처럼 폰 화면 조작이 필요한 실전 단계에서만
+    if (!REAL_STEPS.root && !REAL_STEPS.restore) return { ok: false, error: "실전 실행이 비활성화되어 있습니다" };
     return await invokeResult<null>("screen_wake", { serial: serial ?? null });
   },
 

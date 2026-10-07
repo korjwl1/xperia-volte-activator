@@ -99,3 +99,10 @@ Rust tests use fake/replay transports only: strict CRC including one-byte corrup
 Exact command results and commit information are recorded in `efs-native-completion.md`. All live tests remain unexecuted. DIAG setup/authentication support, C# decimal flag quirks/PUT padding, short NV acceptance, actual sync durability, qcser behavior, physical COM identity, disconnect recovery and carrier/IMS functionality need separately authorized hardware validation.
 
 2026-10-05 follow-up: DIAG reads the selected device model and uses checked shell statuses. Mark IV XQ-CT/XQ-CQ applies and reads back persist.usb.eng before USB configuration, without SIM queries; this follows Hanabi's separate troubleshooting comment, not automatic beta11 code. Mark II PDC and Mark IV KT/LGU modem work are external advisories, not blanket EFS blockers after the user-requested model-workflow recheck. PRO-I uses boot. Final IMS polling updates the prompt without automatically closing it. File readback, IMS registration and optional user call confirmation are independent outcomes. Latest policy: model-workflow-recheck-20261005.md.
+
+## 2026-10-07 first hardware run (XQ-DQ44, SKT slot 1)
+
+- DIAG exposes three Qualcomm ports (`05C6:90F7` MSM/MDM/CNSS). The MSM port answered. Upstream `port=auto` tries ports in name order and takes the first responder.
+- Suppression is now best-effort, like upstream `DisableLogs`/`DisableMessages`, which catch every failure. An unexpected but complete range list (76 bytes) or a DIAG reject (0x15 for message SetMask) becomes a warning. Timeout and transport errors still fail. DIAG reject errors include the first request bytes.
+- `NV_NOTACTIVE`(5) during snapshot is recorded as "no prior value" (`nvInactiveBefore` warning, no blob). Rollback skips it because DIAG cannot make an NV inactive again.
+- Upload ×2 succeeded. Readback matched 80/82. `qp_ims_service_enablement_config` differs in one byte, and `qp_ims_xcap_common_config` keeps its previous content. After the properties step and reboot, IMS registered with VoLTE on.

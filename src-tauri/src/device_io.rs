@@ -91,6 +91,14 @@ macro_rules! su {
 }
 pub(crate) use su;
 
+/// 루트 셸 명령(동적 문자열) — `su!`와 같은 위치 탐색. 명령 전체를 홑따옴표 한 덩어리로 넘긴다.
+pub(crate) fn su_command(cmd: &str) -> String {
+    format!(
+        "\"$(command -v su || echo /debug_ramdisk/su)\" -c '{}'",
+        cmd.replace('\'', "'\\''")
+    )
+}
+
 /// 명령 뒤에 종료 코드 표식을 붙여 실행한다. 표식이 없으면 출력이 잘린 것으로 보고 실패한다.
 /// 개행으로 잇기 때문에 명령이 `;`나 `&`로 끝나도 문법이 깨지지 않는다.
 pub fn shell_run(dev: &mut dyn ADBDeviceExt, command: &str) -> Result<ShellOutput, String> {

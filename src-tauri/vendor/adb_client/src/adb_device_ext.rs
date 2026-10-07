@@ -76,6 +76,12 @@ pub trait ADBDeviceExt {
     /// Push `stream` to `path` on the device.
     fn push(&mut self, stream: &mut dyn Read, path: &dyn AsRef<str>) -> Result<()>;
 
+    /// [xvolte patch] Push and set the file modification time (seconds since epoch) via sync DONE.
+    fn push_with_mtime(&mut self, stream: &mut dyn Read, path: &dyn AsRef<str>, mtime: u32) -> Result<()> {
+        let _ = mtime;
+        self.push(stream, path)
+    }
+
     /// List the items in a directory on the device
     fn list(&mut self, path: &dyn AsRef<str>) -> Result<Vec<ADBListItemType>>;
 

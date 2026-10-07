@@ -75,6 +75,11 @@ impl ADBDeviceExt for ADBTcpDevice {
     }
 
     #[inline]
+    fn push_with_mtime(&mut self, stream: &mut dyn Read, path: &dyn AsRef<str>, mtime: u32) -> Result<()> {
+        self.inner.push_with_mtime(stream, path, mtime)
+    }
+
+    #[inline]
     fn reboot(&mut self, reboot_type: crate::RebootType) -> Result<()> {
         self.inner.reboot(reboot_type)
     }

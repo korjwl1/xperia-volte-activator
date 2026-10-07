@@ -176,3 +176,30 @@ status: 진행 전 — 2026-10-05 기준 아래 항목은 모두 **실기기에�
 - [x] 2026-10-07 Windows fastboot 드라이버 자동 설치: 판매명 "Xperia 1 V" → 공식 `xperia-1-v-driver` 다운로드·서명 드라이버 지정(UAC) → libusb로 getvar 성공.
 - [x] 2026-10-07 실제 `oem unlock`(XQ-DQ44, GUI): 코드 수락 OKAY(즉시), 자동 재부팅 없음. **직후 `getvar unlocked`는 no**이고, `reboot-bootloader` 후 다시 읽으면 yes(6초 후 재연결). 엔진이 OKAY+no일 때 부트로더를 재시작해 재확인하도록 수정했다. 이후 OS 재부팅으로 초기화 진행.
 - [ ] 수정한 엔진의 언락 경로(OKAY → reboot-bootloader → yes 확인) GUI 재실행 검증 — 다음 언락 기기에서 확인
+
+### 2026-10-07 실기기 EFS/VoLTE (XQ-DQ44, 67.2.A.3.178, SIM1 SKT·SIM2 없음, 개발 CLI 단계별)
+- [x] DIAG 전환(su) → `05C6:90F7` 포트 3개(MSM COM5·MDM COM6·CNSS COM7). EfsTools `port=auto`는 이름순으로 처음 응답하는 포트를 쓴다 → MSM(COM5)로 hello/query 성공.
+- [x] 로그·메시지 억제: log ranges 응답 76바이트(기대 형식 아님), message SetMask는 0x15(BAD_LEN)로 거부 → 원본처럼 경고만 남기고 진행하도록 수정.
+- [x] 스냅샷: NV 6862가 `NV_NOTACTIVE`(5) → "값 없었음"으로 기록하고 복원 시 건너뛰도록 수정. 82개 대상 중 66개 저장, 16개 없음(`complete:true`).
+- [x] SKT1 업로드 2회 오류 0 → 리드백 80/82 일치. 불일치 2개:
+  - `qp_ims_service_enablement_config`: 프리셋이 반영됐지만 35번째 바이트가 01로 남는다.
+  - `qp_ims_xcap_common_config`: 기존 값이 그대로다(모뎀이 유지하거나 다시 쓰는 것으로 보임).
+  - 원본 도구는 리드백 검증이 없다.
+- [x] `volte_props_set` 4종 설정 후 명령이 직접 재부팅한다 → 부팅 후 persist.dbg 4종 = 1, USB adb 복귀.
+- [x] IMS: SIM1 `registered`·voice true·VoLTE on(LTE B7). 사용자 통화 확인은 아래 항목.
+- [x] 사용자 VoLTE 발신·수신 통화 확인 — 2026-10-07 사용자 확인 "매우 잘 돼"
+- [x] 사용자 결정 2026-10-07: 리드백 불일치는 로그에만 남긴다(판정은 IMS 등록). DIAG 포트는 사용자가 직접 고른다(이 PC에서는 MSM COM5)
+
+### 2026-10-08 실기기 복원 (XQ-DQ44, 루팅 상태, DCIM·문자 제외)
+- [x] 백업 폴더 무변경(전후 목록·manifest 해시 동일)
+- [x] APK 88개 설치(1차, exec 방식), 이후 APK는 push+경로 방식으로 변경
+- [x] 파일 항목: sync push 방식으로 다운로드·사진·동영상·음악·문서·기타·앱 데이터 정상, 표본 해시·mtime 일치
+- [x] 앱 데이터 소유권 맞춤(30개 앱) — 루트 필요
+- [x] 복원 후 앱 실행 점검 — 2026-10-08 사용자 확인 "잘 되는거 같네"
+- [x] 연락처: 폰에 이미 295명(Google 동기화) = 백업 295명 → 가져오기 생략(중복 방지)으로 엔진 변경. 부족할 때는 vcf push 후 Google 연락처 ImportVCardActivity를 MediaStore URI로 자동 실행(조회만 실측)
+- [x] 문자·통화 기록: 엔진이 비행기 모드 자동 켜기 → 기본 문자 앱 sms-ie → 사용자 가져오기 → 원래 앱(Google 메시지) 복귀 → 비행기 모드 끄기. SMS 2,020/2,020, MMS 1,215/1,215, 통화 1,012 → 폰 1,015(초기화 후 새 통화 3건)
+  - 마지막 백업 갱신에서 문자를 고르지 않아 excludedItems에 있으면 준비 단계가 `complete()`로 거부했다 → 요청한 항목 자체(완료·오류 없음·해시)로 판정하도록 수정
+- [ ] 연락처 가져오기 화면 자동 실행(부족한 경우) 실기기 확인
+- [ ] DCIM(130 GB) 복원 시간 측정
+- [ ] push 방식 APK 설치를 실기기에서 다시 확인
+- [ ] 루트 없는 기기에서 앱 데이터가 건너뛰어지고 안내되는지

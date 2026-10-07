@@ -216,7 +216,7 @@ invoke('backup_delete', { dir }) → void — 완료 화면에서 사용자 확�
 //   complete = 전수 열거 완료 + 오류 0 (§6-2) — 파괴 단계 게이트의 입력
 // backup:progress에 항목 저장 후 'done'|'partial'|'pending'을 전송. 파일 카운터만으로 완료 판정하지 않음.
 invoke('backup_manifest_check', { dir }) → BackupSummary | null   // 기존 백업 폴더 완결 검사 (백업 스킵 시 게이트용)
-invoke('restore_run', { serial, dir, items: string[] }) → { logs: string[], failures: string[], smsiePending: boolean }
+invoke('restore_run', { serial, dir, items: string[] }) → { logs: string[], failures: string[], smsiePending: boolean, contactsPending: boolean }   // 2026-10-08: 연락처가 이미 백업 수 이상이면 contactsPending=false(가져오기 생략)
 invoke('smsie_prepare', { serial, download: boolean }) → string[]
 invoke('smsie_collect', { serial, backupDir, confirmComplete?: boolean }) → { ready: boolean, summary: BackupSummary|null, cleanupWarning: string|null }
 // 기본 false: ZIP/JSON 검사·PC 수집만. ready는 선택한 산출물 모두의 파일 검사 통과이며,
@@ -351,7 +351,7 @@ invoke('run_guard', { active: boolean, reason?: string }) → void
 ```ts
 invoke('root_check', { serial? }) → boolean            // su -c id(su가 PATH에 없으면 /debug_ramdisk/su) 결과에 uid=0 — Magisk 허용 창이 뜰 수 있음, 기기 변경 없음
 invoke('screen_state', { serial? }) → { awake, locked }   // 읽기 전용 — mWakefulness=Awake / isKeyguardShowing (2026-10-07)
-invoke('screen_wake', { serial? }) → null            // input keyevent KEYCODE_WAKEUP — 켜기만, 잠금 해제 안 함. 프론트는 REAL_STEPS.root일 때만
+invoke('screen_wake', { serial? }) → null            // input keyevent KEYCODE_WAKEUP — 켜기만, 잠금 해제 안 함. 프론트는 REAL_STEPS.root 또는 restore일 때만(루트 승인·문자 복원 앱 화면)
 // root_reboot·fastboot_reboot target에 "fastboot"(fastbootd) 추가 — 부트 이미지 기록은 fastbootd에서만(fastboot_flash가 is-userspace=yes 요구)
 invoke('firmware_dir_check', { dir, partition }) → { file, path, fingerprint, imageBytes }
 // PC 폴더(한 단계 하위 포함)의 SIN 후보는 정확히 하나여야 한다. 같은 폴더 update.xml의 지문 필수.
@@ -397,3 +397,4 @@ invoke('firmware_dir_check', { dir, partition }) → { file, path, fingerprint, 
 - Windows 장치 목록에서 부트로더 모드 Sony 폰(`USB\VID_0FCE&PID_0DDE`)을 찾는다. 드라이버가 없으면 판매명(`ro.semc.product.name`)으로 Sony 공식 드라이버 목록(opendevices.sony.net)에서 "<판매명> driver" 항목을 찾는다. 없으면 규칙 주소(`xperia-1-v-driver` 형식)를 쓰고, 내장 모델 표는 없다.
 - 공식 API의 서명된 임시 주소로 zip을 받아 Sony WinUSB INF를 확인한 뒤, 관리자 권한(UAC 한 번)으로 저장소에 추가하고 SetupAPI로 그 장치에 지정한다. 이미 드라이버가 있으면 아무것도 하지 않는다.
 - facade `fastbootDriverEnsure`는 `REAL_STEPS.fastboot`일 때만 호출한다. `usb_modes`는 드라이버 없는 부트로더 폰을 `mode: "fastboot-nodriver"`로 알린다.
+2026-10-08 복원 전송 변경(실기기): 파일·격리 복원은 sync push(`push_with_mtime`)로 `<dst>/.xvolte-restore-…` 단계 폴더에 올린 뒤 기기 셸 한 번으로 합친다. 이미 있는 파일은 지운 뒤 옮기고, 옮긴 수·남은 수를 검증한다. exec stdin tar 스트리밍은 없앴다. APK는 `/data/local/tmp`에 push한 뒤 `pm install-write … <경로>`로 넘긴다. app-data는 루트가 있고 앱이 설치된 경우에만 복원하고, 끝나면 루트로 소유권(uid:1078)·프로젝트 ID·P를 맞춘다.

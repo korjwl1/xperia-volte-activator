@@ -292,6 +292,8 @@ export interface RestoreOutcome {
   failures: string[];
   /** 문자·통화 기록(smsie) 수동 복원이 남아 있음 — 수동 개입 단계로 진행 */
   smsiePending: boolean;
+  /** 폰에서 연락처 가져오기가 남음 — 이미 계정 동기화로 백업 수만큼 있으면 false(단계 생략) */
+  contactsPending: boolean;
 }
 
 /** fastboot getvar 결과 — unlocked·current-slot·slot-successful:a/b·max-download-size … */
