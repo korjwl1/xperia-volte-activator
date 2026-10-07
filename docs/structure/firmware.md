@@ -1,6 +1,6 @@
 # 펌웨어 취득과 업데이트
 
-기준일: 2026-10-07. 담당: `firmware.rs`, `boot_image.rs`, 프론트 `firmwareVersions/firmwareFetch/firmwareDirCheck`와 계획 생성.
+기준일: 2026-10-08. 담당: `firmware.rs`, `boot_image.rs`, 프론트 `firmwareVersions/firmwareFetch/firmwareDirCheck`와 계획 생성. 아래 업데이트 안내·백업·사전 패치 연결은 구현 전 계획입니다.
 
 ## 구현됨: 순정 부트 이미지 준비
 
@@ -35,6 +35,39 @@ flowchart TB
 
 Newflasher 경로의 목적은 필요한 파티션을 제한해 기존 모뎀 설정과 사용자 데이터를 보존하는 것입니다. 모뎀을 제외하면 DSP도 함께 제외하는 정책입니다. 일반 OTA와 동일한 모든 구성 요소의 최신화는 아닙니다. 제외한 모뎀/DSP의 수정·보안 변경은 적용되지 않고 기종/버전 호환성을 별도 확인해야 합니다.
 
+데이터 보존은 무손실 보장이 아닙니다. 고정 도구 버전의 데이터 유지 응답과 `update.xml`의 `NOERASE`, metadata 등 암호화 관련 보존 대상, 파티션 구조 영향을 실행 전에 검사할 계획입니다. userdata 파일만 제외한 것으로 검사를 끝내지 않습니다. [Newflasher 구현](https://github.com/munjeni/newflasher/blob/master/newflasher.c)은 NOERASE 대상으로 기록을 건너뛰며, [Android 문서](https://source.android.com/docs/security/features/encryption/metadata)는 metadata의 암호화 키 보호 정보가 데이터 접근에 필요하다고 설명합니다. 입력 TA 파일 제외와 도구 내부의 TA 프로토콜 명령도 구분합니다.
+
 예정 구현은 원본 파일 삭제 대신 별도 스테이징 허용 목록을 사용합니다. 모델·지역·목표 지문, newflasher 버전/프롬프트, userdata 유지, 출력·종료·기기 연결 및 OS 복귀를 검사해야 합니다. 기기 상태 확인 없이 슬롯 A를 일괄 강제 지정하지 않습니다.
 
 사용자 요청의 3번 업데이트는 VoLTE가 현재 인식될 때만 활성화하고 유지 정책을 고정할 계획입니다. [분기 설명](workflow.md)과 [구현 계획](../../.plans/04-engine/workflow-modes-20261007.md)을 참조하세요. 유지 정책이 실제 플래시 검증을 마쳤다고 표시하지 않습니다.
+
+## 예정 안내·백업·루팅 유지 흐름
+
+```mermaid
+flowchart TB
+  Info[업데이트 안내 / 모델과 버전 확인] --> Policy[현재 잠금 상태 유지 / 루팅 정책 선택]
+  Policy --> Select[공통 백업 선택 / 항목과 저장 위치]
+  Select --> Prep[목표 순정 펌웨어 준비 / 보존 정책 검사]
+  Prep --> Backup{백업 선택?}
+  Backup -->|예| Copy[백업 / 완결과 누락 확인]
+  Copy --> Wait[사용자가 다음 과정 진행]
+  Backup -->|생략| Root{루팅 이미지 필요?}
+  Wait --> Root
+  Root -->|예 / 이미 언락| Patch[같은 폰에서 목표 IMG 패치 / PC 보관]
+  Root -->|아니오| Flash[Newflasher로 순정 SIN 기록]
+  Patch --> Flash
+  Flash --> Apply{준비한 패치 IMG 있음?}
+  Apply -->|예| FB[기종별 검증 후 fastboot 계열 별도 기록]
+  Apply -->|아니오| Verify[OS / 목표 지문 / 루트 / VoLTE 확인]
+  FB --> Verify
+```
+
+안내는 부팅/데이터 손실 가능성, 모뎀·DSP 유지 범위, 판올림 검증 상태를 설명합니다. 백업은 자동 진행의 항목·저장 위치·권한/누락 처리와 같은 화면/엔진을 재사용하고 완료 뒤 사용자 진행을 기다립니다. 생략 선택도 계획에 표시합니다. 정상 업데이트 뒤에는 기존 데이터에 자동 복구를 덮어쓰지 않습니다.
+
+locked 비루팅 기기는 수정 IMG 없이 업데이트합니다. unlocked 비루팅도 기본은 비루팅 유지이며 언락 상태를 유지하기 위한 별도 이미지 패치는 없습니다. 기존 Magisk 루팅은 유지 선택 시에만 **목표 버전**의 boot/init_boot를 미리 패치합니다. 명시적 신규 루팅은 이미 unlocked인 지원 기기에만 제공할 계획입니다.
+
+패치한 raw IMG는 Newflasher 폴더에 넣거나 SIN으로 변조하지 않습니다. Newflasher는 Sony 서명을 포함한 SIN을 처리하며, 루팅 결과는 별도 fastboot/fastbootd 기록으로 적용합니다. 순정 부트를 먼저 업데이트한 뒤 새 패치로 덮어쓰고, 이전 버전 부트를 남겨 루트를 유지하는 방식은 사용하지 않습니다. [Magisk 설치 안내](https://topjohnwu.github.io/Magisk/install.html)는 같은 기기의 이미지 패치와 별도 기록 절차를 설명합니다.
+
+현재 Magisk API는 **현재 설치 지문**과 대조하므로 **목표 버전 사전 준비** 계약을 추가해야 합니다. 기존 검사를 전역 완화하지 않습니다. 출발/목표 지문·같은 기기·출처/해시를 묶어 준비하고 Newflasher 완료와 후속 슬롯 기록을 따로 저장합니다. 첫 OS 부팅 전 직접 fastboot 연계는 기종/버전 검증 시에만 사용하며, 그렇지 않으면 순정 OS에서 목표 지문을 확인한 뒤 준비 IMG를 기록합니다. 순정 업데이트 성공 뒤 루팅 기록 실패는 부분 완료로 표시합니다. 상세는 [루팅 문서](root-unroot.md)에 있습니다.
+
+Android 판올림에도 적용한 외부 근거는 [Hanabi의 1 VI Android 15 글](https://cafe.naver.com/x1smart/606471)에 있습니다. 백업과 Bluetooth 후속 문제가 함께 안내됐으며 다른 모델의 보장은 아닙니다. [앨리자 가이드](https://cafe.naver.com/x1smart/609380) 댓글에는 부팅 실패 뒤 초기화를 선택한 보고도 있습니다. [기기별 메모](../devices.md)에 외부 근거와 앱 실측을 구분합니다.

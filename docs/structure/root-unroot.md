@@ -1,6 +1,6 @@
 # 루팅과 언루팅
 
-기준일: 2026-10-07. 담당: `magisk/mod.rs`, `magisk/patch.rs`, `firmware.rs`, `boot_image.rs`, `apk_verify.rs` 및 위자드의 root/unroot 러너.
+기준일: 2026-10-08. 담당: `magisk/mod.rs`, `magisk/patch.rs`, `firmware.rs`, `boot_image.rs`, `apk_verify.rs` 및 위자드의 root/unroot 러너.
 
 ## 부트 파티션 선택
 
@@ -53,3 +53,17 @@ XQ-DQ44의 `init_boot` 기록은 fastbootd에서 수행합니다. bootloader의 
 리락 요청이면 순정 복원이 필수 선행 조건입니다. 언루팅만으로 리락이 자동 실행되는 것은 아닙니다. 새 버전 업데이트 뒤 루팅 재적용에는 새 버전의 이미지가 필요합니다. 전체 업데이트 기록 엔진은 아직 미구현입니다.
 
 XQ-DQ44/Magisk 30.7 CLI 단계별 루팅은 확인됐으나 다른 모델·Magisk 버전과 전체 GUI·언루팅 검증은 분리해서 기록합니다. [기기별 기록](../devices.md)과 [실기기 체크리스트](../../.plans/04-engine/device-test-checklist.md)를 확인하세요.
+
+## 예정: 업데이트 전 이미지 패치
+
+업데이트 안내·공통 백업 선택 후 루팅 유지가 선택되면 **목표 버전**의 순정 boot/init_boot를 업데이트 전에 같은 폰에서 패치하고 PC에 보관할 계획입니다. 이미지 생성 자체와 부트 기록 권한은 별개입니다. 이미지 패치는 기존 루트가 없어도 가능하지만 수정 IMG 기록/부팅에는 unlocked 상태가 필요합니다. 이미 언락돼 있어도 비루팅 사용자의 기본 선택은 비루팅 유지입니다. 잠금을 유지하려고 별도 패치를 할 필요는 없습니다.
+
+Newflasher의 순정 SIN 기록과 Magisk raw IMG 기록은 별도 단계입니다. 수정 IMG를 SIN으로 이름 변경/삽입하거나 이전 버전 패치 IMG를 남기지 않습니다. 같은 목표 펌웨어의 순정 부트를 Newflasher로 기록한 뒤 검증된 fastboot/fastbootd 경로에서 새 패치 IMG를 적용합니다. [Newflasher 소스](https://github.com/munjeni/newflasher/blob/master/newflasher.c), [Magisk 설치 문서](https://topjohnwu.github.io/Magisk/install.html)가 각 입력/기록 경로의 근거입니다.
+
+현재 `magisk_patch_with_events`는 `boot_image::verify_fingerprint`로 **현재 설치 지문**을 검사합니다. 따라서 미래 버전 사전 패치를 기존 API에 그대로 넘기는 흐름은 아직 불가능합니다. 출발 지문·목표 펌웨어의 검증된 출처·파티션·순정 부모/패치 해시·같은 기기를 묶은 준비 계약을 추가하고 일반 루팅의 지문 검사는 유지해야 합니다.
+
+검증된 조합에서는 Newflasher 후 직접 fastboot로 전환해 OS 첫 부팅 전에 기록할 수 있도록 설계합니다. 순정 기록 완료 증명·기기/모드/슬롯 검사와 현재 API의 제약을 해결한 뒤에만 활성화합니다. 미검증 조합은 순정 OS로 부팅해 목표 지문을 확인한 후 기존 기록 경로로 준비 IMG를 적용합니다. boot 기종의 모드 검증을 init_boot 기종 결과로 대신하지 않습니다.
+
+기존 Magisk 유지 또는 이미 unlocked인 기기의 명시적 신규 루팅 선택에만 이 단계를 넣고, locked 기기에 재언락·리락을 추가하지 않습니다. 지원하지 않는 루팅 방식·판별 불가 상태는 유지 가능으로 표시하지 않습니다. vbmeta 검증 해제·암호화 옵션 변경을 기본 추가하지 않고 목표 Android의 Magisk/모듈 호환을 따로 확인합니다.
+
+순정 업데이트 뒤 패치 기록이 실패하면 업데이트 성공과 루팅 유지 실패를 따로 표시하고 검증된 이미지/진행 기록을 보존합니다. 해당 경로는 구현/실기기 검증 전입니다. [분기 계획](../../.plans/04-engine/workflow-modes-20261007.md)의 상태·재개·검증 기준을 따릅니다.
