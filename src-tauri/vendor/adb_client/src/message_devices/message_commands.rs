@@ -43,6 +43,8 @@ pub enum MessageSubcommand {
     Done = 0x454E_4F44,
     Data = 0x4154_4144,
     List = 0x5453_494C,
+    /// LIS2 — 64-bit size/time directory listing (device feature `ls_v2`)
+    List2 = 0x3253_494C,
 }
 
 impl BinaryEncodable for MessageSubcommand {

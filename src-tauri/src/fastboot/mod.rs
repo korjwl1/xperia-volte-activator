@@ -71,7 +71,7 @@ fn redact(line: &str, secret: Option<&str>) -> String {
         }
     }
     let lower = line.to_ascii_lowercase();
-    if ["imei", "meid", "serialno", "serial-number"]
+    if ["imei", "meid", "serialno", "serial-number", "serial:"]
         .iter()
         .any(|key| lower.contains(key))
     {
@@ -101,6 +101,24 @@ fn with_device<T>(
         }),
     );
     work(dev).map_err(|e| redact(&e, secret.as_deref()))
+}
+
+/// 실행권은 호출자가 쥔 채로 fastboot 장치를 한 번 열어 작업한다(재부팅 뒤 다시 열 때 사용)
+fn on_device<T>(
+    app: &Events,
+    secret: Option<&str>,
+    work: impl FnOnce(&mut FastbootDevice<transport::RusbTransport>) -> Result<T, String>,
+) -> Result<T, String> {
+    let t = transport::RusbTransport::open()?;
+    let app = app.clone();
+    let log_secret = secret.map(str::to_string);
+    let mut dev = FastbootDevice::new(
+        t,
+        Box::new(move |line| {
+            let _ = app.emit("fastboot:log", redact(&line, log_secret.as_deref()));
+        }),
+    );
+    work(&mut dev).map_err(|e| redact(&e, secret))
 }
 
 /// getvar:all — 읽기 전용 프로브
@@ -156,18 +174,45 @@ pub(crate) async fn fastboot_unlock_with_events(
     let secret = code.clone();
     let operation = crate::device_io::WriteOperation::acquire()?;
     crate::tasks::blocking("부트로더 언락", move || {
-        with_device(operation, app, Some(secret), move |mut d| {
-            ensure_target(&mut d, &expected_serial)?;
+        // 재부팅·재연결까지 한 작업으로 쥔다
+        let _operation = operation;
+        let applied_now = on_device(&app, Some(&secret), |d| {
+            ensure_target(d, &expected_serial)?;
             d.ensure_bootloader()?;
             if !d.unlocked()? {
                 d.oem_unlock(&code)?;
             }
-            let unlocked = d.unlocked()?;
-            if !unlocked {
-                return Err("언락 후 unlocked=yes가 확인되지 않습니다".into());
+            if d.unlocked()? {
+                return Ok(true);
             }
-            Ok(UnlockResult { unlocked })
-        })
+            // 실기기(XQ-DQ44): oem unlock이 OKAY여도 getvar unlocked는 부트로더를 다시 시작해야 yes로 바뀐다.
+            // OS로 부팅해 초기화가 진행되기 전에, 부트로더로 재시작해 실제 반영을 확인한다.
+            d.reboot("bootloader")?;
+            Ok(false)
+        })?;
+        if applied_now {
+            return Ok(UnlockResult { unlocked: true });
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        loop {
+            let checked = on_device(&app, Some(&secret), |d| {
+                ensure_target(d, &expected_serial)?;
+                d.ensure_bootloader()?;
+                d.unlocked()
+            });
+            match checked {
+                Ok(true) => return Ok(UnlockResult { unlocked: true }),
+                Ok(false) => {
+                    return Err("부트로더 재시작 후에도 unlocked=yes가 확인되지 않습니다 — 언락 코드와 OEM 잠금 해제 허용을 확인해 주세요".into())
+                }
+                // 재열거 중: 장치가 아직 없거나 열 수 없다
+                Err(e) if std::time::Instant::now() < deadline && (e.contains("찾을 수 없습니다") || e.contains("열기 실패")) => {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                }
+                Err(e) => return Err(format!("부트로더 재시작 후 상태를 확인하지 못했습니다: {e}")),
+            }
+        }
     })
     .await
 }
@@ -319,7 +364,7 @@ fn lock_verified_device<T: transport::FastbootTransport>(
 ) -> Result<UnlockResult, String> {
     let serial = ensure_target(d, expected_serial)?;
     d.ensure_bootloader()?;
-    if d.getvar(&format!("has-slot:{partition}"))?.as_deref() != Some("yes") {
+    if !d.has_both_slots(partition)? {
         return Err("양쪽 슬롯이 있는 파티션인지 확인할 수 없습니다".into());
     }
     require_relock_gate(verify_from_dir(
@@ -400,7 +445,7 @@ pub(crate) async fn fastboot_flash_with_events(
         )?;
         with_device(operation, app, None, move |mut d| {
             let serial = ensure_target(&mut d, &expected_serial)?;
-            d.ensure_bootloader()?;
+            d.ensure_userspace()?;
             let device_key = device_key(&serial);
             let slot = d
                 .getvar("current-slot")?
@@ -408,7 +453,7 @@ pub(crate) async fn fastboot_flash_with_events(
             if slot != "a" && slot != "b" {
                 return Err("현재 슬롯이 올바르지 않습니다".into());
             }
-            if d.getvar(&format!("has-slot:{partition}"))?.as_deref() != Some("yes") {
+            if !d.has_both_slots(&partition)? {
                 return Err("양쪽 슬롯이 있는 파티션인지 확인할 수 없습니다".into());
             }
             let dir = crate::app_paths::data_dir().ok_or("앱 데이터 폴더를 찾지 못했습니다")?;
@@ -466,7 +511,7 @@ pub(crate) async fn fastboot_reboot_with_events(
 ) -> Result<(), String> {
     ensure_write_enabled()?;
     // USB를 열기 전에 대상 검사
-    if !matches!(target.as_str(), "os" | "bootloader") {
+    if !matches!(target.as_str(), "os" | "bootloader" | "fastboot") {
         return Err(format!("알 수 없는 재부팅 대상: {target}"));
     }
     let operation = crate::device_io::WriteOperation::acquire()?;

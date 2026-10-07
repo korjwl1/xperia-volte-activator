@@ -9,6 +9,15 @@ pub const FB_SUBCLASS: u8 = 0x42;
 pub const FB_PROTOCOL: u8 = 0x03;
 
 const SONY_VID: u16 = 0x0FCE;
+/// fastbootd(사용자 공간 fastboot)의 AOSP 표준 ID — 실기기(XQ-DQ44)에서 Sony 폰도 이 ID로 나온다
+pub const FASTBOOTD_VID: u16 = 0x18D1;
+pub const FASTBOOTD_PID: u16 = 0x4EE0;
+
+/// 이 도구가 여는 fastboot 장치 — Sony 부트로더(VID 0FCE) 또는 fastbootd(18D1:4EE0).
+/// 일반 Google ID라 다른 기기도 해당될 수 있으므로, 쓰기 명령은 열고 나서 serialno를 대조한다.
+pub fn is_fastboot_id(vendor_id: u16, product_id: u16) -> bool {
+    vendor_id == SONY_VID || (vendor_id == FASTBOOTD_VID && product_id == FASTBOOTD_PID)
+}
 /// 응답 1건의 전체 대기(INFO 프레임이 와도 늘어나지 않는 총 시간, §9-3 유한 처리)
 pub const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 /// getvar:all — 정상 기기도 INFO 프레임을 수십 개 보내므로 일반 응답보다 길게
@@ -48,7 +57,7 @@ impl RusbTransport {
             let Ok(desc) = dev.device_descriptor() else {
                 continue;
             };
-            if desc.vendor_id() == SONY_VID && has_fastboot_interface(&dev, &desc) {
+            if is_fastboot_id(desc.vendor_id(), desc.product_id()) && has_fastboot_interface(&dev, &desc) {
                 matches.push(dev);
             }
         }
@@ -127,12 +136,27 @@ impl RusbTransport {
             let _ = handle.release_interface(iface_no);
             return Err(format!("fastboot USB 대체 설정 실패: {e}"));
         }
-        Ok(Self {
+        let transport = Self {
             handle,
             ep_out: ep_out.ok_or("bulk OUT 엔드포인트가 없습니다")?,
             ep_in: ep_in.ok_or("bulk IN 엔드포인트가 없습니다")?,
             iface_no,
-        })
+        };
+        transport.drain_stale_responses();
+        Ok(transport)
+    }
+
+    /// 이전 연결이 끝까지 읽지 않은 응답을 비운다. 남겨 두면 다음 명령의 응답으로 잘못 읽히고,
+    /// fastbootd는 응답을 다 보내기 전까지 새 명령을 받지 않는다(실측: 끊긴 getvar:all 뒤 명령 전송 시간 초과).
+    fn drain_stale_responses(&self) {
+        let deadline = Instant::now() + GETVAR_ALL_TIMEOUT;
+        let mut buf = [0u8; 512];
+        while Instant::now() < deadline {
+            match self.handle.read_bulk(self.ep_in, &mut buf, Duration::from_millis(200)) {
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
     }
 }
 

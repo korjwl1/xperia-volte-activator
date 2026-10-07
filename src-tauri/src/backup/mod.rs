@@ -230,7 +230,7 @@ pub(crate) async fn backup_run_with_events(
 
 /// 백업 시작 — 지정 폴더 아래 시작 시각 기준 폴더를 만들고 절대 경로를 반환(진행 기록에 먼저 저장)
 #[tauri::command]
-pub async fn backup_prepare(serial: Option<String>, dest: String) -> Result<String, String> {
+pub async fn backup_prepare(serial: Option<String>, dest: String) -> Result<PreparedBackup, String> {
     let dest_path = PathBuf::from(&dest);
     if dest.trim().is_empty() || !dest_path.is_dir() {
         return Err("백업 저장 위치 폴더가 없습니다 — 먼저 지정해 주세요".into());
@@ -239,9 +239,20 @@ pub async fn backup_prepare(serial: Option<String>, dest: String) -> Result<Stri
     let work = move || {
         let _operation = operation;
         crate::adb::with_first_device(&serial, |dev| runner::prepare_backup_root(dev, &dest_path))
-            .map(|p| p.to_string_lossy().to_string())
+            .map(|(dir, existing)| PreparedBackup {
+                dir: dir.to_string_lossy().to_string(),
+                existing,
+            })
     };
     crate::tasks::blocking("백업 준비", work).await
+}
+
+/// 백업 폴더 준비 결과 — existing이면 같은 폰의 기존 백업을 이어서 갱신한다
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedBackup {
+    pub dir: String,
+    pub existing: bool,
 }
 
 #[derive(Serialize)]
@@ -310,9 +321,9 @@ fn delete_backup_dir(dir: &Path) -> Result<(), String> {
     let is_backup_name = dir
         .file_name()
         .and_then(|n| n.to_str())
-        .is_some_and(|n| n.starts_with("backup-"));
+        .is_some_and(runner::is_backup_dir_name);
     if !is_backup_name {
-        return Err("이 앱이 만든 백업 폴더(backup-…)만 삭제할 수 있습니다".into());
+        return Err("이 앱이 만든 백업 폴더(xva-<모델>-backup)만 삭제할 수 있습니다".into());
     }
     model::load_manifest(dir)
         .map_err(|e| format!("백업 폴더로 확인되지 않아 삭제하지 않습니다 — {e}"))?;

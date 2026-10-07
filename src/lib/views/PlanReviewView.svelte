@@ -1,6 +1,5 @@
 <script lang="ts">
   import Modal from "$lib/components/Modal.svelte";
-  import CommunicationPanel from "$lib/components/CommunicationPanel.svelte";
   import { Button } from "$lib/components/ui/button";
   import OptionCard from "$lib/components/OptionCard.svelte";
   import OptionCategory from "$lib/components/OptionCategory.svelte";
@@ -11,6 +10,7 @@
   import { api, inDesktop as desktopRuntime } from "$lib/api";
   import { simIssue, type BackupItem } from "$lib/types";
   import { stepHazard } from "$lib/domain/plan";
+  import { hasLiveActions, liveStepEnabled } from "$lib/domain/execution";
   import { REAL_STEPS } from "$lib/data/runMode";
   import { patchProcedureProblem } from "$lib/data/devices";
   import EfsSetup from "$lib/components/EfsSetup.svelte";
@@ -130,6 +130,8 @@
 
   // 실행 순서 — 실제 실행과 같은 계획(wizard.plan)에서 파생
   // hazard: 초기화·펌웨어/부트 이미지 기록·모뎀 설정 수정 — 툴팁·확인 모달 대상(domain/plan stepHazard)
+  // 실전 실행에 이 빌드가 아직 실전으로 켜지 않은 단계가 섞이면 실행 버튼을 누르기 전에 알린다(실행 시작 때 거부되는 것과 같은 기준)
+  const notLiveSteps = $derived(hasLiveActions(wizard.executionFlags) ? wizard.plan.filter((s) => !liveStepEnabled(s.id, wizard.executionFlags)).map((s) => s.title) : []);
   const planSteps = $derived(wizard.plan.map((s) => ({ title: s.title, wipe: s.wipe, hazard: stepHazard(s) })));
   const patching = $derived(!wizard.opts.backupOnly && wizard.hasPatchTarget);
   // 패치 대상 슬롯의 SIM 문제(없음·PIN 잠김·통신사 미확인) — 기기·선택에 따라 고정
@@ -329,12 +331,6 @@
             </div>
           {/if}
         {/if}
-        {#if patching}
-          <div class="mt-4">
-            <CommunicationPanel snapshot={wizard.communicationBefore} loading={wizard.communicationLoading} error={wizard.communicationError} slots={wizard.communicationSlots} onRefresh={() => void wizard.refreshCommunication("before")} />
-            <p class="mt-2 text-[11px] text-muted-foreground">실행 전 현재 통신을 확인할 수 있습니다. SIM·IMS 상태는 선택한 기록 대상을 바꾸거나 실행을 막지 않습니다.</p>
-          </div>
-        {/if}
       </div>
     </div>
 
@@ -414,9 +410,12 @@
     </div>
   {/if}
 
-  <footer class="h-14 shrink-0 border-t bg-muted/40 flex items-center justify-between px-6">
+  <footer class="h-14 shrink-0 border-t bg-muted/40 flex items-center justify-between gap-4 px-6">
     <Button variant="ghost" size="sm" onclick={() => (wizard.view = wizard.opts.backupOnly ? "device" : "step1")}>← 이전</Button>
-    <Button size="sm" onclick={confirm} disabled={efsBlocked || planSteps.length === 0 || wizard.journalBlocked || !!wizard.pendingJournal}>실행</Button>
+    {#if notLiveSteps.length}
+      <span class="min-w-0 flex-1 truncate text-right text-[11px] text-warning">이 빌드에서 아직 실제로 실행할 수 없는 단계가 있습니다: {notLiveSteps.join(", ")} — [← 이전]에서 작업을 바꿔 주세요</span>
+    {/if}
+    <Button size="sm" onclick={confirm} disabled={efsBlocked || planSteps.length === 0 || notLiveSteps.length > 0 || wizard.journalBlocked || !!wizard.pendingJournal}>실행</Button>
   </footer>
 </div>
 

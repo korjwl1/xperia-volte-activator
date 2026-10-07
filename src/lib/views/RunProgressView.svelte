@@ -126,7 +126,12 @@
 
               <Button size="sm" disabled={wizard.usbError || !!wizard.stepError || wizard.firmwareDirState === "loading"} onclick={() => wizard.resumeRun()}><Play size={13} class="mr-1" />{wizard.runSteps.some((s) => s.status !== "pending") ? "이어서" : "실행"}</Button>
             {/if}
-            <Button size="sm" variant="destructive" onclick={requestAbort}><Square size={12} class="mr-1" />중단</Button>
+            {#if wizard.running || wizard.busy > 0}
+              <Button size="sm" variant="destructive" onclick={requestAbort}><Square size={12} class="mr-1" />중단</Button>
+            {:else}
+              <!-- 멈춘 상태: 중단할 것이 없다 — 계획을 바꾸러 작업 옵션으로 돌아간다 -->
+              <Button size="sm" variant="outline" onclick={() => wizard.backToOptions()}>← 작업 옵션</Button>
+            {/if}
           {:else}
             <Button size="sm" disabled={wizard.backupOmissionNotice} onclick={() => wizard.goFinish()}>다음 → 완료 화면</Button>
           {/if}
@@ -394,6 +399,9 @@
         {/if}
         {#if wizard.manualCurrent.id === "ims-precheck" || wizard.manualCurrent.id === "ims-check"}
           <CommunicationPanel snapshot={wizard.communicationLatest} loading={wizard.communicationLoading} error={wizard.communicationError} slots={wizard.communicationSlots} calls={wizard.callChecks} showCalls onCallChange={(slot, item, checked) => wizard.setCallCheck(slot, item, checked)} />
+        {/if}
+        {#if wizard.manualCurrent.id === "su-grant" && wizard.suGrantHint}
+          <div class="rounded-lg bg-muted px-3 py-2 text-[12px] font-medium text-foreground">{wizard.suGrantHint}</div>
         {/if}
         {#if wizard.manualWatching}
           <div class="flex items-center gap-2 rounded-lg bg-primary/5 px-3 py-2 text-[12px] text-primary">

@@ -289,7 +289,7 @@ pub fn collect(
             if item_for(&f.name).is_none() || !selected.contains(&item_for(&f.name).unwrap()) {
                 continue;
             }
-            found.push((f.name, f.size as u64, f.time));
+            found.push((f.name, f.size, f.time));
         }
     }
     if found.is_empty() {

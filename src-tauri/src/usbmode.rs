@@ -1,6 +1,6 @@
 //! USB 연결 모드 감지 (읽기 전용) — 장치를 열지 않고 USB 디스크립터만 읽는다.
 //! 부트로더(fastboot)·플래시 모드 진입을 자동으로 감지해 "파란/초록 LED 확인 후 Enter" 같은 수동 확인을 없앤다.
-//! - fastboot: 인터페이스 class 0xFF / subclass 0x42 / protocol 0x03 (AOSP fastboot 표준)
+//! - fastboot: 인터페이스 class 0xFF / subclass 0x42 / protocol 0x03 (AOSP fastboot 표준) — 부트로더(Sony VID)와 fastbootd(18D1:4EE0) 모두
 //! - adb:      0xFF / 0x42 / 0x01
 //! - flashmode(Sony S1): 제품 ID 0xADDE — ⚠ 실기기 미검증 (커뮤니티 기록 기준)
 
@@ -8,7 +8,6 @@ use crate::tasks::guarded;
 use serde::Serialize;
 use std::time::Duration;
 
-const SONY_VID: u16 = 0x0FCE;
 const SONY_FLASHMODE_PID: u16 = 0xADDE;
 
 #[derive(Serialize, Debug, PartialEq, Clone)]
@@ -40,7 +39,7 @@ fn scan() -> Result<Vec<UsbModeOut>, String> {
         let Ok(desc) = dev.device_descriptor() else {
             continue;
         };
-        if desc.vendor_id() != SONY_VID {
+        if !crate::fastboot::transport::is_fastboot_id(desc.vendor_id(), desc.product_id()) {
             continue;
         }
         let mut ifaces = vec![];
@@ -58,6 +57,16 @@ fn scan() -> Result<Vec<UsbModeOut>, String> {
             vendor_id: desc.vendor_id(),
             product_id: desc.product_id(),
         });
+    }
+    // 드라이버가 없는 fastboot(부트로더·fastbootd) 폰은 libusb 목록에 아예 나오지 않는다 — Windows 장치 목록으로 따로 알린다
+    if !out.iter().any(|m| m.mode == "fastboot") {
+        if let Some(device) = crate::usb_driver::find_fastboot_device().filter(|d| !d.has_driver) {
+            out.push(UsbModeOut {
+                mode: "fastboot-nodriver".into(),
+                vendor_id: device.vendor_id,
+                product_id: device.product_id,
+            });
+        }
     }
     Ok(out)
 }

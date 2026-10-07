@@ -18,6 +18,7 @@ mod magisk;
 mod storage;
 mod tasks;
 mod usbmode;
+pub mod usb_driver;
 
 #[cfg(all(
     test,
@@ -111,11 +112,14 @@ pub fn run() {
             firmware::firmware_dir_check,
             boot_image::boot_image_check,
             adb::root_check,
+            adb::screen_state,
+            adb::screen_wake,
             journal::journal_save,
             journal::journal_load,
             journal::journal_archive,
             guard::run_guard,
             fastboot::fastboot_getvar,
+            usb_driver::fastboot_driver_ensure,
             fastboot::fastboot_unlock,
             fastboot::fastboot_lock,
             fastboot::flash_history_archive,

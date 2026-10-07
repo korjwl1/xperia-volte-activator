@@ -6,10 +6,10 @@ use super::{
 use std::sync::atomic::Ordering;
 
 const PROPERTIES: &[&str] = &[
-    "su -c setprop persist.dbg.ims_avail_ovr 1",
-    "su -c setprop persist.dbg.volte_avail_ovr 1",
-    "su -c setprop persist.dbg.vt_avail_ovr 1",
-    "su -c setprop persist.dbg.wfc_avail_ovr 1",
+    crate::device_io::su!("setprop persist.dbg.ims_avail_ovr 1"),
+    crate::device_io::su!("setprop persist.dbg.volte_avail_ovr 1"),
+    crate::device_io::su!("setprop persist.dbg.vt_avail_ovr 1"),
+    crate::device_io::su!("setprop persist.dbg.wfc_avail_ovr 1"),
 ];
 /// Shared by the command and fake-device tests; failure/cancellation stops before reboot.
 fn apply_properties(

@@ -65,8 +65,8 @@ pub struct ADBListItem {
     pub time: u32,
     /// The unix mode of the file, used for permissions and special bits
     pub permissions: u32,
-    /// The size of the file
-    pub size: u32,
+    /// The size of the file (64-bit with LIS2; LIST v1 reports only the low 32 bits)
+    pub size: u64,
 }
 
 impl Display for ADBListItem {

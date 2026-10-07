@@ -2,7 +2,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Checkbox } from "$lib/components/ui/checkbox";
   import { CircleCheck, Info, LoaderCircle, RefreshCw, TriangleAlert } from "@lucide/svelte/icons";
-  import { CALL_ITEMS, cellularReady, imsDetail, imsLabel, type CallItem } from "$lib/domain/communication";
+  import { CALL_ITEMS, cellularReady, type CallItem } from "$lib/domain/communication";
   import type { CallCheck, CommunicationSnapshot, SimInfo } from "$lib/types";
 
   let { snapshot, loading = false, error = "", slots = [], calls = [], showCalls = false, onRefresh, onCallChange }:
@@ -26,10 +26,9 @@
         <span class="font-medium">SIM{sim.slot} · {sim.carrier || "통신사 미확인"}</span>
         <span class="flex items-center gap-1 rounded-md px-2 py-1 {observed && cellularReady(sim) ? 'bg-success-container text-success' : 'bg-warning-container text-warning'}">
           {#if observed && cellularReady(sim)}<CircleCheck size={13} />{:else}<TriangleAlert size={13} />{/if}
-          {observed ? imsLabel(sim) : "현재 상태 미확인"}
+          {observed ? (cellularReady(sim) ? "VoLTE 활성" : "VoLTE 비활성") : "현재 상태 미확인"}
         </span>
       </div>
-      {#if observed}<p class="text-[11px] text-muted-foreground">{imsDetail(sim)}</p>{/if}
       {#if showCalls && onCallChange}
         <div class="flex flex-wrap gap-x-4 gap-y-2">
           {#each CALL_ITEMS as item (item.id)}

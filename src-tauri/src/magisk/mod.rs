@@ -386,6 +386,8 @@ pub async fn root_reboot(serial: Option<String>, target: String) -> Result<(), S
     let reboot = match target.as_str() {
         "os" => adb_client::RebootType::System,
         "bootloader" => adb_client::RebootType::Bootloader,
+        // fastbootd — 부트 이미지 기록용(원본 도구 rebootFromAdb("fastboot") 계승)
+        "fastboot" => adb_client::RebootType::Fastboot,
         other => return Err(format!("알 수 없는 재부팅 대상: {other}")),
     };
     let operation = crate::device_io::WriteOperation::acquire()?;

@@ -17,9 +17,10 @@ impl<T: ADBMessageTransport> ADBMessageDevice<T> {
     /// List the entries in the given directory on the device.
     /// note: path uses internal file paths, so Documents is at /storage/emulated/0/Documents
     pub(crate) fn list<A: AsRef<str>>(&mut self, path: A) -> Result<Vec<ADBListItemType>> {
+        let v2 = self.list_v2;
         let mut session = self.take_sync_session()?;
 
-        let output = Self::handle_list(&mut session, path);
+        let output = Self::handle_list_with(&mut session, path, v2);
 
         self.finish_sync_request(session, output)
     }
@@ -70,18 +71,31 @@ impl<T: ADBMessageTransport> ADBMessageDevice<T> {
         Ok(bytes)
     }
 
+    #[cfg(test)]
     fn handle_list<A: AsRef<str>>(
         session: &mut ADBSession<T>,
         path: A,
     ) -> Result<Vec<ADBListItemType>> {
+        Self::handle_list_with(session, path, false)
+    }
+
+    /// [xvolte patch] LIST v1 reports size/mtime as u32, so files over 4 GiB arrive truncated.
+    /// When the device advertises `ls_v2` (Android 11+), use LIS2: DNT2 entries carry a 64-bit
+    /// size and 64-bit times. Wire layout (AOSP file_sync_protocol.h, dent_v2 after the 4-byte id):
+    /// error u32, dev u64, ino u64, mode u32, nlink u32, uid u32, gid u32, size u64,
+    /// atime i64, mtime i64, ctime i64, namelen u32 (72 bytes) + name. DONE carries the same 72 bytes.
+    fn handle_list_with<A: AsRef<str>>(
+        session: &mut ADBSession<T>,
+        path: A,
+        v2: bool,
+    ) -> Result<Vec<ADBListItemType>> {
         session.mark_incomplete(true);
-        // TODO: use LIS2 to support files over 2.14 GB in size.
         // SEE: https://github.com/cstyan/adbDocumentation?tab=readme-ov-file#adb-list
         {
             let mut len_buf = Vec::from([0_u8; 4]);
             LittleEndian::write_u32(&mut len_buf, u32::try_from(path.as_ref().len())?);
 
-            let subcommand_data = MessageSubcommand::List;
+            let subcommand_data = if v2 { MessageSubcommand::List2 } else { MessageSubcommand::List };
 
             let mut serialized_message = subcommand_data.encode();
 
@@ -115,26 +129,36 @@ impl<T: ADBMessageTransport> ADBMessageDevice<T> {
                 &mut current_index,
                 &mut payload,
             )?;
+            const V1_METADATA: usize = 16; // mode u32, size u32, time u32, namelen u32
+            const V2_METADATA: usize = 72;
+            let entry_id = if v2 { "DNT2" } else { "DENT" };
+            let metadata_len = if v2 { V2_METADATA } else { V1_METADATA };
             match str::from_utf8(&status_code)? {
-                "DENT" => {
-                    // Read the file mode, size, mod time and name length in one go, since all their sizes are predictable
-                    const U32_SIZE_IN_BYTES: usize = 4;
-                    const SIZE_OF_METADATA: usize = U32_SIZE_IN_BYTES * 4;
+                id if id == entry_id => {
                     let metadata = Self::read_bytes_from_transport(
                         session,
-                        SIZE_OF_METADATA,
+                        metadata_len,
                         &mut current_index,
                         &mut payload,
                     )?;
-                    let mode = metadata[..U32_SIZE_IN_BYTES].to_vec();
-                    let size = metadata[U32_SIZE_IN_BYTES..2 * U32_SIZE_IN_BYTES].to_vec();
-                    let time = metadata[2 * U32_SIZE_IN_BYTES..3 * U32_SIZE_IN_BYTES].to_vec();
-                    let name_len = metadata[3 * U32_SIZE_IN_BYTES..4 * U32_SIZE_IN_BYTES].to_vec();
-
-                    let mode = LittleEndian::read_u32(&mode);
-                    let size = LittleEndian::read_u32(&size);
-                    let time = LittleEndian::read_u32(&time);
-                    let name_len = LittleEndian::read_u32(&name_len) as usize;
+                    let (mode, size, time, name_len) = if v2 {
+                        // error(0..4) dev(4..12) ino(12..20) mode(20..24) nlink(24..28) uid(28..32)
+                        // gid(32..36) size(36..44) atime(44..52) mtime(52..60) ctime(60..68) namelen(68..72)
+                        let mtime = LittleEndian::read_i64(&metadata[52..60]);
+                        (
+                            LittleEndian::read_u32(&metadata[20..24]),
+                            LittleEndian::read_u64(&metadata[36..44]),
+                            u32::try_from(mtime.max(0)).unwrap_or(u32::MAX),
+                            LittleEndian::read_u32(&metadata[68..72]) as usize,
+                        )
+                    } else {
+                        (
+                            LittleEndian::read_u32(&metadata[0..4]),
+                            u64::from(LittleEndian::read_u32(&metadata[4..8])),
+                            LittleEndian::read_u32(&metadata[8..12]),
+                            LittleEndian::read_u32(&metadata[12..16]) as usize,
+                        )
+                    };
                     if name_len > 65536 {
                         return Err(RustADBError::ADBRequestFailed(
                             "LIST filename exceeds limit".into(),
@@ -175,7 +199,7 @@ impl<T: ADBMessageTransport> ADBMessageDevice<T> {
                         "LIST DONE remaining={}",
                         payload.len() - current_index
                     ));
-                    Self::read_bytes_from_transport(session, 16, &mut current_index, &mut payload)?;
+                    Self::read_bytes_from_transport(session, metadata_len, &mut current_index, &mut payload)?;
                     trace_sync("LIST DONE consumed");
                     session.mark_incomplete(false);
                     return Ok(list_items);
@@ -323,6 +347,38 @@ mod tests {
         assert!(sent.contains(&MessageCommand::Clse));
         assert!(t.incoming.lock().unwrap().is_empty());
     }
+    #[test]
+    fn lis2_reports_64_bit_sizes_and_times_across_fragmented_frames() {
+        // 23,347,495,814 B 동영상 — LIST v1에서는 하위 32비트만 와서 매번 다시 받던 크기
+        let size: u64 = 23_347_495_814;
+        let name = b"VideoPro_20240928_194145.mp4";
+        let mut bytes = b"DNT2".to_vec();
+        let mut meta = vec![0u8; 72];
+        meta[20..24].copy_from_slice(&0o100660u32.to_le_bytes());
+        meta[36..44].copy_from_slice(&size.to_le_bytes());
+        meta[52..60].copy_from_slice(&1_727_520_105i64.to_le_bytes());
+        meta[68..72].copy_from_slice(&(name.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&meta);
+        bytes.extend_from_slice(name);
+        bytes.extend_from_slice(b"DONE");
+        bytes.extend_from_slice(&[0; 72]);
+        for chunk in [7, 33, bytes.len()] {
+            let chunks: Vec<_> = bytes.chunks(chunk).collect();
+            let (mut s, t) = session(&chunks);
+            let listed = ADBMessageDevice::<Transport>::handle_list_with(&mut s, "/sdcard/DCIM", true).unwrap();
+            assert_eq!(listed.len(), 1);
+            match &listed[0] {
+                ADBListItemType::File(e) => {
+                    assert_eq!(e.size, size);
+                    assert_eq!(e.time, 1_727_520_105);
+                    assert_eq!(e.name, "VideoPro_20240928_194145.mp4");
+                }
+                other => panic!("{other}"),
+            }
+            assert!(!*t.awaiting_ack.lock().unwrap());
+        }
+    }
+
     #[test]
     fn invalid_utf8_name_is_flagged_and_the_rest_of_the_folder_is_listed() {
         let mut bytes = Vec::new();

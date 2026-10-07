@@ -19,7 +19,7 @@ Xperia VoLTE 활성화 통합 도구. Tauri 2 + SvelteKit 2 + Svelte 5 + TypeScr
 - 예외(사용자 승인 2026-10-03, feat/fastboot-unlock 워크트리): **fastboot 엔진(언락/리락/플래시) 실전 코드 작성 허용** — 단 실기기 테스트 금지(FakeTransport 단위 테스트). 실행은 `REAL_STEPS.fastboot` 꺼져 있는 동안 시뮬레이션 유지. 설계는 `.plans/04-engine/fastboot.md`.
 - 예외(사용자 승인 2026-10-04, feat/root-engine 워크트리): **루팅 엔진(Magisk 자동 패치·기록·설치) 실전 코드 작성 허용** — 절차는 2026-10-03 실기기 검증 분량. 단 이 구현의 실기기 테스트는 금지(FakeADBDevice 단위 테스트). 실행은 `REAL_STEPS.root` + Cargo feature `root-write` 이중 게이트 뒤(기록은 기존 fastboot-flash 게이트 재사용). 설계는 `.plans/04-engine/root.md`.
 - 예외(사용자 승인 2026-10-04, feat/unroot-relockgate 워크트리): **언루팅 절차 연결 + 리락 게이트(§3-3) 실전 구현 허용** — 기존 명령 조합(root_reboot·fastboot_flash·fastboot_reboot)과 게이트 판정 로직. 실기기 테스트 금지(이력 픽스처 단위 테스트). 리락 게이트는 fastboot-write feature 뒤. 설계는 `.plans/04-engine/unroot-relock.md`.
-- 예외(사용자 승인 2026-10-04): 완료 화면 [백업 파일 삭제] — 사용자가 확인 모달에서 [삭제]를 누른 경우에만, 이 실행이 만든 백업 폴더(이름 `backup-*` + 유효한 manifest.json, 심볼릭 링크·정션 아님)를 PC에서 지운다(`backup_delete`). 사용자가 고른 상위 저장 위치는 지우지 않는다.
+- 예외(사용자 승인 2026-10-04): 완료 화면 [백업 파일 삭제] — 사용자가 확인 모달에서 [삭제]를 누른 경우에만, 이 앱이 만든 백업 폴더(이름 `xva-<모델>-backup` 또는 이전 이름 `backup-*` + 유효한 manifest.json, 심볼릭 링크·정션 아님)를 PC에서 지운다(`backup_delete`). 사용자가 고른 상위 저장 위치는 지우지 않는다.
 - **실기기 미검증 항목은 `.plans/04-engine/device-test-checklist.md` 한 곳에서 관리한다.** 단계의 REAL_STEPS·쓰기 Cargo 기능은 그 단계 항목이 모두 체크되기 전까지 켜서 배포하지 않는다. 새 기기 동작을 추가하면 체크리스트에 항목을 추가한다.
 - 예외(사용자 승인 2026-10-05): **전체 브랜치 병합·통합 코드 리뷰·수정·실기기 이외의 검증 허용**. 원본 파일 읽기, 공식 배포 해시 확인, Sony 서버 부분 다운로드, 빌드·패키징은 허용한다. 실기기 연결·DIAG 전환·COM/USB 동작 테스트는 하지 않으며 기존 쓰기 기능 기본 꺼짐을 유지한다. 통합 리뷰: `.plans/04-engine/full-review-20261005.md`.
 - 예외(사용자 승인 2026-10-05 후속): **조건부 리락 구현·기종 인식 워크플로우 보강 허용**. 과거 리락 무조건 차단 및 II/IV 일괄 제한을 재검토한다. Hanabi 배포 소스와 실제 사용자 보고에 맞추며 PDC·모뎀 교체·외부 앱 설치는 새로 자동화하지 않는다. 실기기 테스트 금지 및 기본 쓰기 비활성은 유지한다. 최신 기준: `.plans/04-engine/model-workflow-recheck-20261005.md`.
@@ -27,6 +27,8 @@ Xperia VoLTE 활성화 통합 도구. Tauri 2 + SvelteKit 2 + Svelte 5 + TypeScr
   - 레지스트리 판이 아니라 I/O 시간 상한을 넣은 사본 `src-tauri/vendor/adb_client`(3.2.3, `[patch.crates-io]`)을 쓴다. 고친 내용은 `vendor/adb_client/PATCHES.md`에 기록하고, 업그레이드할 때 다시 적용한다.
 
 - 예외(사용자 요청 2026-10-05, 개발 CLI): **기존 Rust 엔진을 공유하는 단계별 개발 실행 파일 구현·오프라인 검증 허용**. Cargo `dev-cli`로만 CLI를 포함하고 쓰기 feature는 별도 명시한다. 일반 앱의 기본 feature·REAL_STEPS는 유지한다. 실기기 단계별 검토를 위한 준비이며 이번 작업에서는 기기 통신·실기기 테스트를 실행하지 않는다. 설계·사용법: `.plans/04-engine/dev-cli.md`.
+
+- 예외(사용자 승인 2026-10-07): **언락 실기기 진행 허용**. 실제 `oem unlock` 실행은 실행 직전 사용자 확인을 받는다. 사전 점검(부트로더 재부팅·getvar·OS 재부팅)은 완료했다. Windows fastboot 드라이버가 없으면 Sony 공식 드라이버를 받아 관리자 권한(UAC)으로 부트로더 모드 장치에 지정한다(`src-tauri/src/usb_driver.rs`). PC 드라이버 설정을 바꾸는 유일한 경로이며, 사용자가 UAC에서 허용한 경우에만 실행된다.
 
 ## 필수 작업 규칙
 

@@ -2,9 +2,10 @@
 use adb_client::ADBDeviceExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const USB_DIAG: &str =
-    "su -c setprop sys.usb.config diag,diag_mdm,diag_mdm2,qdss,qdss_mdm,serial_cdev,dpl,rmnet,adb";
-const IV_ENG: &str = "su -c setprop persist.usb.eng 1";
+const USB_DIAG: &str = crate::device_io::su!(
+    "setprop sys.usb.config diag,diag_mdm,diag_mdm2,qdss,qdss_mdm,serial_cdev,dpl,rmnet,adb"
+);
+const IV_ENG: &str = crate::device_io::su!("setprop persist.usb.eng 1");
 
 fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::Acquire) {

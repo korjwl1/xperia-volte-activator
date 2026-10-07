@@ -3,7 +3,7 @@
 // 단계별 실행 플래그는 data/runMode.ts에서 관리. fastboot 쓰기/재부팅은 facade에서도 차단.
 // 컴포넌트에서 @tauri-apps/api 직접 import 금지.
 
-import type { MagiskPatchRequest, FirmwareDirInfo, AdbStatus, AppItem, BackupProgress, BackupSummary, DeviceStatus, EnvCheckItem, FastbootVars, FirmwareResult, FirmwareVersions, MagiskPrepared, PatchResult, RestoreOutcome, RelockGate, SettingsOverview, SmsIeOutcome, UnlockResult } from "$lib/types";
+import type { MagiskPatchRequest, FirmwareDirInfo, AdbStatus, AppItem, BackupProgress, BackupSummary, PreparedBackup, DeviceStatus, EnvCheckItem, FastbootVars, FirmwareResult, FirmwareVersions, MagiskPrepared, PatchResult, RestoreOutcome, RelockGate, SettingsOverview, SmsIeOutcome, UnlockResult } from "$lib/types";
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
 import type { ApiResult } from "$lib/types";
 import { REAL_STEPS } from "$lib/data/runMode";
@@ -33,6 +33,8 @@ export interface Api extends EfsApi {
   firmwareVersions(serial?: string): Promise<FirmwareVersions | null>;
   /** 연결된 Sony 기기의 USB 모드 (android / fastboot / flashmode / other), 실패 시 null */
   usbModes(): Promise<{ mode: string; vendorId: number; productId: number }[] | null>;
+  /** 부트로더 모드 폰에 Windows fastboot 드라이버가 없으면 Sony 공식 드라이버를 받아 연결(UAC 한 번) — fastboot 실전에서만 */
+  fastbootDriverEnsure(productName: string): Promise<ApiResult<string>>;
   /** 폰에 설정 화면 띄우기 — developer: 개발자 옵션 / about: 휴대전화 정보 */
   openSettingsScreen(serial: string | undefined, screen: "developer" | "about"): Promise<boolean>;
   /** 클립보드 복사 */
@@ -57,6 +59,10 @@ export interface Api extends EfsApi {
   flashHistoryArchive(confirm: boolean): Promise<ApiResult<string>>;
   /** 루트 권한 승인 여부 (su -c id = uid=0), 조회 실패 시 null */
   rootCheck(serial?: string): Promise<boolean | null>;
+  /** 화면 켜짐·잠금 상태 (읽기 전용) */
+  screenState(serial?: string): Promise<ApiResult<{ awake: boolean; locked: boolean }>>;
+  /** 화면 켜기(WAKEUP 키 — 끄지 않음, 잠금은 풀지 않음) — 루팅 실전에서만 */
+  screenWake(serial?: string): Promise<ApiResult<null>>;
   /** 직접 지정한 펌웨어 폴더 검사 — <partition>_*.sin 존재 + 부트 이미지 추출 가능 */
   firmwareDirCheck(dir: string, partition: string): Promise<ApiResult<FirmwareDirInfo>>;
   /** 작업 중 PC 보호 — 절전 방지 + Windows 종료 방지 (작업 중에만 켬) */
@@ -66,7 +72,8 @@ export interface Api extends EfsApi {
   contactsRestoreFinish(serial: string | undefined, dir: string): Promise<ApiResult<null>>;
   engineCapabilities(): Promise<ApiResult<EngineCapabilities>>;
   /** 백업 시작 — 지정 폴더 아래 시작 시각 기준 폴더 생성, 절대 경로 반환 */
-  backupPrepare(serial: string | undefined, dest: string, backupOnly?: boolean): Promise<ApiResult<string>>;
+  /** 저장 위치의 xva-<모델>-backup 폴더 준비 — existing이면 같은 폰의 기존 백업(바뀐 파일만 갱신) */
+  backupPrepare(serial: string | undefined, dest: string, backupOnly?: boolean): Promise<ApiResult<PreparedBackup>>;
   /** 백업 실행(자동 항목) — 진행은 onBackupProgress로. 실패 시 error 문구 */
   backupRun(serial: string | undefined, items: string[], dest: string, runId: string, resumeDir?: string, backupOnly?: boolean): Promise<ApiResult<BackupSummary>>;
   /** 백업 취소 요청 — runId가 있으면 그 실행만(시작 전이면 시작 즉시 멈춤), 없으면 지금 실행 중인 백업 */
@@ -98,7 +105,7 @@ export interface Api extends EfsApi {
   /** 리락 이력 진단(읽기 전용) — 실제 명령은 별도 확인·기기 조건을 재검사 */
   relockGateCheck(partition: string, stockPath: string, deviceKey?: string): Promise<ApiResult<RelockGate>>;
   /** fastboot 재부팅 — os | bootloader (OKAY 확인 시 성공, 실패 시 백엔드 오류 문구) */
-  fastbootReboot(target: "os" | "bootloader", expectedSerial: string): Promise<ApiResult<null>>;
+  fastbootReboot(target: "os" | "bootloader" | "fastboot", expectedSerial: string): Promise<ApiResult<null>>;
   /** fastboot 로그 이벤트 구독 (INFO 프레임·명령·민감값 마스킹) */
   onFastbootLog(cb: (line: string) => void): Promise<() => void>;
   /** fastboot 파티션 기록 — download → flash <partition>_a/_b (fastboot-write 게이트) */
@@ -112,7 +119,7 @@ export interface Api extends EfsApi {
   /** Magisk 앱 설치 (root-write 게이트) */
   magiskInstall(serial: string | undefined, apkPath: string, apkSha256: string): Promise<ApiResult<null>>;
   /** adb 재부팅 — os | bootloader (root-write 또는 fastboot-write 게이트) */
-  rootReboot(serial: string | undefined, target: "os" | "bootloader"): Promise<ApiResult<null>>;
+  rootReboot(serial: string | undefined, target: "os" | "bootloader" | "fastboot"): Promise<ApiResult<null>>;
   /** Magisk 패치 로그 이벤트 구독 */
   onMagiskLog(cb: (line: string) => void): Promise<() => void>;
 }
@@ -180,6 +187,11 @@ const hybridApi: Api = {
     return await invokeBackend<FirmwareVersions>("firmware_versions", { serial: serial ?? null });
   },
 
+  async fastbootDriverEnsure(productName) {
+    if (!REAL_STEPS.fastboot) return { ok: false, error: "fastboot 실전이 비활성화되어 있습니다" };
+    return await invokeResult<string>("fastboot_driver_ensure", { productName });
+  },
+
   async usbModes() {
     return await invokeBackend<{ mode: string; vendorId: number; productId: number }[]>("usb_modes");
   },
@@ -226,6 +238,15 @@ const hybridApi: Api = {
     return await invokeBackend<boolean>("root_check", { serial: serial ?? null });
   },
 
+  async screenState(serial) {
+    return await invokeResult<{ awake: boolean; locked: boolean }>("screen_state", { serial: serial ?? null });
+  },
+
+  async screenWake(serial) {
+    if (!REAL_STEPS.root) return { ok: false, error: "루팅 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<null>("screen_wake", { serial: serial ?? null });
+  },
+
   async firmwareDirCheck(dir, partition) {
     return await invokeResult<FirmwareDirInfo>("firmware_dir_check", { dir, partition });
   },
@@ -244,7 +265,7 @@ const hybridApi: Api = {
 
   async backupPrepare(serial, dest, backupOnly = false) {
     if (!REAL_STEPS.backup && !backupOnly) return { ok: false, error: "실전 백업이 비활성화되어 있습니다" };
-    return await invokeResult<string>("backup_prepare", { serial: serial ?? null, dest });
+    return await invokeResult<PreparedBackup>("backup_prepare", { serial: serial ?? null, dest });
   },
 
   async backupRun(serial, items, dest, runId, resumeDir, backupOnly = false) {
@@ -356,7 +377,7 @@ const hybridApi: Api = {
   },
 
   async rootReboot(serial, target) {
-    // 언락·리락(fastboot)·루팅 흐름의 부트로더 진입·복귀는 root/fastboot, 최종 확인(verify)은 OS 재부팅만 허용
+    // 언락·리락(부트로더)·루팅·언루팅(fastbootd) 진입·복귀는 root/fastboot, 최종 확인(verify)은 OS 재부팅만 허용
     if (!canReboot(REAL_STEPS, target)) {
       return { ok: false, error: "기기 재부팅 실전 실행이 비활성화되어 있습니다" };
     }
@@ -369,11 +390,11 @@ const hybridApi: Api = {
 
   async openExternal(url) {
     if (inTauri()) {
-      try {
-        const { openUrl } = await import("@tauri-apps/plugin-opener");
-        await openUrl(url);
-        return;
-      } catch {}
+      // 동적 import 없이 기존 통신 경로로 opener 명령을 부른다 — 개발 모드 새로고침 뒤 모듈 로딩이 깨져
+      // 조용히 아무 일도 안 하던 문제를 피한다. 앱 창에서는 window.open이 열리지 않으므로 대체하지 않는다.
+      const r = await invokeResult<null>("plugin:opener|open_url", { url });
+      if (!r.ok) console.warn(`[외부 열기 실패] ${url} — ${r.error}`);
+      return;
     }
     if (typeof window !== "undefined") window.open(url, "_blank", "noopener");
   },

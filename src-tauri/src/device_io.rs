@@ -82,6 +82,15 @@ pub struct ShellOutput {
     pub code: u8,
 }
 
+/// 루트 셸 명령 — `su`가 PATH에 없으면 Magisk 실제 위치를 쓴다.
+/// 실기기(XQ-DQ44, Magisk 30.7): `/system/bin/su`가 없고 `/debug_ramdisk/su`에만 있어 `su -c`가 "su 없음"으로 끝났다.
+macro_rules! su {
+    ($cmd:literal) => {
+        concat!("\"$(command -v su || echo /debug_ramdisk/su)\" -c ", $cmd)
+    };
+}
+pub(crate) use su;
+
 /// 명령 뒤에 종료 코드 표식을 붙여 실행한다. 표식이 없으면 출력이 잘린 것으로 보고 실패한다.
 /// 개행으로 잇기 때문에 명령이 `;`나 `&`로 끝나도 문법이 깨지지 않는다.
 pub fn shell_run(dev: &mut dyn ADBDeviceExt, command: &str) -> Result<ShellOutput, String> {

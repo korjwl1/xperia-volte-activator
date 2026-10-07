@@ -49,6 +49,7 @@ test("EFS-only run can finish its OS reboot while bootloader reboot stays disabl
   assert.equal((await api.rootReboot("A", "os")).ok, true);
   assert.deepEqual(invocations, [["root_reboot", { serial: "A", target: "os" }]]);
   assert.equal((await api.rootReboot("A", "bootloader")).ok, false);
+  assert.equal((await api.rootReboot("A", "fastboot")).ok, false);
   assert.equal(invocations.length, 1);
   assert.equal(new Wizard().simulationControlsVisible, false);
 });

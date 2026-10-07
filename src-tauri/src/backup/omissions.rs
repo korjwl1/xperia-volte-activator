@@ -214,7 +214,7 @@ pub(super) fn clean(root: &Path, manifest: &mut Manifest) -> Result<(), String> 
     let root = root.canonicalize().map_err(|e| e.to_string())?;
     if !root
         .file_name()
-        .is_some_and(|name| name.to_string_lossy().starts_with("backup-"))
+        .is_some_and(|name| super::runner::is_backup_dir_name(&name.to_string_lossy()))
     {
         return Err("이 앱이 만든 백업 폴더만 정리할 수 있습니다".into());
     }

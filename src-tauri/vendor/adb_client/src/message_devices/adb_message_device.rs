@@ -27,6 +27,8 @@ pub struct ADBMessageDevice<T: ADBMessageTransport> {
     sync_batch: bool,
     sync_session: Option<ADBSession<T>>,
     pub(crate) sync_broken: Option<String>,
+    /// [xvolte patch] Device advertised `ls_v2` in its CNXN banner: list with LIS2 (64-bit sizes).
+    pub(crate) list_v2: bool,
 }
 
 impl<T: ADBMessageTransport> ADBMessageDevice<T> {
@@ -47,6 +49,7 @@ impl<T: ADBMessageTransport> ADBMessageDevice<T> {
             sync_batch: false,
             sync_session: None,
             sync_broken: None,
+            list_v2: false,
         };
         message_device.connect(&private_key)?;
 
@@ -88,6 +91,7 @@ impl<T: ADBMessageTransport> ADBMessageDevice<T> {
             }
             MessageCommand::Cnxn => {
                 log::debug!("Unencrypted connection established");
+                self.remember_banner(message.payload());
                 Ok(())
             }
             MessageCommand::Auth => {
@@ -175,6 +179,7 @@ impl<T: ADBMessageTransport> ADBMessageDevice<T> {
         let received_response = self.read_connection_message(Duration::from_secs(30))?;
 
         if received_response.header().command() == MessageCommand::Cnxn {
+            self.remember_banner(received_response.payload());
             log::info!(
                 "Authentication OK, device info {}",
                 String::from_utf8(received_response.into_payload())?
@@ -214,11 +219,21 @@ impl<T: ADBMessageTransport> ADBMessageDevice<T> {
                 Ok(message)
             })?;
 
+        self.remember_banner(response.payload());
         log::info!(
             "Authentication OK, device info {}",
             String::from_utf8(response.into_payload())?
         );
         Ok(())
+    }
+
+    /// [xvolte patch] "device::ro.product.name=…;features=shell_v2,cmd,ls_v2,…"
+    fn remember_banner(&mut self, payload: &[u8]) {
+        let banner = String::from_utf8_lossy(payload);
+        self.list_v2 = banner
+            .split(';')
+            .filter_map(|part| part.trim_end_matches(' ').strip_prefix("features="))
+            .any(|features| features.split(',').any(|f| f == "ls_v2"));
     }
 
     pub(crate) fn open_synchronization_session(&mut self) -> Result<ADBSession<T>> {
@@ -460,6 +475,7 @@ mod handshake_tests {
                 sync_batch: false,
                 sync_session: None,
                 sync_broken: None,
+                list_v2: false,
             },
             transport,
         )
@@ -469,6 +485,16 @@ mod handshake_tests {
         KEY.get_or_init(|| ADBRsaKey::new_random().unwrap())
     }
 
+    #[test]
+    fn only_a_device_advertising_ls_v2_uses_lis2() {
+        let (mut d, _) = device(vec![]);
+        d.remember_banner(b"device::ro.product.name=pdx234;ro.product.model=XQ-DQ44;features=shell_v2,cmd,stat_v2,ls_v2,fixed_push_mkdir ");
+        assert!(d.list_v2);
+        d.remember_banner(b"device::ro.product.model=old;features=shell_v2,cmd,stat_v2 ");
+        assert!(!d.list_v2);
+        d.remember_banner(b"device::features=ls_v2x,not_ls_v2");
+        assert!(!d.list_v2, "exact feature names only");
+    }
     #[test]
     fn delayed_stream_frames_before_cnxn_are_ignored_without_ack_or_service_replay() {
         let (mut device, transport) = device(vec![vec![
@@ -818,6 +844,7 @@ mod batch_tests {
             sync_batch: false,
             sync_session: None,
             sync_broken: None,
+            list_v2: false,
         };
         (device, transport)
     }
@@ -1059,7 +1086,7 @@ mod exec_tests {
     }
     #[derive(Clone,Default)]struct Output(Arc<Mutex<Vec<u8>>>);
     impl Write for Output {fn write(&mut self,b:&[u8])->std::io::Result<usize>{self.0.lock().unwrap().extend_from_slice(b);Ok(b.len())}fn flush(&mut self)->std::io::Result<()>{Ok(())}}
-    fn device()->(ADBMessageDevice<Transport>,Transport){let t=Transport::default();(ADBMessageDevice{transport:t.clone(),sync_batch:false,sync_session:None,sync_broken:None},t)}
+    fn device()->(ADBMessageDevice<Transport>,Transport){let t=Transport::default();(ADBMessageDevice{transport:t.clone(),sync_batch:false,sync_session:None,sync_broken:None,list_v2:false},t)}
     #[test]
     fn exec_serializes_input_ack_output_and_close_without_a_detached_reader() {
         let (mut d,t)=device();let output=Output::default();let mut input=std::io::Cursor::new(vec![42;100_000]);

@@ -250,6 +250,12 @@ export interface SettingsOverview {
 }
 
 /** 백업 실행 결과 — 백엔드 backup_run (계약 .plans/02-contracts) */
+/** backup_prepare 결과 — 저장 위치의 xva-<모델>-backup. existing이면 같은 폰의 기존 백업을 바뀐 파일만 갱신 */
+export interface PreparedBackup {
+  dir: string;
+  existing: boolean;
+}
+
 export interface BackupSummary {
   deviceKey?: string | null;
   complete: boolean;

@@ -509,7 +509,8 @@ impl ADBDeviceExt for FakeADBDevice {
                     .list_size_override
                     .get(p)
                     .copied()
-                    .unwrap_or(rec.data.len() as u32);
+                    .map(u64::from) // LIST v1처럼 잘린 크기를 흉내낸다
+                    .unwrap_or(rec.data.len() as u64);
                 out.push(ADBListItemType::File(ADBListItem {
                     name: Self::name_of(p).to_string(),
                     time: rec.mtime,

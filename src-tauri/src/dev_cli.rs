@@ -38,9 +38,12 @@ requests! {
     AdbStatus("adb_status", false, true, false) {}
     DeviceList("device_list", false, true, false) {}
     UsbModes("usb_modes", false, true, false) {}
+    FastbootDriverEnsure("fastboot_driver_ensure", true, true, false) { product_name: String = "Xperia 1 V" }
     EnvCheck("env_check", false, true, true) {}
     ToolCheck("efs_tool_check", false, true, true) {}
     RootCheck("root_check", false, true, false) { serial: String = "sha256:<serialKey>" }
+    ScreenState("screen_state", false, true, false) { serial: String = "sha256:<serialKey>" }
+    ScreenWake("screen_wake", true, true, false) { serial: String = "sha256:<serialKey>" }
     StorageSizes("storage_sizes", false, true, false) { serial: String = "sha256:<serialKey>" }
     AppFlags("app_flags", false, true, false) { serial: String = "sha256:<serialKey>" }
     SettingsOverview("settings_overview", false, true, false) { serial: String = "sha256:<serialKey>" }
@@ -161,9 +164,12 @@ async fn dispatch(req: Request, events: Events) -> Result<Value, Value> {
         Request::AdbStatus {} => packed(adb::adb_status().await),
         Request::DeviceList {} => packed(adb::device_list().await),
         Request::UsbModes {} => packed(usbmode::usb_modes().await),
+        Request::FastbootDriverEnsure { product_name } => packed(crate::usb_driver::fastboot_driver_ensure(product_name).await),
         Request::EnvCheck {} => packed(env::env_check().await),
         Request::ToolCheck {} => packed(efs::efs_tool_check().await),
         Request::RootCheck { serial } => packed(adb::root_check(Some(serial)).await),
+        Request::ScreenState { serial } => packed(adb::screen_state(Some(serial)).await),
+        Request::ScreenWake { serial } => packed(adb::screen_wake(Some(serial)).await),
         Request::StorageSizes { serial } => packed(adb::storage_sizes(Some(serial)).await),
         Request::AppFlags { serial } => packed(adb::app_flags(Some(serial)).await),
         Request::SettingsOverview { serial } => packed(adb::settings_overview(Some(serial)).await),

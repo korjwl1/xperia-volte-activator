@@ -52,7 +52,11 @@ const MANUAL_TEXT: Record<ManualId, Omit<ManualPrompt, "id">> = {
   },
   "su-grant": {
     title: "루트 권한 승인",
-    steps: ["폰 화면에 Magisk 루트 권한 요청이 뜨면 '허용' 선택"],
+    steps: [
+      "폰 화면은 자동으로 켜집니다 — 잠겨 있으면 잠금을 풀어 주세요. 잠금이 풀리면 루트 권한을 요청합니다",
+      "Magisk 슈퍼유저 요청 창(Shell)이 뜨면 10초 안에 '허용'을 누릅니다",
+      "시간이 지나거나 거부하면 Magisk가 거부를 기억해 창이 다시 뜨지 않습니다 — Magisk 앱 → 슈퍼유저 탭에서 Shell을 켜면 자동으로 진행합니다",
+    ],
   },
   "oem-toggle": {
     title: "언락 조건 확인",
@@ -74,9 +78,16 @@ const MANUAL_TEXT: Record<ManualId, Omit<ManualPrompt, "id">> = {
     title: "부트로더 모드 진입 대기",
     steps: ["앱이 폰을 부트로더 모드로 재부팅합니다 (파란색 LED)", "USB 연결을 유지해 주세요", "부트로더 모드가 감지되면 자동으로 다음 단계로 진행됩니다"],
   },
+  // 초기화(언락·리락) 직후에만 쓰인다 — 폰이 처음 상태로 돌아왔으므로 어디까지 하고 오면 되는지 안내한다
   "usb-debug": {
-    title: "USB 디버깅 승인 대기",
-    steps: ["재부팅 후 초기 설정을 마치고 개발자 옵션 활성화", "USB 디버깅 켜기", "PC 연결 시 폰 화면에서 '허용' 선택 — 연결이 확인되면 자동으로 진행됩니다"],
+    title: "초기화 후 폰 기본 설정 (폰 조작)",
+    steps: [
+      "폰이 초기화된 뒤 다시 켜집니다. 첫 부팅은 몇 분 걸릴 수 있고, 부트로더 잠금 해제 경고 화면은 정상이니 그대로 두면 넘어갑니다",
+      "초기 설정 화면에서 언어·Wi-Fi 등을 설정해 홈 화면까지 진행합니다. Google 계정 로그인과 복원은 원하면 진행해도 됩니다",
+      "설정 → 휴대전화 정보 → 빌드 번호를 7번 눌러 개발자 옵션을 켭니다",
+      "설정 → 시스템 → 개발자 옵션 → USB 디버깅을 켭니다",
+      "USB를 연결하고 폰의 'USB 디버깅 허용' 창에서 '이 컴퓨터에서 항상 허용'을 체크한 뒤 허용 — 연결이 확인되면 자동으로 다음 단계로 진행합니다",
+    ],
   },
   "magisk-patch": {
     title: "Magisk 부트 패치 (폰 조작)",
@@ -1166,11 +1177,60 @@ export class Wizard {
     return !!list?.some((d) => d.state === "device" && d.serial === this.device?.serial);
   }
 
+  /** 루트 승인 진행 안내(화면·잠금·거부 상태) */
+  suGrantHint = $state("");
+  private suDenied = false;
+  /** 루트 승인 감지 — 화면 켜기 → 잠금 해제 대기 → su 요청.
+   *  Magisk(v30.7 소스)는 요청 창에 10초 안에 응답이 없거나 거부하면 Shell을 기본 "영구" 거부로 저장한다.
+   *  그 뒤로는 창 없이 바로 거부되므로, 슈퍼유저 탭에서 Shell을 켜도록 안내하고 같은 확인을 반복한다(창이 반복해서 뜨지 않는다). */
+  private async suGrantReady(): Promise<boolean> {
+    const serial = this.device?.serial;
+    const screen = await api.screenState(serial);
+    // 화면 상태를 읽지 못하는 경우에는 막지 않고 요청한다
+    if (screen.ok && !screen.value.awake) {
+      await api.screenWake(serial);
+      this.suGrantHint = "폰 화면을 켰습니다";
+      return false;
+    }
+    if (screen.ok && screen.value.locked) {
+      this.suGrantHint = "폰 잠금을 풀어 주세요 — 잠금이 풀리면 루트 권한을 요청합니다";
+      return false;
+    }
+    if (!this.suDenied) this.suGrantHint = "폰 화면의 Magisk 슈퍼유저 요청 창에서 10초 안에 [허용]을 눌러 주세요";
+    const ok = await api.rootCheck(serial);
+    if (ok === true) return true;
+    if (ok === false) {
+      this.suDenied = true;
+      this.suGrantHint = "루트 권한이 거부됐습니다(시간 초과 포함) — Magisk가 거부를 기억해 요청 창이 다시 뜨지 않습니다. Magisk 앱 → 슈퍼유저 탭에서 [Shell]을 켜 주세요. 켜면 자동으로 진행합니다";
+    }
+    return false;
+  }
+
   /** USB 모드 감지 (fastboot / flashmode) — 장치 디스크립터만 읽음 */
   private async usbModeIs(mode: string): Promise<boolean> {
     const list = await api.usbModes();
+    // fastboot(부트로더·fastbootd)에 들어왔지만 Windows에 드라이버가 없다 — Sony 공식 드라이버를 받아 붙인다(UAC 한 번).
+    // 원본 도구는 이 단계를 장치 관리자 수동 작업으로 안내했다. 실패하면 사유를 남기고 계속 감지한다.
+    if (mode === "fastboot" && list?.length === 1 && list[0].mode === "fastboot-nodriver") {
+      await this.ensureFastbootDriver(list[0].productId);
+      return false;
+    }
     // 여러 대가 연결돼 있으면 어느 폰의 모드인지 구분할 수 없으므로 통과시키지 않는다
     return !!list && list.length === 1 && list[0].mode === mode;
+  }
+
+  /** 같은 실행에서 드라이버 설치는 장치 종류(부트로더·fastbootd)마다 한 번만 시도한다(거부·실패 시 반복해서 UAC를 띄우지 않는다) */
+  private fastbootDriverTried = "";
+  private async ensureFastbootDriver(productId: number) {
+    const key = `${this.runGen}:${productId}`;
+    if (this.fastbootDriverTried.split(",").includes(key)) return;
+    this.fastbootDriverTried = this.fastbootDriverTried.startsWith(`${this.runGen}:`) ? `${this.fastbootDriverTried},${key}` : key;
+    const cur = this.runSteps[this.cursor];
+    const product = this.device?.productName ?? "";
+    this.log(cur, `[드라이버] fastboot 드라이버가 없습니다 — Sony 공식 드라이버(${product})를 받아 연결합니다. Windows 관리자 권한 창에서 [예]를 눌러 주세요`);
+    const r = await api.fastbootDriverEnsure(product);
+    this.log(cur, r.ok ? `[드라이버] ${r.value}` : `[실패] fastboot 드라이버: ${r.error} — 장치 관리자에서 Android 장치에 Sony 드라이버를 직접 지정할 수도 있습니다`);
+    if (!r.ok) this.manualCheckError = `fastboot 드라이버 연결 실패: ${r.error}`;
   }
 
   /** 연결된 Sony USB 장치 수 (모드 확인 실패 사유 안내용) */
@@ -1411,14 +1471,11 @@ export class Wizard {
       this.imsUnverified = false;
       this.watchManual(cur, id, "셀룰러 IMS 음성 등록 확인", () => this.imsReady(), 5000, false);
     }
-    if (id === "su-grant")
-      this.watchManual(
-        cur,
-        id,
-        "루트 권한(uid=0) 확인",
-        async () => (await api.rootCheck(this.device?.serial)) === true,
-        3000,
-      );
+    if (id === "su-grant") {
+      this.suDenied = false;
+      this.suGrantHint = "";
+      this.watchManual(cur, id, "루트 권한(uid=0) 확인", () => this.suGrantReady(), 2000);
+    }
     if (id === "smsie-export") {
       // 선택한 파일이 두 번 연속(5초 간격) 보이면 수집·검사하고 자동으로 넘어간다.
       // 앱이 아직 쓰는 중이면 ZIP CRC·JSON 검사에서 걸러져 계속 기다린다
@@ -1752,10 +1809,9 @@ export class Wizard {
           ? "부트로더(fastboot) 모드가 감지되지 않았습니다 — USB 연결을 확인해 주세요"
           : "플래시 모드가 감지되지 않았습니다 — 전원을 끈 뒤 볼륨 아래 버튼을 누른 채 USB를 연결해 주세요";
       }
-      case "su-grant": {
-        const ok = await api.rootCheck(this.device?.serial);
-        return ok ? null : "루트 권한이 확인되지 않았습니다 — 폰에서 Magisk 권한 요청을 '허용'했는지 확인해 주세요";
-      }
+      case "su-grant":
+        // 자동 감지와 같은 흐름 — 화면이 꺼졌거나 잠겨 있으면 요청하지 않는다(보이지 않는 창이 시간 초과로 영구 거부되는 것을 막는다)
+        return (await this.suGrantReady()) ? null : this.suGrantHint || "루트 권한이 확인되지 않았습니다";
       case "ims-precheck":
         return this.imsCheckError("VoLTE 등록이 확인되지 않았습니다 — 신호가 잡힐 때까지 기다리거나, 통화가 안 되면 [다시 패치]로 VoLTE 적용부터 다시 진행해 주세요");
       case "ims-check":
@@ -1924,16 +1980,24 @@ export class Wizard {
       return;
     }
     // 기존 폴더를 이어 받으면 먼저 PC 검사를 거친다 — 진행률 앞 10%를 그 검사에 쓴다
-    const progressMode: "run" | "resume" = this.backupDir ? "resume" : "run";
-    // 시작 시각 기준 폴더를 먼저 만들고 절대 경로를 진행 기록에 저장 — 끊겨도 같은 폴더로 이어서 받는다
+    let progressMode: "run" | "resume" = this.backupDir ? "resume" : "run";
+    // 끊긴 실행의 재개(진행 기록의 폴더)는 완료 항목을 건너뛴다. 이번에 준비한 폴더는 재개 경로 없이 실행해
+    // 엔진이 같은 폴더를 다시 찾아 기존 백업 갱신으로 처리하게 한다(완료 항목도 바뀐 파일만 받음)
+    let resumeDir: string | undefined = this.backupDir || undefined;
+    // 저장 위치의 xva-<모델>-backup을 쓰고 절대 경로를 진행 기록에 저장 — 끊겨도 같은 폴더로 이어서 받는다
     if (!this.backupDir) {
       const prep = await api.backupPrepare(this.device?.serial, dest, this.opts.backupOnly);
       if (gen !== this.runGen) return;
       if (!prep.ok) {
-        this.failStep(`백업 폴더 생성 실패: ${prep.error}`);
+        this.failStep(`백업 폴더 준비 실패: ${prep.error}`);
         return;
       }
-      this.backupDir = prep.value;
+      this.backupDir = prep.value.dir;
+      resumeDir = undefined;
+      if (prep.value.existing) {
+        progressMode = "resume";
+        this.log(cur, `[백업] 기존 백업을 찾았습니다 — 바뀐 파일만 받아 갱신합니다 (${prep.value.dir})`);
+      }
       await this.persist(true);
       if (gen !== this.runGen) return;
     }
@@ -1970,7 +2034,7 @@ export class Wizard {
     });
     if (gen !== this.runGen) return un();
     const r = await api
-      .backupRun(this.device?.serial, items, dest, runId, this.backupDir || undefined, this.opts.backupOnly)
+      .backupRun(this.device?.serial, items, dest, runId, resumeDir, this.opts.backupOnly)
       .finally(() => {
         un();
         this.transferStatus = "";
@@ -2464,14 +2528,17 @@ export class Wizard {
     return serial?.trim() ? sha256Hex(serial.trim()) : null;
   }
 
-  /** adb로 부트로더 재부팅 → fastboot 모드 감지 대기. 실패 사유 또는 null (호출부에서 세대 확인) */
-  private async enterFastboot(gen: number): Promise<string | null> {
-    const rb = await api.rootReboot(this.device?.serial, "bootloader");
+  /** adb로 fastboot 재부팅 → 감지 대기. 실패 사유 또는 null (호출부에서 세대 확인)
+   *  - "bootloader": 언락·리락(oem 명령)
+   *  - "fastboot"(fastbootd): 부트 이미지 기록 — Sony 부트로더는 init_boot 기록을 거부한다(실측, 원본 도구도 fastbootd) */
+  private async enterFastboot(gen: number, target: "bootloader" | "fastboot"): Promise<string | null> {
+    const name = target === "bootloader" ? "부트로더" : "fastbootd";
+    const rb = await api.rootReboot(this.device?.serial, target);
     if (gen !== this.runGen) return null;
-    if (!rb.ok) return `부트로더 재부팅 실패: ${rb.error}`;
+    if (!rb.ok) return `${name} 재부팅 실패: ${rb.error}`;
     const inFastboot = await this.waitFor(gen, () => this.usbModeIs("fastboot"), 90_000);
     if (gen !== this.runGen) return null;
-    return inFastboot ? null : "부트로더 모드 진입이 감지되지 않습니다 — USB 연결을 확인해 주세요";
+    return inFastboot ? null : `${name} 모드 진입이 감지되지 않습니다 — USB 연결을 확인해 주세요`;
   }
 
   /** fastboot → OS 재부팅 → adb(USB 디버깅) 복귀 대기. 실패 사유 또는 null (호출부에서 세대 확인) */
@@ -2498,9 +2565,9 @@ export class Wizard {
     if (gen !== this.runGen) return;
     if (!source.ok) return this.failStep(`부트 이미지 확인 실패: ${source.error}`);
     this.log(cur, `[언루팅] 순정 ${partition} 이미지로 복원합니다`);
-    // 부트로더 진입 → 감지 대기
+    // fastbootd 진입 → 감지 대기
     cur.progress = 0.2;
-    const fbError = await this.enterFastboot(gen);
+    const fbError = await this.enterFastboot(gen, "fastboot");
     if (gen !== this.runGen) return;
     if (fbError) return this.failStep(fbError);
     // 순정 기록(양 슬롯) — 이 기록이 리락 게이트(§3-3)의 순정 증거가 된다
@@ -2555,7 +2622,7 @@ export class Wizard {
       const gate = gateRes.value;
       for (const c of gate.checked) this.log(cur, `[게이트] ${c.partition}${c.slot} — ${c.detail}`);
       if (!gate.ok) return this.failStep(`리락 게이트 실패 — ${gate.reasons.join(" / ")}`);
-      const fbError = await this.enterFastboot(gen);
+      const fbError = await this.enterFastboot(gen, "bootloader");
       if (gen !== this.runGen) return;
       if (fbError) return this.failStep(fbError);
       cur.progress = 0.6;
@@ -2572,7 +2639,7 @@ export class Wizard {
     });
   }
 
-  /** 실전 루팅 — 검증된 절차(계약 root 절): 패치 → 부트로더 → 기록 → 복귀 → 앱 설치 → su 승인(수동) */
+  /** 실전 루팅 — 검증된 절차(계약 root 절): 패치 → fastbootd → 기록 → 복귀 → 앱 설치 → su 승인(수동) */
   private async runRealRoot(cur: RunStep) {
     const gen = this.runGen;
     if (!this.realBootFlowReady()) return;
@@ -2613,10 +2680,10 @@ export class Wizard {
     this.log(cur, `[루팅] 패치 완료 — ${(patch.value.bytes / 1024 ** 2).toFixed(1)} MiB · 원본과 해시 상이 확인`);
     this.markSub(cur, 4); // 받기·전송·패치·결과 확인
     void this.persist(true);
-    // 3) 부트로더 진입 → fastboot 감지 대기
+    // 3) fastbootd 진입 → 감지 대기
     cur.progress = 0.5;
-    this.log(cur, "[루팅] 부트로더 모드로 재부팅합니다");
-    const fbError = await this.enterFastboot(gen);
+    this.log(cur, "[루팅] 부트 이미지 기록을 위해 fastbootd 모드로 재부팅합니다");
+    const fbError = await this.enterFastboot(gen, "fastboot");
     if (gen !== this.runGen) return;
     if (fbError) return this.failStep(fbError);
     // 4) 패치 이미지 기록(양 슬롯) — fastboot 엔진 재사용
@@ -2862,6 +2929,14 @@ export class Wizard {
     this.stepError = "";
     this.stopRun(true);
     this.markStop("사용자가 작업을 중단했습니다");
+  }
+
+  /** 멈춘 실행에서 작업 옵션으로 돌아가 계획을 다시 고른다 — 진행 중인 기기 작업이 있으면 하지 않는다 */
+  backToOptions() {
+    if (this.running || this.busy > 0 || this.runInDanger) return;
+    this.stepError = "";
+    this.resetExecution();
+    this.view = "step2";
   }
 
   goFinish() {

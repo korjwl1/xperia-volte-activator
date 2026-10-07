@@ -66,3 +66,5 @@ RECV 수정 후 실기기 재개: Documents/Music/Movies/Download의 71개 파�
 2026-10-06 R7: exec/shell 오류 후 CLSE/abort 정리가 성공한 stream은 sync_broken으로 표시하지 않는다. 정리 실패 때만 reconnect가 필요하다. premature close에는 기기 마지막 출력이 포함된다. 100KB exec 입력을 두 ACK chunk로 전송하며 출력/CLSE를 처리하는 테스트, early close 및 PC stdin 오류 뒤 다음 shell 서비스 성공 테스트를 추가했다. vendor 39 unit + 4 doctest 통과.
 
 2026-10-06 LIST UTF-8: UTF-8이 아닌 항목 이름은 오류로 LIST 전체를 중단하지 않고 `ADBListItemType::InvalidName`(표시용 lossy 이름, 경로로 사용 금지)으로 보고한 뒤 DONE까지 계속 읽는다. 직접 연결(message_devices)과 서버 경유(server_device) 양쪽에 적용했다. 앱 walker는 해당 이름 하나만 오류로 남기고 같은 폴더의 나머지를 계속 열거한다. 5바이트 분할 응답에서 잘못된 이름 + 정상 파일이 모두 반환되고 모든 WRTE가 승인되는 회귀 테스트 포함. vendor 40 unit + 4 doctest 통과.
+
+2026-10-07 LIS2: 직접 연결(message_devices)은 기기 CNXN 배너의 features에 `ls_v2`가 있을 때 LIST 대신 LIS2를 쓴다. DNT2/DONE 뒤 72바이트 dent_v2(error, dev, ino, mode, nlink, uid, gid, size u64, atime/mtime/ctime i64, namelen)를 경계 독립으로 읽는다. `ADBListItem.size`는 u64로 넓혔고(v1과 서버 경유는 하위 32비트), mtime은 u32로 맞춘다. LIST v1이 4GiB를 넘는 크기를 잘라 보내서 큰 파일을 매번 다시 받던 문제를 해결했다. 23GB 크기·조각난 응답·배너 기능 판정 회귀 테스트 포함. vendor 42 unit + 4 doctest 통과. 실기기(XQ-DQ44, Android 15) 갱신 백업에서 DCIM 4GiB 초과 13개를 다시 받지 않음을 확인했다.

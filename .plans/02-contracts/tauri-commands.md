@@ -187,7 +187,7 @@ invoke('fastboot_reboot', { target: 'os'|'bootloader', expectedSerial }) → voi
 // 이벤트 'fastboot:log': string — INFO/TEXT 프레임·진행(코드·IMEI·식별정보 마스킹)
 //   파괴 명령은 confirm=true 필수. 쓰기/재부팅은 fastboot-write 없으면 USB open 전 오류.
 //   unlocked는 명시적 yes/no만 반환; 조회 실패는 오류. reboot는 OKAY만 성공(타임아웃도 오류).
-//   실전 unlock/flash는 is-userspace=no 필요; 미지원/fastbootd면 차단.
+//   실전 unlock/lock은 is-userspace=no(부트로더) 필요, flash는 is-userspace=yes(fastbootd) 필요(2026-10-07 실측: 부트로더는 init_boot 기록 거부); 미지원·반대 모드면 차단.
 invoke('plan_generate', { profile, toggles, deviceStatus }) → PlanStep[]   // §3-2 매트릭스 + §3-3 의존성 — 프론트 mock/plan.ts가 단일 공급원(유지)
 ```
 
@@ -200,7 +200,7 @@ invoke('plan_generate', { profile, toggles, deviceStatus }) → PlanStep[]   // 
 
 ```ts
 // backup_scan_items는 설계 후보이며 현재 명령으로 등록되지 않았다.
-invoke('backup_prepare', { serial, dest }) → string  // 고유 백업 폴더 절대 경로
+invoke('backup_prepare', { serial, dest }) → { dir: string, existing: boolean }  // 저장 위치의 xva-<모델>-backup 절대 경로. existing이면 같은 폰의 기존 백업(바뀐 파일만 갱신)
 invoke('backup_run', { serial, items: string[], dest, resumeDir?: string, runId: string }) → BackupSummary
 //   runId: 프론트가 실행마다 만든 식별값(crypto.randomUUID). 취소는 이 값으로 대상을 지정한다.
 invoke('backup_cancel', { runId?: string }) → void — runId 실행만 취소(시작 전에 오면 시작 즉시 멈춤), 없으면 실행 중인 백업
@@ -347,7 +347,10 @@ invoke('run_guard', { active: boolean, reason?: string }) → void
 ## 수동 확인·PC 준비
 
 ```ts
-invoke('root_check', { serial? }) → boolean            // su -c id 결과에 uid=0 — Magisk 허용 창이 뜰 수 있음, 기기 변경 없음
+invoke('root_check', { serial? }) → boolean            // su -c id(su가 PATH에 없으면 /debug_ramdisk/su) 결과에 uid=0 — Magisk 허용 창이 뜰 수 있음, 기기 변경 없음
+invoke('screen_state', { serial? }) → { awake, locked }   // 읽기 전용 — mWakefulness=Awake / isKeyguardShowing (2026-10-07)
+invoke('screen_wake', { serial? }) → null            // input keyevent KEYCODE_WAKEUP — 켜기만, 잠금 해제 안 함. 프론트는 REAL_STEPS.root일 때만
+// root_reboot·fastboot_reboot target에 "fastboot"(fastbootd) 추가 — 부트 이미지 기록은 fastbootd에서만(fastboot_flash가 is-userspace=yes 요구)
 invoke('firmware_dir_check', { dir, partition }) → { file, path, fingerprint, imageBytes }
 // PC 폴더(한 단계 하위 포함)의 SIN 후보는 정확히 하나여야 한다. 같은 폴더 update.xml의 지문 필수.
 // SIN을 raw IMG로 PC 캐시에 원자 추출한다. path가 패치·기록 입력이며 file은 표시용 SIN 이름이다.
@@ -387,3 +390,8 @@ invoke('firmware_dir_check', { dir, partition }) → { file, path, fingerprint, 
 2026-10-06 리뷰 후속: backup_manifest_check({dir, runId?:string|null})은 Events 공통 실행 경로에서 PC-only 전수 검증 진행(backup:progress, phase=verify)과 backup_cancel의 실행별 취소를 지원한다. AppHandle은 Tauri 주입이며 CLI는 같은 Events helper를 호출한다. smsie_probe({serial?:string|null, backupDir:string})->boolean은 같은 기기 확인 후 선택한 SMSIE 파일 존재 목록만 조회하며 전송/삭제하지 않는다. facade의 smsieCollect는 ApiResult<SmsIeOutcome>으로 실제 오류를 보존한다. backupPrepare/Run/Delete 및 smsiePrepare/Probe/Collect의 facade-only backupOnly 인자는 명시적 단독 실전 백업 경로를 선택한다(IPC 인자가 아니며 다른 쓰기 엔진에는 적용되지 않음). BackupSummary의 sourceMetadata는 itemId/path/sha256/entries/directories/unavailableBirthTimes/payloadMismatches/complete/errors 영수증 배열이다. Manifest v1의 sourceMetadata는 optional/default empty로 구형 백업과 호환한다. sidecar 자체는 version=1 Snapshot이다.
 
 2026-10-06: sourceMetadata Receipt에 captureContext 추가(default legacy strict). after-copy-enrichment는 참고 수집으로 body complete/restore gate를 막지 않으며, before-copy 기록과 분리한다. facade backupManifestCheck는 native 오류를 예외로 전달하여 null/완결 아님으로 숨기지 않는다.
+
+2026-10-07 `fastboot_driver_ensure({productName}) -> string`:
+- Windows 장치 목록에서 부트로더 모드 Sony 폰(`USB\VID_0FCE&PID_0DDE`)을 찾는다. 드라이버가 없으면 판매명(`ro.semc.product.name`)으로 Sony 공식 드라이버 목록(opendevices.sony.net)에서 "<판매명> driver" 항목을 찾는다. 없으면 규칙 주소(`xperia-1-v-driver` 형식)를 쓰고, 내장 모델 표는 없다.
+- 공식 API의 서명된 임시 주소로 zip을 받아 Sony WinUSB INF를 확인한 뒤, 관리자 권한(UAC 한 번)으로 저장소에 추가하고 SetupAPI로 그 장치에 지정한다. 이미 드라이버가 있으면 아무것도 하지 않는다.
+- facade `fastbootDriverEnsure`는 `REAL_STEPS.fastboot`일 때만 호출한다. `usb_modes`는 드라이버 없는 부트로더 폰을 `mode: "fastboot-nodriver"`로 알린다.

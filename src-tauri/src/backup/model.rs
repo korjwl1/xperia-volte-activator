@@ -130,6 +130,10 @@ pub struct Manifest {
     /// 이전 버전 manifest에는 없으므로 선택 필드.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_key: Option<String>,
+    /// SHA-256(settings secure android_id) — 공장 초기화 때마다 새로 정해진다. 기존 백업을 갱신할 때
+    /// 백업 이후 폰이 초기화됐는지 판정해, 초기화된 폰의 빈 연락처·설정·문자로 사본을 덮지 않게 한다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_key: Option<String>,
     pub firmware: String,
     pub android: String,
     pub items: Vec<ItemRecord>,
@@ -152,6 +156,7 @@ impl Manifest {
             model: model.to_string(),
             serial_masked: serial_masked.to_string(),
             device_key: None,
+            install_key: None,
             firmware: firmware.to_string(),
             android: android.to_string(),
             items: Vec::new(),

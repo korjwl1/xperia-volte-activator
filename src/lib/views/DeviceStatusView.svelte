@@ -205,10 +205,6 @@
             VoLTE 작업 시작
             <ArrowRight size={20} />
           </button>
-          <button class="rounded-xl border border-primary-foreground/40 px-8 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary-foreground/10 transition-colors"
-            onclick={() => wizard.startBackupSession()}>
-            백업만 실행
-          </button>
       </div>
 
       <!-- 크레딧 — 하단 absolute (공간 차지 안 함) -->

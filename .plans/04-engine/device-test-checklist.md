@@ -84,8 +84,14 @@ status: 진행 전 — 2026-10-05 기준 아래 항목은 모두 **실기기에�
 
 - [ ] Magisk APK 다이제스트·인증서 핀(`b4cb83b4…`) 검증, 오프라인 캐시 사용
 - [ ] boot_patch.sh 실행(종료 코드 판정), new-boot.img stat 크기·수신 길이·헤더 검사 통과
-- [ ] 패치 이미지 양 슬롯 기록 → OS 부팅 → Magisk 앱 설치 → su 승인(root_check)
-- [ ] 언루팅: 순정 이미지 양 슬롯 재기록 후 정상 부팅·루팅 해제 확인
+- [x] 2026-10-07 XQ-DQ44(67.2.A.3.178, CLI 단계별): 순정 init_boot 부분 다운로드(1.9MB) → 기기 대조 → Magisk v30.7 패치(8 MiB, 해시 상이) → **fastbootd**에서 init_boot_a/_b 기록 OKAY → OS 부팅 25초 → Magisk 앱 설치 → `magiskd` 실행·`30.7:MAGISK:R` → su uid=0(`u:r:magisk:s0`).
+  - 부트로더 fastboot는 `flash:init_boot_a`를 `Flashing is not allowed for partition`으로 거부한다 → 기록은 fastbootd(원본 도구와 같음).
+  - fastbootd USB ID는 `18D1:4EE0`(드라이버 없음) → Sony INF를 같은 방식으로 자동 지정했다(UAC).
+  - 부트로더는 `has-slot:init_boot`에 "Variable Not found" → `partition-size:init_boot_a/_b`로 판정. fastbootd는 `has-slot:init_boot=yes`.
+  - fastbootd `getvar:all`은 347개 변수로 INFO 256 상한을 넘었다 → 상한 4096. 끊긴 응답이 남아 fastbootd가 멈췄다 → 장치를 열 때 남은 응답을 비운다.
+  - Magisk 30.7은 `/system/bin/su`가 없고 `/debug_ramdisk/su`만 있다 → su 명령은 PATH에 없으면 그 경로를 쓴다.
+- [ ] GUI 루팅 단계 전체(fastbootd 진입·드라이버·기록·복귀·su 승인 화면 깨우기/잠금 대기/거부 안내) 재실행 검증 — 다음 루팅 기기에서
+- [ ] 언루팅: 순정 이미지 양 슬롯 재기록(fastbootd) 후 정상 부팅·루팅 해제 확인
 - [ ] Magisk APK 신뢰 범위: `magisk_prepare`가 받은 캐시(magisk/ 안, 다이제스트 기록 일치)로만 패치·설치되는가
 - [ ] 패치 결과의 출처 기록에 순정 부모 이미지 해시·파티션·펌웨어 지문이 남고, 동일 기기의 검사 기록으로 이후 플래시가 통과하는가
 
@@ -165,3 +171,8 @@ status: 진행 전 — 2026-10-05 기준 아래 항목은 모두 **실기기에�
 2026-10-06 review follow-up: new source attribute capture/GUI backupOnly/probe serialization/cancellable PC verify/updated APK/corrupt tar repairs have offline regression tests. Prior 194GB copy does not validate the new GUI entry or metadata restoration. No destructive live restore/unlock test is implied. Live metadata enrichment, when performed, must be marked after-copy-enrichment; unavailable birth time and unrecoverable past attributes remain explicit.
 
 2026-10-06 최종 수정 검증 범위: 원본 속성 sidecar, GUI 백업만 실행, SMS probe/준비 충돌, tar 복구 및 제외 진단 정리, ADB 오류 후 정리는 오프라인 회귀 검증이다. 기존 D: 백업은 사용자 지시로 삭제됐다. 새 전체 실기기 백업, 재연결·강제 종료 재개, 실제 메타데이터 조회 지원값, 초기화 뒤 전체 복원은 아직 새 코드로 검증하지 않았다.
+
+- [x] 2026-10-07 fastboot 사전 점검(XQ-DQ44): 부트로더 재부팅·getvar·OS 재부팅. `is-userspace=no`, `unlocked=no`, serialno=ADB 시리얼 확인. 폰 데이터 변경 없음.
+- [x] 2026-10-07 Windows fastboot 드라이버 자동 설치: 판매명 "Xperia 1 V" → 공식 `xperia-1-v-driver` 다운로드·서명 드라이버 지정(UAC) → libusb로 getvar 성공.
+- [x] 2026-10-07 실제 `oem unlock`(XQ-DQ44, GUI): 코드 수락 OKAY(즉시), 자동 재부팅 없음. **직후 `getvar unlocked`는 no**이고, `reboot-bootloader` 후 다시 읽으면 yes(6초 후 재연결). 엔진이 OKAY+no일 때 부트로더를 재시작해 재확인하도록 수정했다. 이후 OS 재부팅으로 초기화 진행.
+- [ ] 수정한 엔진의 언락 경로(OKAY → reboot-bootloader → yes 확인) GUI 재실행 검증 — 다음 언락 기기에서 확인

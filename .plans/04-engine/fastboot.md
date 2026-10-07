@@ -92,3 +92,25 @@ status: implemented / gated (실기기 미검증, 쓰기·재부팅 기본 비�
 ## 병합 후 통합 점검 (2026-10-04)
 
 당시 결과는 [integrated-review.md](integrated-review.md) 참조. 이후 사용자 지시에 따라 조건부 리락을 구현했다. 최신 조건은 [unroot-relock.md](unroot-relock.md)와 [적대적 리뷰](adversarial-review-20261005.md)를 따른다. 언락·기록·재부팅은 expectedSerial과 fastboot serialno가 같아야 한다. 기록은 필수 expectedSha256과 실제 전송 버퍼 및 OS에서 확인한 기기·펌웨어 출처를 대조한다. 공통 변경 실행권으로 ADB 엔진과 동시 실행하지 않는다. 이력 누락·손상·최신 미완료는 리락을 거부한다. 손상 이력은 명시적으로 보관한 뒤 순정 양 슬롯 기록을 다시 수행해야 한다.
+
+## 2026-10-07 실기기 사전 점검과 Windows fastboot 드라이버 (사용자 승인)
+
+- **사전 점검 (XQ-DQ44, 폰 데이터 변경 없음):** 개발 CLI로 부트로더 재부팅 → `fastboot_getvar` → OS 재부팅을 실행했다.
+  - `is-userspace=no`, `unlocked=no`, `secure=yes`, `current-slot=a`, `slot-count=2`, `max-download-size=805306368`, `version-bootloader=8550-0001_X_Boot_SM8550_LA1.1_U_110`, 변수 245개.
+  - `fastboot_reboot`의 serialno 대조가 ADB 시리얼과 일치해 통과했다. 15초 뒤 Android로 다시 연결됐다.
+- **드라이버 문제:** 부트로더 모드 폰은 Windows에 자동으로 붙는 드라이버가 없어(문제 코드 28) libusb 목록에 나오지 않는다. 원본 도구는 장치 관리자에서 사람이 Sony 드라이버를 직접 지정하게 했다.
+- **자동화 (`src-tauri/src/usb_driver.rs`):**
+  - 판매명으로 공식 드라이버를 받는다(Microsoft WHCP 서명 `sa0200adb.inf`, 이 PC에 이미 있던 파일과 SHA-256이 같음).
+  - 관리자 권한으로 같은 실행 파일을 `--xva-bind-usb-driver`로 다시 띄워 `SetupCopyOEMInf` → INF 종류 지정 → `DI_ENUMSINGLEINF`/`ALLOWEXCLUDEDDRVS` 드라이버 목록 → `DiInstallDevice`를 실행한다.
+  - 실기기에서 설치 후 "Sony sa0200 ADB Interface Driver"로 연결됐고 getvar가 성공했다.
+- **GUI:** 언락·리락의 "부트로더 진입 확인" 대기 중 `fastboot-nodriver`를 보면 한 번 자동 설치한다(UAC). 실패하면 사유를 남기고 계속 기다린다.
+- **실제 언락 (2026-10-07, XQ-DQ44):**
+  - `oem unlock 0x<코드>`는 즉시 OKAY였고 자동 재부팅은 없었다. 직후 `getvar unlocked`는 `no`였다(GUI가 성공으로 처리하지 않고 멈춤).
+  - 개발 CLI로 `reboot-bootloader` 후 다시 읽자 `yes`가 됐다. Sony 부트로더는 잠금 상태를 부트로더를 다시 시작해야 갱신한다.
+  - `fastboot_unlock`을 고쳤다. OKAY 뒤에도 `no`면 `reboot-bootloader`를 보내고, 최대 90초 안에 다시 열어 같은 기기·부트로더 모드를 확인한 뒤 `unlocked`를 읽는다. 여전히 `no`면 실패다. 전 과정 동안 기기 작업 실행권을 쥔다.
+  - getvar의 `serial:` 변수가 로그에 마스킹되지 않던 문제도 함께 고쳤다.
+- **fastbootd (2026-10-07, XQ-DQ44):**
+  - 부트 이미지 기록은 fastbootd(`reboot-fastboot`/`adb reboot fastboot`)에서만 된다. 부트로더에서는 거부된다.
+  - USB `18D1:4EE0`, `is-userspace=yes`, `has-slot:init_boot=yes`, `max-download-size=0x10000000`, `getvar:all` 변수 347개.
+  - INFO 상한은 4096이다. 장치를 열 때 이전 연결이 남긴 응답을 비운다(끊긴 getvar:all 뒤 명령 전송 시간 초과를 실측).
+  - 양 슬롯 판정은 `has-slot`이 없으면 `partition-size:<p>_a/_b`로 한다(부트로더의 init_boot).

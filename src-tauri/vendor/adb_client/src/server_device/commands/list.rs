@@ -52,7 +52,7 @@ impl ADBServerDevice {
                     let mut connection = self.transport.get_raw_connection()?;
 
                     let mode = connection.read_u32::<LittleEndian>()?;
-                    let size = connection.read_u32::<LittleEndian>()?;
+                    let size = u64::from(connection.read_u32::<LittleEndian>()?);
                     let time = connection.read_u32::<LittleEndian>()?;
                     let name_len = connection.read_u32::<LittleEndian>()?;
                     let mut name_buf = vec![0_u8; name_len as usize];

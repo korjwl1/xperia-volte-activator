@@ -91,7 +91,7 @@ export function buildPlan(
   }
   if (needsUnlock) {
     steps.push({ id: "unlock", kind: "unlock", title: "부트로더 언락", desc: "기기가 초기화됩니다", risk: "danger", wipe: true, estSec: 120, manual: ["mode-wait"] });
-    steps.push({ id: "setup-min", kind: "setup", title: "기본 설정", desc: "재부팅 후 초기 설정 및 USB 디버깅 활성화", estSec: 300, manual: ["usb-debug"] });
+    steps.push({ id: "setup-min", kind: "setup", title: "기본 설정", desc: "초기화 후 폰 초기 설정 · 개발자 옵션 · USB 디버깅", estSec: 300, manual: ["usb-debug"] });
   }
   if (needsRoot) {
     // 자동: Magisk 최신 APK → 패치 도구·부트 이미지 전송 → 폰에서 boot_patch.sh(셸 권한) → 결과 검증 → fastboot 기록 → Magisk 앱 설치
@@ -147,7 +147,7 @@ function finalize(steps: Seed[]): PlanStep[] {
 }
 
 function setupAfterWipe(id: string): Seed {
-  return { id, kind: "setup", title: "기본 설정", desc: "재부팅 후 초기 설정 및 USB 디버깅 활성화", estSec: 300, manual: ["usb-debug"] };
+  return { id, kind: "setup", title: "기본 설정", desc: "초기화 후 폰 초기 설정 · 개발자 옵션 · USB 디버깅", estSec: 300, manual: ["usb-debug"] };
 }
 
 /** 부트로더 언락만 / 리락만 — VoLTE 패치·펌웨어 업데이트 없음 */

@@ -10,7 +10,7 @@ export interface ExecutionFlags {
 
 export const hasLiveActions = (flags: ExecutionFlags): boolean => Object.values(flags).some(Boolean);
 
-export function canReboot(flags: ExecutionFlags, target: "os" | "bootloader"): boolean {
+export function canReboot(flags: ExecutionFlags, target: "os" | "bootloader" | "fastboot"): boolean {
   return flags.root || flags.fastboot || (target === "os" && (flags.verify || flags.efs));
 }
 

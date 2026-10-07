@@ -1176,8 +1176,57 @@ pub async fn root_check(serial: Option<String>) -> Result<bool, String> {
     guarded(Duration::from_secs(30), move || {
         with_first_device(&serial, |dev| {
             // su 없음(127)·거부(1)는 조회 실패가 아니라 "루트 아님"이다
-            let out = crate::device_io::shell_run(dev, "su -c id 2>&1")?;
+            let out = crate::device_io::shell_run(dev, crate::device_io::su!("id 2>&1"))?;
             Ok(out.code == 0 && String::from_utf8_lossy(&out.stdout).contains("uid=0"))
+        })
+    })
+    .await
+}
+
+/// 폰 화면 상태 — Magisk 권한 창은 화면이 켜지고 잠금이 풀려 있어야 보인다(10초 안에 응답이 없으면 영구 거부로 저장된다)
+#[derive(serde::Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenState {
+    /// 화면 켜짐(mWakefulness=Awake)
+    pub awake: bool,
+    /// 잠금 화면 표시 중(isKeyguardShowing=true)
+    pub locked: bool,
+}
+
+fn parse_screen_state(out: &str) -> Result<ScreenState, String> {
+    let value = |key: &str| {
+        out.lines()
+            .find_map(|l| l.trim().strip_prefix(key).map(|v| v.trim().to_string()))
+    };
+    let wakefulness = value("mWakefulness=").ok_or("화면 상태를 확인할 수 없습니다(mWakefulness)")?;
+    let keyguard = value("isKeyguardShowing=").ok_or("잠금 상태를 확인할 수 없습니다(isKeyguardShowing)")?;
+    Ok(ScreenState {
+        awake: wakefulness == "Awake",
+        locked: keyguard != "false",
+    })
+}
+
+/// 화면 켜짐·잠금 상태 (읽기 전용)
+#[tauri::command]
+pub async fn screen_state(serial: Option<String>) -> Result<ScreenState, String> {
+    guarded(Duration::from_secs(15), move || {
+        with_first_device(&serial, |dev| {
+            let out = shell(
+                dev,
+                "dumpsys power | grep -m1 mWakefulness=; dumpsys window | grep -m1 isKeyguardShowing=",
+            )?;
+            parse_screen_state(&out)
+        })
+    })
+    .await
+}
+
+/// 화면 켜기 — 꺼져 있을 때만 켜는 WAKEUP 키(전원 키처럼 끄지 않는다). 잠금은 풀지 않는다.
+#[tauri::command]
+pub async fn screen_wake(serial: Option<String>) -> Result<(), String> {
+    guarded(Duration::from_secs(15), move || {
+        with_first_device(&serial, |dev| {
+            crate::device_io::shell_write(dev, "input keyevent KEYCODE_WAKEUP").map(|_| ())
         })
     })
     .await
@@ -1308,6 +1357,17 @@ pub async fn settings_overview(serial: Option<String>) -> Result<SettingsOvervie
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn screen_state_reads_wakefulness_and_keyguard() {
+        use super::{parse_screen_state, ScreenState};
+        // 실기기(XQ-DQ44) 출력 형식
+        let off = "  mWakefulness=Dozing\n    isKeyguardShowing=true\n";
+        assert_eq!(parse_screen_state(off).unwrap(), ScreenState { awake: false, locked: true });
+        let unlocked = "  mWakefulness=Awake\n    isKeyguardShowing=false\n";
+        assert_eq!(parse_screen_state(unlocked).unwrap(), ScreenState { awake: true, locked: false });
+        assert!(parse_screen_state("  mWakefulness=Awake\n").is_err(), "모르면 잠금 해제로 보지 않는다");
+    }
+
     #[test]
     fn logical_sim_capacity_does_not_fabricate_second_slot_on_single_sim_devices() {
         use crate::backup::fake_device::FakeADBDevice;

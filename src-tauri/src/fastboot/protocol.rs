@@ -17,8 +17,9 @@ pub enum Terminal {
     Data(u64),
 }
 
-/// INFO 프레임 상한 — 정상 기기도 getvar:all에 수십 프레임 보내지만, 고장 시 무한 대비
-const MAX_INFO_FRAMES: usize = 256;
+/// INFO 프레임 상한 — 고장 시 무한 대비. 실기기(XQ-DQ44) getvar:all은 부트로더 245줄이고, fastbootd는
+/// 모든 파티션의 크기·종류·논리 여부를 보내 256줄을 넘는다. 총 시간 상한(GETVAR_ALL_TIMEOUT)이 따로 있다.
+const MAX_INFO_FRAMES: usize = 4096;
 /// 단일 다운로드 상한 — max-download-size와 함께 검사(§9-3 유한 처리)
 pub const MAX_DOWNLOAD: u64 = 1024 * 1024 * 1024;
 
@@ -85,7 +86,7 @@ impl<T: FastbootTransport> FastbootDevice<T> {
                 }
             }
         }
-        Err("INFO 프레임 한도(256) 초과 — 기기가 응답을 끝내지 않습니다".into())
+        Err(format!("INFO 프레임 한도({MAX_INFO_FRAMES}) 초과 — 기기가 응답을 끝내지 않습니다"))
     }
 
     fn read_terminal(&mut self, timeout: Duration) -> Result<Terminal, String> {
@@ -178,6 +179,20 @@ impl<T: FastbootTransport> FastbootDevice<T> {
         }
     }
 
+    /// 양 슬롯(_a/_b) 파티션인지 — 표준 `has-slot`을 먼저 보고, 없으면 두 슬롯의 파티션 크기 보고로 판정한다.
+    /// 실기기(XQ-DQ44): `has-slot`은 boot·modem에만 답하고 init_boot은 "Variable Not found"지만
+    /// `partition-size:init_boot_a`와 `_b`는 둘 다 보고한다.
+    pub fn has_both_slots(&mut self, partition: &str) -> Result<bool, String> {
+        match self.getvar(&format!("has-slot:{partition}"))?.as_deref().map(str::trim) {
+            Some(v) if v.eq_ignore_ascii_case("yes") => return Ok(true),
+            Some(v) if v.eq_ignore_ascii_case("no") => return Ok(false),
+            _ => {}
+        }
+        let a = self.getvar(&format!("partition-size:{partition}_a"))?;
+        let b = self.getvar(&format!("partition-size:{partition}_b"))?;
+        Ok(matches!((a.as_deref(), b.as_deref()), (Some(a), Some(b)) if !a.trim().is_empty() && a.trim() == b.trim()))
+    }
+
     pub fn ensure_bootloader(&mut self) -> Result<(), String> {
         match self.getvar("is-userspace")?.as_deref().map(str::trim) {
             Some(v) if v.eq_ignore_ascii_case("no") => Ok(()),
@@ -185,6 +200,19 @@ impl<T: FastbootTransport> FastbootDevice<T> {
                 Err("fastbootd에서는 실행할 수 없습니다 — 부트로더 모드가 필요합니다".into())
             }
             _ => Err("부트로더 모드를 확인할 수 없습니다(is-userspace)".into()),
+        }
+    }
+
+    /// fastbootd(사용자 공간 fastboot)인지 — 부트 이미지 기록은 여기서만 한다.
+    /// 실기기(XQ-DQ44): 부트로더 fastboot에서 `flash:init_boot_a`는 "Flashing is not allowed for partition"으로 거부된다.
+    /// 원본 도구도 `adb reboot fastboot`(fastbootd)로 들어가 기록한다.
+    pub fn ensure_userspace(&mut self) -> Result<(), String> {
+        match self.getvar("is-userspace")?.as_deref().map(str::trim) {
+            Some(v) if v.eq_ignore_ascii_case("yes") => Ok(()),
+            Some(v) if v.eq_ignore_ascii_case("no") => {
+                Err("부트로더 모드에서는 부트 이미지를 기록할 수 없습니다 — fastbootd 모드가 필요합니다".into())
+            }
+            _ => Err("fastbootd 모드를 확인할 수 없습니다(is-userspace)".into()),
         }
     }
 
@@ -267,6 +295,8 @@ impl<T: FastbootTransport> FastbootDevice<T> {
         let cmd = match target {
             "os" => "reboot",
             "bootloader" => "reboot-bootloader",
+            // fastbootd(사용자 공간 fastboot) — Sony 부트로더는 init_boot·boot 기록을 거부한다
+            "fastboot" => "reboot-fastboot",
             other => return Err(format!("알 수 없는 재부팅 대상: {other}")),
         };
         // FAIL/DATA/타임아웃은 성공 확인이 아니다.
@@ -453,6 +483,20 @@ mod tests {
     }
 
     #[test]
+    fn sony_init_boot_is_slotted_by_partition_sizes_when_has_slot_is_missing() {
+        // 실기기 XQ-DQ44: has-slot:init_boot는 없고 init_boot_a/_b 크기는 있다
+        let (mut d, _) = dev_with(vec![Frame::Fail("GetVar Variable Not found"), Frame::Ok("0x800000"), Frame::Ok("0x800000")]);
+        assert!(d.has_both_slots("init_boot").unwrap());
+        let (mut d, _) = dev_with(vec![Frame::Ok("yes")]);
+        assert!(d.has_both_slots("boot").unwrap());
+        // 한쪽 슬롯만 있거나 has-slot이 no면 양 슬롯으로 보지 않는다
+        let (mut d, _) = dev_with(vec![Frame::Fail("GetVar Variable Not found"), Frame::Ok("0x800000"), Frame::Fail("GetVar Variable Not found")]);
+        assert!(!d.has_both_slots("init_boot").unwrap());
+        let (mut d, _) = dev_with(vec![Frame::Ok("no")]);
+        assert!(!d.has_both_slots("persist").unwrap());
+    }
+
+    #[test]
     fn single_getvar_fail_is_none() {
         let (mut d, _) = dev_with(vec![Frame::Fail("no value")]);
         assert_eq!(d.getvar("nonexistent").unwrap(), None);
@@ -541,7 +585,7 @@ mod tests {
     }
 
     #[test]
-    fn exactly_256_info_frames_allow_the_terminal_response() {
+    fn info_frames_up_to_the_limit_allow_the_terminal_response() {
         let mut frames = vec![Frame::Info("progress"); MAX_INFO_FRAMES];
         frames.push(Frame::Ok("yes"));
         let (mut d, _) = dev_with(frames.clone());

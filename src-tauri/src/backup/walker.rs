@@ -199,7 +199,7 @@ fn walk_in_batch(
             }
             out.files.push(WalkedEntry {
                 remote: path,
-                size: item.size as u64,
+                size: item.size,
                 mtime: item.time,
             });
         }

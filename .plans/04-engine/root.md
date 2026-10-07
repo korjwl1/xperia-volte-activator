@@ -111,3 +111,19 @@ invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb r
 6. ✅ `docs(plans)`: 상태 배지 갱신
 
 2026-10-06: 릴리스 조회뿐 아니라 최신 APK 다운로드·검증·캐시 저장 준비 실패에도 기존 검증 캐시를 다시 검사해 사용한다. 캐시의 다이제스트·서명 핀·패치 페이로드 구조를 통과해야 하며 실제 반환된 버전과 원인은 로그에 남긴다.
+
+## 2026-10-07 실기기 루팅 결과 (XQ-DQ44, 개발 CLI 단계별)
+
+- 절차는 그대로 통과했다: 순정 이미지 → 대조 → Magisk 패치 → 양 슬롯 기록 → OS 부팅 → 앱 설치 → su uid=0.
+- **기록은 fastbootd에서 한다.** 부트로더 fastboot는 `flash:init_boot_a`를 거부한다(`Flashing is not allowed for partition`). 원본 도구도 `adb reboot fastboot`로 들어간다.
+  - 루팅·언루팅은 `root_reboot("fastboot")`로 진입한다. `fastboot_flash`는 `is-userspace=yes`를 요구한다.
+  - 언락·리락(`oem`)은 계속 부트로더에서 한다.
+- 사용자 메모의 boot 추가 패치, boot_b→boot_a 순서는 필요 없다.
+  - 1 V는 init_boot만 패치한다. 원본 도구도 1 V는 init_boot 하나만 처리한다.
+  - 기록 순서는 재부팅 전까지 반영되지 않으므로 의미가 없다. 원본 도구는 `_a` → `_b` 순서다.
+- fastbootd USB ID는 `18D1:4EE0`이다. 드라이버 자동 지정, 장치 열기, 모드 감지가 모두 이 ID를 인식한다.
+- su 위치: Magisk 30.7은 `/debug_ramdisk/su`만 둔다. 루트 명령은 `device_io::su!`로 PATH에 없을 때 그 경로를 쓴다(root_check·DIAG 전환·VoLTE 속성).
+- **su 승인 화면(su-grant):**
+  - `screen_state`로 화면·잠금을 읽는다. 꺼져 있으면 `screen_wake`(WAKEUP 키)로 켜고, 잠겨 있으면 "잠금을 풀어 주세요"를 띄우고 기다린다. 풀린 뒤에 su를 요청한다.
+  - Magisk(v30.7 소스 `SuRequestViewModel`/`SuRequestHandler`)는 10초 무응답이나 거부를 기본 "영구" 거부로 저장한다. 그 뒤 요청은 창 없이 거부된다.
+  - 그래서 거부되면 "Magisk 앱 → 슈퍼유저 탭에서 Shell 켜기"를 안내하고 같은 확인을 2초마다 반복한다. 창이 반복해서 뜨지 않고, 켜는 순간 진행한다.

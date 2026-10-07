@@ -342,6 +342,14 @@ pub fn device_meta(dev: &mut dyn ADBDeviceExt) -> Result<DeviceMeta, String> {
     })
 }
 
+/// 공장 초기화 판정용 키 — SHA-256(android_id). 읽을 수 없으면 None(판정 불가)
+pub fn install_key(dev: &mut dyn ADBDeviceExt) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let id = crate::device_io::shell(dev, "settings get secure android_id").ok()?;
+    let id = id.trim();
+    (!id.is_empty() && id != "null").then(|| hex::encode(Sha256::digest(id.as_bytes())))
+}
+
 /// `pm list packages -3 -f`에서 (패키지, 설치 폴더) 목록 — APK 항목의 소스
 fn package_install_dirs(dev: &mut dyn ADBDeviceExt) -> Result<Vec<(String, String)>, String> {
     let text = crate::device_io::shell(dev, "pm list packages -3 -f")?;
@@ -364,9 +372,9 @@ fn package_install_dirs(dev: &mut dyn ADBDeviceExt) -> Result<Vec<(String, Strin
     Ok(pairs)
 }
 
-/// 백업 폴더명 — backup-<ts>-<model> (모델은 파일명 안전 문자만)
+/// 백업 폴더명 — xva-<model>-backup (모델은 파일명 안전 문자만). 시각을 넣지 않는다:
+/// 같은 저장 위치에서는 같은 폰의 백업을 한 폴더로 이어서 갱신한다
 pub fn backup_dir_name(model: &str) -> String {
-    let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let safe: String = model
         .chars()
         .map(|c| {
@@ -377,12 +385,22 @@ pub fn backup_dir_name(model: &str) -> String {
             }
         })
         .collect();
-    format!("backup-{ts}-{safe}")
+    format!("xva-{safe}-backup")
 }
 
-/// 백업 시작 — 지정 폴더 아래에 시작 시각 기준 폴더(backup-<시각>-<모델>)를 만들고 빈 manifest를 저장한다.
-/// 반환 경로는 절대 경로 — 진행 기록에 그대로 저장해 끊겨도 같은 폴더로 이어서 받는다
-pub fn prepare_backup_root(dev: &mut dyn ADBDeviceExt, dest: &Path) -> Result<PathBuf, String> {
+/// 이 앱이 만든 백업 폴더 이름인지 — 현재 이름(xva-<모델>-backup)과 이전 이름(backup-<시각>-<모델>) 모두
+pub fn is_backup_dir_name(name: &str) -> bool {
+    name.starts_with("backup-") || (name.starts_with("xva-") && name.ends_with("-backup"))
+}
+
+/// 백업 시작 — 지정 폴더 아래의 xva-<모델>-backup을 쓴다. 반환 경로는 절대 경로.
+/// - 없으면 새로 만들고 빈 manifest를 저장한다.
+/// - 이미 있으면 같은 폰의 백업인지 확인한 뒤 그대로 돌려준다 — 이어서 받으면(resume) 바뀐 파일만 갱신된다.
+/// - 다른 폰의 백업, 기록 없는 폴더, 링크·파일이면 덮어쓰지 않고 거부한다.
+pub fn prepare_backup_root(
+    dev: &mut dyn ADBDeviceExt,
+    dest: &Path,
+) -> Result<(PathBuf, bool), String> {
     let dest = std::path::absolute(dest).map_err(|e| format!("백업 위치 확인 실패: {e}"))?;
     if !dest.is_dir() {
         return Err("백업 저장 위치 폴더가 없습니다".into());
@@ -390,22 +408,28 @@ pub fn prepare_backup_root(dev: &mut dyn ADBDeviceExt, dest: &Path) -> Result<Pa
     let meta = device_meta(dev)?;
     let name = backup_dir_name(&meta.model);
     let root = dest.join(&name);
-    // 같은 초에 두 번 시작해도 기존 백업 manifest를 덮어쓰지 않는다.
-    let mut root = root;
-    for suffix in 0..1000 {
-        let candidate = if suffix == 0 {
-            root.clone()
-        } else {
-            dest.join(format!("{name}-{suffix}"))
-        };
-        match std::fs::create_dir(&candidate) {
-            Ok(()) => {
-                root = candidate;
-                break;
+    match std::fs::symlink_metadata(&root) {
+        Ok(found) => {
+            if found.file_type().is_symlink() || !found.is_dir() {
+                return Err(format!("{name}이(가) 폴더가 아니거나 링크라서 백업 폴더로 쓸 수 없습니다"));
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && suffix < 999 => continue,
-            Err(e) => return Err(format!("백업 폴더 생성 실패: {e}")),
+            let empty = std::fs::read_dir(&root)
+                .map_err(|e| format!("기존 백업 폴더 확인 실패: {e}"))?
+                .next()
+                .is_none();
+            if !empty {
+                let manifest = load_manifest(&root)
+                    .map_err(|e| format!("{name} 폴더에 백업 기록이 없거나 손상돼 이어서 쓸 수 없습니다 — {e}"))?;
+                if meta.device_key.is_none() || manifest.device_key != meta.device_key {
+                    return Err(format!("{name} 폴더는 다른 기기의 백업입니다 — 다른 저장 위치를 지정해 주세요"));
+                }
+                return Ok((root, true));
+            }
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir(&root).map_err(|e| format!("백업 폴더 생성 실패: {e}"))?;
+        }
+        Err(e) => return Err(format!("백업 폴더 확인 실패: {e}")),
     }
     let mut manifest = Manifest::new(
         &meta.model,
@@ -414,8 +438,9 @@ pub fn prepare_backup_root(dev: &mut dyn ADBDeviceExt, dest: &Path) -> Result<Pa
         &meta.android,
     );
     manifest.device_key = meta.device_key;
+    manifest.install_key = install_key(dev);
     save_manifest_atomic(&manifest, &root)?;
-    Ok(root)
+    Ok((root, false))
 }
 
 /// 열거 결과를 풀 결과에 병합 — 열거 오류·스킵 기록도 항목 완결 판정에 들어간다(§6-2 전수 열거)
@@ -453,16 +478,17 @@ pub fn run_backup_items(
     on_progress: &mut ProgressSink,
 ) -> Result<BackupSummary, String> {
     validate_items(items)?;
-    let root = match resume_dir {
+    // 저장 위치에 같은 폰의 기존 백업 폴더가 있으면 재개와 똑같이 이어서 갱신한다(바뀐 파일만 받음)
+    let (root, resuming) = match resume_dir {
         Some(dir) => {
             // 재개 — manifest가 있는 폴더만 허용(그 외 덮어쓰기 방지)
             load_manifest(dir).map_err(|e| format!("이어서 진행할 수 없습니다 — {e}"))?;
-            std::path::absolute(dir).map_err(|e| format!("백업 폴더 확인 실패: {e}"))?
+            (std::path::absolute(dir).map_err(|e| format!("백업 폴더 확인 실패: {e}"))?, true)
         }
         None => prepare_backup_root(dev, dest)?,
     };
     let mut manifest = load_manifest(&root)?;
-    if resume_dir.is_some() {
+    if resuming {
         let meta = device_meta(dev)?;
         // 마스킹 시리얼은 앞 6자리만 같아도 일치하므로, 기록된 기기 해시가 있으면 그것으로 확인한다
         let same_device = match (&manifest.device_key, &meta.device_key) {
@@ -482,6 +508,20 @@ pub fn run_backup_items(
             manifest.device_key = meta.device_key;
         }
     }
+    // 저장 위치에서 찾은 기존 백업을 갱신하는 경우(끊긴 실행의 재개가 아님): 완료 항목도 다시 훑는다.
+    // 파일 항목은 안 바뀐 파일을 다시 받지 않고, 폰에서 사라진 파일의 사본은 유지된다.
+    // 연락처·설정·문자·통화는 다시 수집하면 덮어쓰므로, 백업 이후 공장 초기화된 폰(android_id가 바뀜)이거나
+    // 판정할 수 없으면 기존 사본을 그대로 둔다.
+    let refreshing = resume_dir.is_none() && resuming;
+    let current_install = if refreshing { install_key(dev) } else { None };
+    let reset_since_backup = matches!(
+        (&manifest.install_key, &current_install),
+        (Some(saved), Some(current)) if saved != current
+    );
+    let refresh_snapshots = refreshing && current_install.is_some() && !reset_since_backup;
+    if refreshing && !reset_since_backup && current_install.is_some() {
+        manifest.install_key = current_install.clone();
+    }
     // 첫 항목 전에 취소돼도 선택한 모든 항목이 Pending으로 남아야 한다.
     manifest.excluded_items = manifest
         .items
@@ -500,7 +540,7 @@ pub fn run_backup_items(
         manifest.touch();
         save_manifest_atomic(&manifest, &root)?;
     }
-    let mut verified = if resume_dir.is_some() {
+    let mut verified = if resuming {
         crate::backup::verify::verify_selected_retaining_progress(
             &root,
             &mut manifest,
@@ -511,7 +551,7 @@ pub fn run_backup_items(
     } else {
         HashMap::new()
     };
-    if cancel.cancelled() && resume_dir.is_some() {
+    if cancel.cancelled() && resuming {
         return Err(format!("{} — 완료 파일은 보존됩니다", cancel.reason()));
     }
     super::recovery::clean_temporaries(&root)?;
@@ -537,7 +577,7 @@ pub fn run_backup_items(
         }
     }
 
-    if resume_dir.is_some() && items.iter().any(|id| id == "apk") {
+    if resuming && items.iter().any(|id| id == "apk") {
         let dirs = package_install_dirs(dev)?;
         if let Some(apk) = manifest.items.iter_mut().find(|i| i.id == "apk") {
             let changed = dirs.iter().any(|(pkg, dir)| {
@@ -562,9 +602,12 @@ pub fn run_backup_items(
         if cancel.cancelled() {
             break;
         }
-        // 이미 완료된 항목은 다시 받지 않는다(§9-2 재개 프로브 — 항목 단위)
+        // 끊긴 실행의 재개: 이미 완료된 항목은 다시 받지 않는다(§9-2 재개 프로브 — 항목 단위).
+        // 기존 백업 갱신: 파일 항목은 다시 훑어 바뀐 것만 받고, 덮어쓰는 항목은 위의 초기화 판정을 따른다.
         if let Some(prev) = manifest.items.iter().find(|i| i.id == *id) {
-            if prev.status == ItemStatus::Done {
+            if prev.status == ItemStatus::Done
+                && (!refreshing || (prev.kind != ItemKind::Files && !refresh_snapshots))
+            {
                 continue;
             }
         }
@@ -961,6 +1004,77 @@ mod tests {
     }
 
     #[test]
+    fn same_phone_backup_folder_is_found_and_only_changed_files_are_pulled() {
+        let dest = tempfile::tempdir().unwrap();
+        let mut d = dev_full();
+        let items = vec!["dcim".to_string(), "app-data".to_string()];
+        let mut sink: ProgressSink = Box::new(|_| {});
+        let first = run_backup_items(&mut d, &items, dest.path(), None, &CancelFlag::new(), &mut sink).unwrap();
+        assert!(first.complete);
+        // 같은 저장 위치를 다시 고르면 같은 폴더(xva-<모델>-backup)를 찾아 바뀐 파일만 받는다
+        let (found, existing) = prepare_backup_root(&mut d, dest.path()).unwrap();
+        assert!(existing && found == PathBuf::from(&first.dir));
+        d.add_file("/sdcard/DCIM/b.jpg", b"new photo", 1700000100, 0o644);
+        d.pull_calls.clear();
+        let second = run_backup_items(&mut d, &items, dest.path(), None, &CancelFlag::new(), &mut sink).unwrap();
+        assert_eq!(second.dir, first.dir);
+        assert!(second.complete, "{:?}", second.errors);
+        assert_eq!(d.pull_calls, vec!["/sdcard/DCIM/b.jpg".to_string()]);
+        assert!(std::fs::read_dir(dest.path()).unwrap().count() == 1, "no second backup folder");
+    }
+
+    #[test]
+    fn updating_after_a_factory_reset_never_overwrites_settings_or_contacts_snapshots() {
+        let dest = tempfile::tempdir().unwrap();
+        let items = vec!["settings-all".to_string(), "dcim".to_string()];
+        let mut sink: ProgressSink = Box::new(|_| {});
+        let mut d = dev_full();
+        d.answer_shell("settings get secure android_id", "aaaa1111
+");
+        run_backup_items(&mut d, &items, dest.path(), None, &CancelFlag::new(), &mut sink).unwrap();
+        let settings_runs = |d: &FakeADBDevice| d.shell_calls.iter().filter(|c| c.starts_with("settings list system")).count();
+        // 같은 설치(초기화 없음): 설정도 최신으로 다시 수집한다
+        let before = settings_runs(&d);
+        run_backup_items(&mut d, &items, dest.path(), None, &CancelFlag::new(), &mut sink).unwrap();
+        assert!(settings_runs(&d) > before, "settings refreshed on the same install");
+        // 공장 초기화(android_id 변경): 기존 설정 사본을 덮어쓰지 않는다. 파일 항목은 계속 갱신된다
+        let mut wiped = dev_full();
+        wiped.answer_shell("settings get secure android_id", "bbbb2222
+");
+        wiped.answer_shell("settings list system", "screen_brightness=0
+");
+        let saved = std::fs::read(dest.path().join("xva-XQ-DQ44-backup/settings/settings_system.txt")).unwrap();
+        wiped.add_file("/sdcard/DCIM/after-reset.jpg", b"x", 1700000200, 0o644);
+        let summary = run_backup_items(&mut wiped, &items, dest.path(), None, &CancelFlag::new(), &mut sink).unwrap();
+        assert_eq!(settings_runs(&wiped), 0, "no settings recollection after a reset");
+        assert_eq!(std::fs::read(dest.path().join("xva-XQ-DQ44-backup/settings/settings_system.txt")).unwrap(), saved);
+        assert!(wiped.pull_calls.contains(&"/sdcard/DCIM/after-reset.jpg".to_string()));
+        assert!(summary.complete, "{:?}", summary.errors);
+        // 초기화 판정 키는 원래 값을 유지해 다음 갱신도 같은 판정을 한다
+        let manifest = load_manifest(Path::new(&summary.dir)).unwrap();
+        assert_ne!(manifest.install_key, super::install_key(&mut wiped));
+    }
+
+    #[test]
+    fn a_folder_with_the_backup_name_but_no_record_or_another_phone_is_never_reused() {
+        let dest = tempfile::tempdir().unwrap();
+        let mut d = dev_full();
+        let root = dest.path().join("xva-XQ-DQ44-backup");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("note.txt"), b"user file").unwrap();
+        assert!(prepare_backup_root(&mut d, dest.path()).unwrap_err().contains("기록"));
+        assert_eq!(std::fs::read(root.join("note.txt")).unwrap(), b"user file");
+        std::fs::remove_file(root.join("note.txt")).unwrap();
+        let (_, existing) = prepare_backup_root(&mut d, dest.path()).unwrap();
+        assert!(!existing, "an empty folder is adopted as a new backup");
+        let mut other = dev_full();
+        other.answer_shell("getprop", "[ro.product.model]: [XQ-DQ44]
+[ro.serialno]: [OTHERPHONE99]
+");
+        assert!(prepare_backup_root(&mut other, dest.path()).unwrap_err().contains("다른 기기"));
+    }
+
+    #[test]
     fn updated_apk_replaces_the_whole_verified_cohort_without_path_collision() {
         let mut dev = dev_full();
         let dest = tempfile::tempdir().unwrap();
@@ -1056,8 +1170,7 @@ mod tests {
         .unwrap();
         assert!(summary.complete, "errors: {:?}", summary.errors);
         assert!(progress_calls.load(std::sync::atomic::Ordering::Relaxed) > 0);
-        assert!(summary.dir.contains("backup-"));
-        assert!(summary.dir.contains("XQ-DQ44"));
+        assert!(summary.dir.ends_with("xva-XQ-DQ44-backup"), "{}", summary.dir);
         let root = PathBuf::from(&summary.dir);
         assert!(root.join("settings/settings_secure.txt").exists());
         assert!(root.join("android-data/com.kakao.talk/db").exists());

@@ -991,3 +991,32 @@ test("SMS export advances by itself once the files are seen twice and pass colle
     assert.equal(w.manualCurrent,null,"advanced without any checkbox or button");
   } finally { globalThis.setInterval=original; }
 });
+
+test("a found xva-<model>-backup folder is updated in place, while a journal folder is resumed", async () => {
+  const w=wizard();w.opts.backupOnly=true;w.backupPath="D:/backups";
+  w.groups=[{id:"files",items:[{id:"dcim",checked:true}]}];
+  const step=w.runSteps[0];step.id="backup";const runs=[];
+  api.onBackupProgress=async()=>()=>{};api.journalSave=async()=>({ok:true,value:null});
+  api.backupPrepare=async()=>({ok:true,value:{dir:"D:/backups/xva-XQ-DQ44-backup",existing:true}});
+  api.backupRun=async(_s,_i,_d,_r,resumeDir)=>{runs.push(resumeDir);return {ok:true,value:{dir:"D:/backups/xva-XQ-DQ44-backup",complete:true,files:1,bytes:1,errors:[],items:[{id:"dcim",status:"done"}]}};};
+  await w.runRealBackup(step);
+  assert.equal(w.backupDir,"D:/backups/xva-XQ-DQ44-backup");
+  assert.deepEqual(runs,[undefined],"the engine re-finds the folder and refreshes completed items");
+  assert.ok(step.logs.some(l=>l.includes("기존 백업을 찾았습니다")));
+  // 진행 기록에서 이어 받는 끊긴 실행은 같은 폴더를 재개 경로로 넘긴다(완료 항목은 건너뜀)
+  const resumed=wizard();resumed.opts.backupOnly=true;resumed.backupPath="D:/backups";resumed.backupDir="D:/backups/xva-XQ-DQ44-backup";
+  resumed.groups=w.groups;const step2=resumed.runSteps[0];step2.id="backup";
+  await resumed.runRealBackup(step2);assert.deepEqual(runs,[undefined,"D:/backups/xva-XQ-DQ44-backup"]);
+});
+
+test("bootloader without a Windows fastboot driver installs the Sony driver once and keeps waiting", async () => {
+  const w=wizard();w.device.productName="Xperia 1 V";w.runSteps=[{id:"unlock",title:"언락",status:"manual-wait",progress:0,logs:[],manualDone:0}];w.cursor=0;
+  const asked=[];api.usbModes=async()=>[{mode:"fastboot-nodriver",vendorId:0x0FCE,productId:0x0DDE}];
+  api.fastbootDriverEnsure=async(name)=>{asked.push(name);return {ok:true,value:"Sony 공식 드라이버(xperia-1-v-driver)를 fastboot 장치에 연결했습니다"};};
+  assert.equal(await w.usbModeIs("fastboot"),false,"keeps waiting until libusb sees the fastboot interface");
+  assert.equal(await w.usbModeIs("fastboot"),false);
+  assert.deepEqual(asked,["Xperia 1 V"],"UAC is requested only once per run");
+  assert.ok(w.runSteps[0].logs.some(l=>l.includes("xperia-1-v-driver")));
+  api.usbModes=async()=>[{mode:"fastboot",vendorId:0x0FCE,productId:0x0DDE}];
+  assert.equal(await w.usbModeIs("fastboot"),true);
+});
