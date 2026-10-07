@@ -1,8 +1,15 @@
-import type { ApiResult, RootImportedImage, RootImagePort } from "$lib/types";
+import type { ApiResult, RootImportedImage, RootImagePort, RootPreparationPort } from "$lib/types";
 
 export function requireResult<T>(result: ApiResult<T>): T {
   if (!result.ok) throw new Error(result.error);
   return result.value;
+}
+/** Publish a flashable result only after both patching and manager installation succeed. */
+export async function prepareMagiskImage(api: RootPreparationPort, serial: string, stock: RootImportedImage): Promise<RootImportedImage> {
+  const manager = requireResult(await api.magiskPrepare());
+  const result = requireResult(await api.magiskPatch({ serial, apkPath: manager.apkPath, apkSha256: manager.sha256, imagePath: stock.path, imageSha256: stock.sha256, fingerprint: stock.fingerprint, partition: stock.partition }));
+  requireResult(await api.magiskInstall(serial, manager.apkPath, manager.sha256));
+  return { path: result.path, sha256: result.patchedSha256, fingerprint: stock.fingerprint, partition: stock.partition };
 }
 /** Sequential read polling: never race a pending native call against a timer. */
 export async function waitForFastboot(api: RootImagePort, timeoutMs = 90000): Promise<void> {

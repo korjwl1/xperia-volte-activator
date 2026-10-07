@@ -376,7 +376,10 @@ pub async fn boot_image_check(
     if serial.trim().is_empty() {
         return Err("작업 대상 기기 식별값이 필요합니다".into());
     }
-    crate::tasks::guarded(std::time::Duration::from_secs(60), move || {
+    // A successful probe persists flash eligibility. Do not return before that write settles.
+    let operation = crate::device_io::WriteOperation::acquire()?;
+    crate::tasks::blocking("Boot image device binding", move || {
+        let _operation = operation;
         let path = Path::new(&path);
         let bytes = read(path)?;
         // 기기와 대조하는 지문은 추출 때 기록한 것 — 넘겨받은 지문은 그 기록과 같을 때만 인정

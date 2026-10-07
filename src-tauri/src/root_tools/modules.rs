@@ -227,6 +227,7 @@ pub fn install_work(
         );
     }
     let key = crate::device_io::identity_key(dev)?;
+    super::switch::require_module_install_stage(dir, &key)?;
     let path = super::key_path(dir, &key, "root-modules")?;
     let mut r = read_record(&path)?;
     dependencies(&package.id, state.engine, &state.modules, &r)?;
@@ -333,7 +334,7 @@ pub async fn root_module_reconcile(serial: String, confirm: bool) -> Result<Inve
     }
     let dir = super::data_dir()?;
     let operation = crate::device_io::WriteOperation::acquire()?;
-    crate::tasks::guarded(std::time::Duration::from_secs(60), move || {
+    crate::tasks::blocking("Module record reconciliation", move || {
         let _operation = operation;
         crate::adb::with_first_device(&Some(serial), |dev| {
             let state = inventory_work(dev, &dir)?;
@@ -553,5 +554,40 @@ mod tests {
                 .count(),
             1
         );
+    }
+    #[test]
+    fn unfinished_or_corrupt_engine_switch_blocks_module_install_before_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let hash = prepared(dir.path());
+        let mut d = fake();
+        let key = crate::device_io::identity_key(&mut d).unwrap();
+        let path = super::super::key_path(dir.path(), &key, "root-switch").unwrap();
+        let mut record = super::super::switch::Switch {
+            stage: "cleanup-intent".into(),
+            target: "resukisu".into(),
+            fingerprint: "Sony/current".into(),
+            stock_sha256: "a".repeat(64),
+            partition: "init_boot".into(),
+            modules: vec![],
+            boot_id: "11111111-1111-1111-1111-111111111111".into(),
+            history_offset: 0,
+        };
+        for stage in ["cleanup-intent", "cleaned-awaiting-stock", "stock-verified"] {
+            record.stage = stage.into();
+            super::super::save(&path, &record).unwrap();
+            assert!(install_work(&mut d, dir.path(), &hash, true)
+                .err()
+                .unwrap()
+                .contains("엔진 전환"));
+            assert!(d.pushed.is_empty());
+            assert!(!dir.path().join("root-modules").exists());
+        }
+        record.stage = "invalid-stage".into();
+        super::super::save(&path, &record).unwrap();
+        assert!(install_work(&mut d, dir.path(), &hash, true).is_err());
+        assert!(d.pushed.is_empty());
+        record.stage = "complete".into();
+        super::super::save(&path, &record).unwrap();
+        assert!(super::super::switch::require_module_install_stage(dir.path(), &key).is_ok());
     }
 }

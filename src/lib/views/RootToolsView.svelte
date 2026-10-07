@@ -5,7 +5,7 @@
   import { REAL_STEPS } from "$lib/data/runMode";
   import { bootPartition } from "$lib/data/devices";
   import { rootToolsState } from "$lib/stores/rootTools.svelte";
-  import { requireResult, flashRootImage, waitForFastboot, ROOT_MODULE_CHOICES } from "$lib/domain/rootTools";
+  import { requireResult, prepareMagiskImage, flashRootImage, waitForFastboot, ROOT_MODULE_CHOICES } from "$lib/domain/rootTools";
   import type { DeviceStatus, RootState, RootRelease, RootPackage, RootSwitch, RootModuleInventory, RootImportedImage, RootUpdatePlan } from "$lib/types";
   import { ArrowLeft, TriangleAlert, ShieldCheck, Package, RefreshCw, Loader2 } from "@lucide/svelte/icons";
 
@@ -53,6 +53,7 @@
       await operation();
       log = [...log.slice(-199), `${label}: 완료`];
     } catch (e) {
+      if (writes) { root = null; inventory = null; updatePlan = null; packageReady = null; patched = null; manager = null; }
       error = e instanceof Error ? e.message : String(e);
       log = [...log.slice(-199), `${label}: 중단 · ${error}`];
     } finally {
@@ -62,12 +63,15 @@
     }
   }
   async function inspect() {
-    root = requireResult(await api.rootInspect(serial));
-    if (root.access === "granted" && ["magisk", "kernelsu-family"].includes(root.engine)) inventory = requireResult(await api.rootModulesInspect(serial));
-    else inventory = null;
+    root = null; inventory = null; updatePlan = null; packageReady = null;
+    const observed = requireResult(await api.rootInspect(serial));
+    const modules = observed.access === "granted" && ["magisk", "kernelsu-family"].includes(observed.engine)
+      ? requireResult(await api.rootModulesInspect(serial)) : null;
+    root = observed; inventory = modules;
   }
-  async function loadSwitch() { switched = requireResult(await api.rootSwitchStatus(serial)); target = switched.target; }
+  async function loadSwitch() { switched = null; resetPatch(); switched = requireResult(await api.rootSwitchStatus(serial)); target = switched.target; }
   async function prepareStock() {
+    stock = null; resetPatch();
     if (!partition) throw new Error("부트 파티션을 확인할 수 없는 기종입니다");
     const fw = requireResult(await api.firmwareFetch(serial, partition));
     const sha256 = requireResult(await api.bootImageCheck(serial, fw.path, fw.fingerprint));
@@ -76,8 +80,8 @@
   function resetPatch() { manager = null; patched = null; samePhone = false; patchedPath = ""; }
   async function cleanup() {
     if (!canFlash || !stock || !supportedTarget) throw new Error("순정 이미지·실전 게이트·지원 기종 확인이 필요합니다");
+    switched = null; resetPatch(); root = null; inventory = null; packageReady = null; updatePlan = null; settingsAck = false;
     switched = requireResult(await api.rootSwitchPrepare(serial, stock.path, target, true));
-    patched = null; inventory = null;
   }
   async function enterFastboot() {
     if (!canFlash) throw new Error("fastboot 실행 게이트가 꺼져 있습니다");
@@ -89,35 +93,40 @@
   }
   async function prepareNewEngine() {
     if (!newEngineAllowed || !stock || !supportedTarget || device.bootloader !== "unlocked") throw new Error("같은 버전 순정 복원과 언락 상태 확인이 필요합니다");
+    patched = null; manager = null;
     if (target === "resukisu") {
       if (!tag) throw new Error("ReSukiSU 버전을 선택하세요");
-      manager = requireResult(await api.rootPackagePrepare("resukisu", tag));
-      requireResult(await api.resukisuInstall(serial, manager.sha256, true));
-      patched = null;
+      const prepared = requireResult(await api.rootPackagePrepare("resukisu", tag));
+      requireResult(await api.resukisuInstall(serial, prepared.sha256, true));
+      manager = prepared;
       log = [...log, "폰의 ReSukiSU 매니저에서 이 순정 IMG를 직접 패치한 뒤 결과를 PC로 복사하세요. 순정 IMG 경로: " + stock.path];
     } else {
-      const m = requireResult(await api.magiskPrepare());
-      const result = requireResult(await api.magiskPatch({ serial, apkPath: m.apkPath, apkSha256: m.sha256, imagePath: stock.path, imageSha256: stock.sha256, fingerprint: stock.fingerprint, partition: stock.partition }));
-      patched = { path: result.path, sha256: result.patchedSha256, fingerprint: stock.fingerprint, partition: stock.partition };
-      requireResult(await api.magiskInstall(serial, m.apkPath, m.sha256));
+      patched = await prepareMagiskImage(api, serial, stock);
     }
   }
   async function importPatched() {
     if (!stock || !samePhone || !newEngineAllowed) throw new Error("같은 폰의 순정 IMG 패치와 복원 단계를 확인하세요");
+    patched = null;
     patched = requireResult(await api.rootExternalPatchImport(serial, stock.path, patchedPath, true));
   }
   async function applyPatched() {
     if (!canFlash || !patched || !newEngineAllowed) throw new Error("새 패치 이미지와 실전 게이트 확인이 필요합니다");
-    await enterFastboot(); await flashRootImage(api, serial, patched);
+    const image = patched;
+    // A failed/partial flash must not leave the same ready button armed for an immediate retry.
+    patched = null; root = null; inventory = null; updatePlan = null; packageReady = null;
+    await enterFastboot(); await flashRootImage(api, serial, image);
   }
-  async function prepareModule(id: string) { packageReady = requireResult(await api.rootPackagePrepare(id)); }
+  async function prepareModule(id: string) { packageReady = null; packageReady = requireResult(await api.rootPackagePrepare(id)); }
   async function installModule() {
     if (!packageReady || !settingsAck) throw new Error("설치할 모듈과 매니저 설정을 확인하세요");
-    inventory = requireResult(await api.rootModuleInstall(serial, packageReady.sha256, true, riskAck)); packageReady = null;
+    const packageHash = packageReady.sha256;
+    inventory = null; packageReady = null;
+    inventory = requireResult(await api.rootModuleInstall(serial, packageHash, true, riskAck));
   }
   async function exportPreset() { const dest = await api.pickFolder(); if (dest) log = [...log, requireResult(await api.rootPresetExport(dest))]; }
   async function inspectUpdate() {
     if (!root || !partition) throw new Error("루트 상태와 기종을 먼저 확인하세요");
+    updatePlan = null;
     updatePlan = requireResult(await api.firmwareUpdateRootPlan({ root, unlocked: device.bootloader === "unknown" ? null : device.bootloader === "unlocked", intent: "preserve", partition, backupSelected: true }));
   }
 </script>
@@ -181,8 +190,9 @@
         <div class="flex gap-2 items-center"><Package size={16} class="text-primary" /><h2 class="text-sm font-semibold">모듈 · 한 번에 하나씩 설치 후 재부팅</h2></div>
         <p class="text-xs text-muted-foreground">Magisk: 내장 Zygisk·DenyList 강제 적용 OFF. ReSukiSU: 모듈 마운트 해제 기본값·Hide SELinux Modification ON. 금융앱 동작이나 Play Integrity 통과는 보장하지 않습니다.</p>
         <label class="text-xs flex gap-2"><input type="checkbox" bind:checked={settingsAck} disabled={busy} />매니저 설정과 선택 모듈의 호환성을 직접 확인했습니다</label>
-        <div class="grid grid-cols-3 gap-2">{#each ROOT_MODULE_CHOICES as m}<button type="button" class="rounded-lg text-left p-3 bg-muted hover:bg-accent disabled:opacity-40" disabled={busy || !inventory || inventory.rebootRequired || inventory.uncertain} onclick={() => work(`${m.name} 파일 준비`, () => prepareModule(m.id))}><span class="block text-xs font-medium">{m.name}</span><span class="block mt-1 text-[11px] text-muted-foreground">{m.note}</span></button>{/each}</div>
-        {#if packageReady}<div class="text-xs rounded-lg bg-info-container text-info p-3 flex items-center gap-2"><span class="flex-1">{packageReady.id} · {packageReady.version} · {packageReady.external ? "사용자모임 동봉 파일" : "공식 릴리스 해시 검증"}</span><Button size="sm" disabled={busy || !canWrite || !settingsAck || !!inventory?.rebootRequired || !!inventory?.uncertain} onclick={() => work("모듈 설치", installModule, true)}>설치</Button></div>{/if}
+        <div class="grid grid-cols-3 gap-2">{#each ROOT_MODULE_CHOICES as m}<button type="button" class="rounded-lg text-left p-3 bg-muted hover:bg-accent disabled:opacity-40" disabled={busy || !!openSwitch || !inventory || inventory.rebootRequired || inventory.uncertain} onclick={() => work(`${m.name} 파일 준비`, () => prepareModule(m.id))}><span class="block text-xs font-medium">{m.name}</span><span class="block mt-1 text-[11px] text-muted-foreground">{m.note}</span></button>{/each}</div>
+        {#if packageReady}<div class="text-xs rounded-lg bg-info-container text-info p-3 flex items-center gap-2"><span class="flex-1">{packageReady.id} · {packageReady.version} · {packageReady.external ? "사용자모임 동봉 파일" : "공식 릴리스 해시 검증"}</span><Button size="sm" disabled={busy || !!openSwitch || !canWrite || !inventory || !settingsAck || inventory.rebootRequired || inventory.uncertain} onclick={() => work("모듈 설치", installModule, true)}>설치</Button></div>{/if}
+        {#if openSwitch}<p class="text-xs text-warning">루트 엔진 전환을 최종 확인한 뒤 모듈을 설치하세요.</p>{/if}
         {#if inventory?.rebootRequired}<p class="text-xs text-warning">이전 모듈 설치·변경 이후 재부팅이 필요합니다. 재부팅 후 권한·엔진·모듈 조회로 확인하세요.</p>{/if}
         {#if inventory?.uncertain}<div class="space-y-2"><p class="text-xs text-destructive">설치 결과를 확인할 수 없습니다. 모듈을 점검하고 필요한 경우 비활성화·제거하세요. 자동 재시도하지 않습니다.</p><Button size="sm" variant="outline" disabled={busy || !riskAck} onclick={() => work("재부팅 후 모듈 기록 재확인", async () => { inventory = requireResult(await api.rootModuleReconcile(serial, true)); })}>재부팅 후 오류·모듈 목록을 검토했습니다</Button></div>{/if}
         {#if inventory}<div class="max-h-48 overflow-y-auto rounded-lg bg-muted text-xs">{#each inventory.modules as m}<div class="flex items-center gap-2 p-2 border-b"><span class="flex-1">{m.id} · {m.state}</span><Button size="sm" variant="outline" disabled={busy || !canWrite} onclick={() => work("모듈 비활성화", async () => { requireResult(await api.rootModuleAction(serial, m.id, "disable", true)); await inspect(); }, true)}>끄기</Button><Button size="sm" variant="destructive" disabled={busy || !canWrite} onclick={() => work("모듈 제거 예약", async () => { requireResult(await api.rootModuleAction(serial, m.id, "remove", true)); await inspect(); }, true)}>제거</Button></div>{/each}</div>{/if}

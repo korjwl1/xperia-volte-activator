@@ -13,6 +13,8 @@
 - HMA 프리셋 PC 내보내기와 카페 JSON 그대로 가져오기 안내. 목록·scope를 직접 구성하라는 대체 안내는 제거한다. WebUI/MMRL 배포 안내, PIF Action·TrickyAddon 설정·su 승인은 폰에서 진행한다.
 - 업데이트 루트 점검은 안내용 root plan만 표시하며 기록 실행 버튼으로 연결하지 않는다.
 - 오류/불확정 성공 위장 없음. 기본 쓰기 gate와 Cargo feature 모두 필요하며 위험 확인 checkbox를 유지한다. 호출 중 버튼·뒤로·창 닫기를 막고 PC 보호를 해제하기 전에 native I/O 종료를 기다린다.
-- 비주얼: desktop-ui 규칙, 내부 pane 스크롤, 좌측 기능/우측 독립 로그, 3열 모듈 그리드, warning/destructive/info 토큰·lucide 아이콘, 시스템 테마. 후속 소스 정책에 맞춰 OverlayFS/HMA 카드 설명과 설정 안내 문구를 갱신했다.
+- 조회·이미지/패키지 준비 전에 이전 결과를 지우고, 쓰기 실패 후 루트/모듈/준비 패키지/패치 상태를 무효화한다. 조회 재시도 성공으로 회복한다. Magisk는 패치+매니저 설치 모두 성공한 결과만 게시하며 적용 시작 시 패치 결과를 소비한다.
+- 진행 중 엔진 전환에서는 모듈 준비/설치 버튼을 잠그고 최종 엔진 확인 안내를 표시한다. 오류 복구의 조회·끄기·제거는 유지한다.
+- 비주얼: desktop-ui 규칙, 내부 pane 스크롤, 좌측 기능/우측 독립 로그, 3열 모듈 그리드, warning/destructive/info 토큰·lucide 아이콘, 시스템 테마. 소스 정책 문구와 전환 미완료 warning 안내·버튼 잠금을 반영했다. 오류 영역은 같은 우측 로그 pane을 사용한다.
 
 상세 API 계약은 [명령 문서](../02-contracts/tauri-commands.md), 처리/제한은 [루트 도구 구조](../../docs/structure/root-tools.md).

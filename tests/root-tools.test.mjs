@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { before, after, afterEach, test } from "node:test";
 import { createServer } from "vite";
 import fs from "node:fs";
-let server, api, flashRootImage, requireResult;
+let server, api, flashRootImage, requireResult, prepareMagiskImage;
 before(async () => {
   server = await createServer({ server: { middlewareMode: true, watch: null, hmr: false, ws: false }, appType: "custom" });
   ({ api } = await server.ssrLoadModule("/src/lib/api/index.ts"));
-  ({ flashRootImage, requireResult } = await server.ssrLoadModule("/src/lib/domain/rootTools.ts"));
+  ({ flashRootImage, requireResult, prepareMagiskImage } = await server.ssrLoadModule("/src/lib/domain/rootTools.ts"));
 });
 afterEach(() => { delete globalThis.window; });
 after(async () => { delete globalThis.window; await server.close(); });
@@ -55,4 +55,43 @@ test("successful image flash is followed by one explicit OS reboot and native er
   const calls=[];const image={partition:"boot",path:"C:/boot.img",sha256:"a".repeat(64),fingerprint:"Sony/current"};
   await flashRootImage({fastbootGetvar:async()=>({"is-userspace":"yes",unlocked:"yes"}),fastbootFlash:async()=>{calls.push("flash");return{ok:true,value:null};},fastbootReboot:async(target,serial)=>{calls.push([target,serial]);return{ok:true,value:null};}},"phone",image);
   assert.deepEqual(calls,["flash",["os","phone"]]);assert.throws(()=>requireResult({ok:false,error:"not verified"}),/not verified/);
+});
+test("manual Magisk preparation halts at each failed stage and binds the selected image and APK", async () => {
+  const stock = { partition: "init_boot", path: "C:/stock.img", sha256: "a".repeat(64), fingerprint: "Sony/current" };
+  const manager = { version: "30.7", apkPath: "C:/Magisk.apk", sha256: "b".repeat(64) };
+  const result = { path: "C:/patched.img", patchedSha256: "c".repeat(64) };
+  for (const failedStage of ["prepare", "patch", "install", null]) {
+    const calls = [];
+    const outcome = (stage, value) => stage === failedStage ? { ok: false, error: `${stage} failed` } : { ok: true, value };
+    const port = {
+      magiskPrepare: async () => { calls.push("prepare"); return outcome("prepare", manager); },
+      magiskPatch: async request => {
+        calls.push("patch");
+        assert.deepEqual(request, { serial: "phone", apkPath: manager.apkPath, apkSha256: manager.sha256, imagePath: stock.path, imageSha256: stock.sha256, fingerprint: stock.fingerprint, partition: stock.partition });
+        return outcome("patch", result);
+      },
+      magiskInstall: async (...args) => {
+        calls.push("install"); assert.deepEqual(args, ["phone", manager.apkPath, manager.sha256]);
+        return outcome("install", null);
+      },
+    };
+    if (failedStage) await assert.rejects(() => prepareMagiskImage(port, "phone", stock), new RegExp(`${failedStage} failed`));
+    else assert.deepEqual(await prepareMagiskImage(port, "phone", stock), { ...stock, path: result.path, sha256: result.patchedSha256 });
+    assert.deepEqual(calls, ["prepare", "patch", "install"].slice(0, failedStage === "prepare" ? 1 : failedStage === "patch" ? 2 : 3));
+  }
+});
+test("a patched image cannot become ready while manager installation is pending or has failed", async () => {
+  const stock = { partition: "init_boot", path: "C:/stock.img", sha256: "a".repeat(64), fingerprint: "Sony/current" };
+  let release, installationStarted, ready = null;
+  const started = new Promise(resolve => { installationStarted = resolve; });
+  const task = prepareMagiskImage({
+    magiskPrepare: async () => ({ ok: true, value: { apkPath: "C:/Magisk.apk", sha256: "b".repeat(64) } }),
+    magiskPatch: async () => ({ ok: true, value: { path: "C:/patched.img", patchedSha256: "c".repeat(64) } }),
+    magiskInstall: () => { installationStarted(); return new Promise(resolve => { release = resolve; }); },
+  }, "phone", stock).then(image => { ready = image; });
+  await started;
+  assert.equal(ready, null);
+  release({ ok: false, error: "manager installation failed" });
+  await assert.rejects(task, /manager installation failed/);
+  assert.equal(ready, null);
 });

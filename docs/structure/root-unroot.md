@@ -18,6 +18,8 @@
 
 2026-10-08: 패치 전 `root_inspect`와 진행 중인 전환 기록을 추가 검사합니다. 기존 Magisk 유지 또는 su 미감지 상태만 허용하고 KernelSU·권한 거부·불명 상태를 바로 Magisk로 덮지 않습니다. 엔진 교체는 [수동 전환 도구](root-tools.md)의 순정 복원 단계를 거칩니다. 이 가드와 ReSukiSU 경로는 새 코드의 실기기 검증 전입니다.
 
+`boot_image_check`는 기기 읽기 결과로 PC에 플래시 대조 근거를 저장하므로 공통 `WriteOperation`과 내부 작업 완료 대기를 사용합니다. 실제 기기 변경은 없지만 다른 기록/재부팅 작업과 동시에 오래된 대조 결과를 게시하지 않게 하며, 기기 쓰기 feature를 새로 요구하지는 않습니다. 수동 도구의 Magisk 준비는 패치·매니저 설치가 모두 성공한 후 적용할 IMG를 게시합니다.
+
 ```mermaid
 sequenceDiagram
   participant W as 위자드 또는 CLI

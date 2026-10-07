@@ -29,6 +29,8 @@ firmware_update_root_plan({request:RootUpdateRequest}) → RootUpdatePlan
 - 외부 IMG 가져오기는 root-tools-write+같은 폰 패치 확인, 현재 지문/순정 부모/변경된 init_boot 헤더·크기·해시 검증과 후속 동일 기기 기록 증명을 만든다. 생성 출처 확인은 사용자 진술이다. APK 설치는 준비한 ReSukiSU 해시/핀·arm64 확인 후 Android 설치 검증을 사용한다.
 - UpdateRequest: root/unlocked:boolean|null/intent:stock|preserve|install-magisk/partition/backupSelected. Plan: action/blockers/requirements/warnings/humanAfterBackup/writeReady:false. PC 안내 전용이며 Caller 관찰값은 쓰기 권한이 아니다. 실제 업데이트·목표 이미지 사전 패치 연결은 미구현.
 
+리뷰 후 실행 정책: root_switch_prepare의 ReSukiSU 대상은 init_boot를 정리 전에 검사한다. root_module_install은 전환 기록이 미완료/손상이면 전송 전에 거부한다. root_switch_status(verifyStock=true), root_switch_finish, root_external_patch_import, root_module_reconcile 및 공통 boot_image_check는 PC 근거 기록을 변경하므로 WriteOperation+blocking 완료 대기를 사용한다. 단순 status(verifyStock=false)는 기존 guarded 조회다. 인자·반환 타입과 기본 Cargo/REAL_STEPS 게이트는 유지한다.
+
 
 2026-10-05 추가: `flash_history_archive({ confirm: boolean }) -> string`은 PC의 손상 flash-history.jsonl을 별도 파일로 보관한다. 확인 없으면 실패하며 정상 이력은 삭제하지 않는다. 공유 쓰기 잠금으로 기기 변경과 동시 실행하지 않고 USB를 열지 않는다. 보관 후에는 새 순정 양 슬롯 기록이 필요하다.
 

@@ -50,6 +50,13 @@ fn check_stock(dev: &mut dyn ADBDeviceExt, path: &Path) -> Result<boot_image::Im
     boot_image::verify_fingerprint(dev, &origin.fingerprint)?;
     Ok(origin)
 }
+pub(crate) fn require_module_install_stage(dir: &Path, key: &str) -> Result<(), String> {
+    let path = super::key_path(dir, key, "root-switch")?;
+    if path.exists() && read(dir, key)?.stage != "complete" {
+        return Err("진행 중인 루트 엔진 전환을 먼저 완료하세요 — 모듈 설치는 보류됩니다".into());
+    }
+    Ok(())
+}
 pub(crate) fn require_install_stage(
     dev: &mut dyn ADBDeviceExt,
     dir: &Path,
@@ -94,6 +101,12 @@ pub fn prepare_work(
         return Err("이미 언락된 기기만 엔진 전환할 수 있습니다".into());
     }
     let origin = check_stock(dev, stock)?;
+    if target == "resukisu" && origin.partition != "init_boot" {
+        return Err(
+            "ReSukiSU 엔진 전환은 init_boot 기종만 지원합니다 — 기존 모듈은 정리하지 않았습니다"
+                .into(),
+        );
+    }
     let key = device_io::identity_key(dev)?;
     let path = super::key_path(dir, &key, "root-switch")?;
     if let Ok(previous) = read(dir, &key) {
@@ -185,7 +198,13 @@ pub async fn root_switch_status(serial: String, verify_stock: bool) -> Result<Sw
         return Err("기기를 선택하세요".into());
     }
     let dir = super::data_dir()?;
-    crate::tasks::guarded(std::time::Duration::from_secs(60), move || {
+    let operation = if verify_stock {
+        Some(device_io::WriteOperation::acquire()?)
+    } else {
+        None
+    };
+    let work = move || {
+        let _operation = operation;
         crate::adb::with_first_device(&Some(serial), |dev| {
             if verify_stock {
                 return verify_stock_work(dev, &dir);
@@ -193,8 +212,12 @@ pub async fn root_switch_status(serial: String, verify_stock: bool) -> Result<Sw
             let key = device_io::identity_key(dev)?;
             read(&dir, &key)
         })
-    })
-    .await
+    };
+    if verify_stock {
+        crate::tasks::blocking("Root stock verification", work).await
+    } else {
+        crate::tasks::guarded(std::time::Duration::from_secs(60), work).await
+    }
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -248,7 +271,9 @@ pub async fn root_external_patch_import(
         return Err("동일 폰·순정 이미지로 직접 패치한 결과라는 확인이 필요합니다".into());
     }
     let dir = super::data_dir()?;
-    crate::tasks::guarded(std::time::Duration::from_secs(60), move || {
+    let operation = device_io::WriteOperation::acquire()?;
+    crate::tasks::blocking("Root image import", move || {
+        let _operation = operation;
         crate::adb::with_first_device(&Some(serial), |dev| {
             import_work(dev, &dir, Path::new(&stock_path), Path::new(&patched_path))
         })
@@ -289,7 +314,9 @@ pub async fn root_switch_finish(serial: String) -> Result<Switch, String> {
         return Err("기기를 선택하세요".into());
     }
     let dir = super::data_dir()?;
-    crate::tasks::guarded(std::time::Duration::from_secs(60), move || {
+    let operation = device_io::WriteOperation::acquire()?;
+    crate::tasks::blocking("Root switch completion", move || {
+        let _operation = operation;
         crate::adb::with_first_device(&Some(serial), |dev| {
             let key = device_io::identity_key(dev)?;
             let mut r = read(&dir, &key)?;
@@ -424,6 +451,30 @@ mod tests {
             assert!(read(dir.path(), &key).is_err());
             assert!(prepare_work(&mut d, dir.path(), &stock, "resukisu").is_err());
         }
+    }
+    #[test]
+    fn unsupported_resukisu_boot_switch_is_rejected_before_cleanup_or_any_saved_intent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("boot.img");
+        let bytes = boot_image::test_boot_kernel_image(8192, 0x41);
+        boot_image::save_with_origin(&path, &bytes, "boot", "Sony/current").unwrap();
+        let mut d = fake();
+        assert!(prepare_work(&mut d, dir.path(), &path, "resukisu")
+            .err()
+            .unwrap()
+            .contains("init_boot"));
+        assert!(!d.shell_calls.iter().any(|c| c.starts_with(CLEAN)));
+        assert!(!dir.path().join("root-switch").exists());
+        assert!(!dir.path().join("image-checks").exists());
+        // KernelSU-family -> Magisk on this partition remains a supported conversion.
+        d.answer_shell(crate::root_state::VERSION, "4.2.0:KernelSU");
+        d.answer_shell(crate::root_state::MARKERS, "uid=0(root)\nMAGISK=0\nKSU=1\n");
+        assert_eq!(
+            prepare_work(&mut d, dir.path(), &path, "magisk")
+                .unwrap()
+                .stage,
+            "cleaned-awaiting-stock"
+        );
     }
     #[test]
     fn external_image_import_is_bound_to_stock_device_and_changed_image_not_just_magic() {

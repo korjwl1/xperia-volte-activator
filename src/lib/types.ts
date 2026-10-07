@@ -32,6 +32,11 @@ export interface RootImagePort {
   fastbootFlash(partition: string, path: string, confirm: boolean, expectedSerial: string, expectedSha256: string): Promise<ApiResult<null>>;
   fastbootReboot(target: "os" | "bootloader" | "fastboot", expectedSerial: string): Promise<ApiResult<null>>;
 }
+export interface RootPreparationPort {
+  magiskPrepare(): Promise<ApiResult<MagiskPrepared>>;
+  magiskPatch(request: MagiskPatchRequest): Promise<ApiResult<PatchResult>>;
+  magiskInstall(serial: string, apkPath: string, apkSha256: string): Promise<ApiResult<null>>;
+}
 
 /** PC-only native flasher inspection; this report never authorizes hardware writes. */
 export interface FirmwarePackageFile {
