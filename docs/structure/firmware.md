@@ -24,7 +24,7 @@ flowchart TB
 
 ## 미구현: 전체 펌웨어 기록
 
-현재 UI 계획에는 전체 펌웨어 다운로드 → 기록 → 버전/지문 확인 단계가 있으나 전체 다운로드·스테이징·newflasher 실행 엔진은 연결되지 않았습니다. `liveStepEnabled("fw-flash")=false`이며 실전 계획은 시작 전에 거부합니다. 펌웨어 취득 화면이나 버전 목록이 있다고 실제 OS 업데이트가 가능한 것은 아닙니다.
+현재 UI 계획에는 전체 펌웨어 다운로드 → 기록 → 버전/지문 확인 단계가 있으나 전체 다운로드·스테이징·플래시 엔진은 연결되지 않았습니다. `liveStepEnabled("fw-flash")=false`이며 실전 계획은 시작 전에 거부합니다. 펌웨어 취득 화면이나 버전 목록이 있다고 실제 OS 업데이트가 가능한 것은 아닙니다.
 
 현재 계획과 예정 업데이트 전용 경로는 두 정책을 구분합니다.
 
@@ -35,9 +35,17 @@ flowchart TB
 
 Newflasher 경로의 목적은 필요한 파티션을 제한해 기존 모뎀 설정과 사용자 데이터를 보존하는 것입니다. 모뎀을 제외하면 DSP도 함께 제외하는 정책입니다. 일반 OTA와 동일한 모든 구성 요소의 최신화는 아닙니다. 제외한 모뎀/DSP의 수정·보안 변경은 적용되지 않고 기종/버전 호환성을 별도 확인해야 합니다.
 
-데이터 보존은 무손실 보장이 아닙니다. 고정 도구 버전의 데이터 유지 응답과 `update.xml`의 `NOERASE`, metadata 등 암호화 관련 보존 대상, 파티션 구조 영향을 실행 전에 검사할 계획입니다. userdata 파일만 제외한 것으로 검사를 끝내지 않습니다. [Newflasher 구현](https://github.com/munjeni/newflasher/blob/master/newflasher.c)은 NOERASE 대상으로 기록을 건너뛰며, [Android 문서](https://source.android.com/docs/security/features/encryption/metadata)는 metadata의 암호화 키 보호 정보가 데이터 접근에 필요하다고 설명합니다. 입력 TA 파일 제외와 도구 내부의 TA 프로토콜 명령도 구분합니다.
+데이터 보존은 무손실 보장이 아닙니다. 고정 소스의 데이터 유지 동작을 네이티브 정책으로 옮기고 `update.xml`의 `NOERASE`, metadata 등 암호화 관련 보존 대상, 파티션 구조 영향을 실행 전에 검사할 계획입니다. userdata 파일만 제외한 것으로 검사를 끝내지 않습니다. [Newflasher 구현](https://github.com/munjeni/newflasher/blob/59f12e437d29f0385eb27dcebba5158aa3f97b45/newflasher.c)은 데이터 유지 선택 시 NOERASE 대상으로 기록을 건너뛰며, [Android 문서](https://source.android.com/docs/security/features/encryption/metadata)는 metadata의 암호화 키 보호 정보가 데이터 접근에 필요하다고 설명합니다. 입력 TA 파일 제외와 도구 내부의 TA 프로토콜 명령도 구분합니다.
 
-예정 구현은 원본 파일 삭제 대신 별도 스테이징 허용 목록을 사용합니다. 모델·지역·목표 지문, newflasher 버전/프롬프트, userdata 유지, 출력·종료·기기 연결 및 OS 복귀를 검사해야 합니다. 기기 상태 확인 없이 슬롯 A를 일괄 강제 지정하지 않습니다.
+예정 구현은 원본 파일 삭제 대신 별도 스테이징 허용 목록을 사용합니다. 모델·지역·목표 지문, 기준 소스 리비전, 데이터 유지 정책, 기기 ACK·세션 종료·기기 연결 및 OS 복귀를 검사해야 합니다. 기기 상태 확인 없이 슬롯 A를 일괄 강제 지정하지 않습니다.
+
+### 예정 네이티브 엔진
+
+외부 실행 파일 대신 Newflasher의 Sony Flash mode 동작을 Rust로 이식하는 [상세 설계](../../.plans/04-engine/newflasher-native.md)를 작성했습니다. 기준은 `59f12e437d29f0385eb27dcebba5158aa3f97b45`(version 61)이며, 소스 위치·해시·라이선스·내부 재사용 범위·새 모듈·계약안·차등 검증 순서를 고정했습니다. 첫 검증 대상은 XQ-DQ44의 같은 지역 순정 펌웨어 유지 업데이트입니다. 이 설계는 아직 구현되지 않았습니다.
+
+기존 `firmware.rs`는 부트 이미지 부분 취득용이고 다중 SIN 조각을 거부하므로 전체 플래셔로 확장해 쓰지 않습니다. 새 엔진은 전체 패키지 검사, 서명/다중 조각 스트리밍, S1 프로토콜, Windows transport, 보존 정책과 Rust 기록을 분리합니다. GUI와 CLI는 같은 엔진을 호출하고, 기존 백업·Magisk·fastboot를 연결합니다.
+
+기존 fastboot의 `rusb` 연결과 Windows Flash mode의 GordonGate 연결은 별도 확인이 필요합니다. 현재 `usbmode.rs`의 PID `0xADDE`와 기준 Newflasher의 `0xB00B`도 일치하지 않아 구현·실측 확인 항목으로 남겼습니다. 기종별 슬롯/boot delivery·저장장치·종료 방식은 profile로 분리하며, 미검증 판올림이나 재구성 필요 패키지는 기본 지원으로 포함하지 않습니다.
 
 사용자 요청의 3번 업데이트는 VoLTE가 현재 인식될 때만 활성화하고 유지 정책을 고정할 계획입니다. [분기 설명](workflow.md)과 [구현 계획](../../.plans/04-engine/workflow-modes-20261007.md)을 참조하세요. 유지 정책이 실제 플래시 검증을 마쳤다고 표시하지 않습니다.
 

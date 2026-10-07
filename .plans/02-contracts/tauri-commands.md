@@ -303,6 +303,8 @@ EFS 실행 규칙 (카페 조사 반영, 2026-10-03 — tasks/research-cafe-omd-
 
 ## flasher / session (M6)
 
+**미구현 설계**: 아래 `fw_prepare` / `newflasher_run`은 기존 래퍼 계약이다. 2026-10-08 작성한 [네이티브 엔진 계획](../04-engine/newflasher-native.md)의 §7에 전체 패키지 준비·Flash mode 검사·계획 ID 기반 실행·취소·상태 조회와 구조화 이벤트를 제안했다. 구현 시 facade/타입/Rust 등록과 함께 확정하고 아래 구형 계약을 정리한다. 현재 사용 가능한 API로 취급하지 않는다.
+
 ```ts
 invoke('fw_prepare', { fwDir, opts }) → StagedDir           // §8 스테이징 (원본 불변)
 // 플래시 허용 목록(파일을 지우지 않고 목록으로 검사): 패치 유지 업데이트 = modem*·dsp*·.ta(boot 하위 포함)·userdata 제외 /

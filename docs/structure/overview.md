@@ -1,6 +1,6 @@
 # 시스템 구조
 
-기준일: 2026-10-07. Windows용 Tauri 앱과 개발 CLI가 Rust 라이브러리를 공유합니다. 화면의 작업 계획과 사용자 대기는 TypeScript 위자드가 담당합니다.
+기준일: 2026-10-08. Windows용 Tauri 앱과 개발 CLI가 Rust 라이브러리를 공유합니다. 화면의 작업 계획과 사용자 대기는 TypeScript 위자드가 담당합니다.
 
 ## 전체 형상
 
@@ -22,7 +22,8 @@ flowchart TB
   FB --> Phone
   DIAG --> Phone
   Engine --> Download[Sony 펌웨어 / 검증된 APK 다운로드]
-  Flasher[계획: newflasher 래퍼] -.-> Phone
+  Engine -.-> Flasher[계획: Rust Sony Flash mode 엔진]
+  Flasher -.-> Phone
 ```
 
 데스크톱 IPC 실패를 mock 성공으로 바꾸지 않습니다. 일반 개발 빌드의 화면 실행은 시뮬레이션이며, 실전 엔진으로 넘어가는 플래그와 Rust 쓰기 feature는 별도입니다.
@@ -56,7 +57,7 @@ flowchart TB
 | Magisk 루팅 | 공유 CLI에서 XQ-DQ44 단계별 성공 | [루팅](root-unroot.md) |
 | EFS/VoLTE | 네이티브 엔진 구현. XQ-DQ44/SKT SIM1 등록·통화 성공, 일부 후속 처리의 작업 트리 수정 포함 | [VoLTE](volte.md), [기기 기록](../devices.md) |
 | 부트 이미지 다운로드 | 부분 취득·SIN 추출 구현 | [펌웨어](firmware.md) |
-| 전체 펌웨어 업데이트 | 계획/화면 단계 존재, 전체 취득·플래시 엔진 미구현 | [펌웨어](firmware.md) |
+| 전체 펌웨어 업데이트 | 계획/화면 단계 존재, 전체 취득·플래시 엔진 미구현. Newflasher 네이티브 설계 추가 | [펌웨어](firmware.md) |
 | 자동/수동/업데이트 선택 | 2026-10-07 draft, 화면·분기 미구현 | [작업 흐름](workflow.md) |
 
 기종을 코드에서 인식하는 것, 엔진이 구현된 것, 특정 단말에서 한 단계가 성공한 것, 전체 GUI가 검증된 것은 서로 다른 상태입니다. [기기별 메모](../devices.md)에 정확한 검증 범위를 남깁니다.
