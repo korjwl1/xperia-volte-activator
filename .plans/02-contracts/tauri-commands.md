@@ -1,5 +1,37 @@
 # 02 — Tauri command 계약 (프론트 ↔ 백엔드)
 
+## 수동 루트 도구 추가 (2026-10-08)
+
+구현 설명과 반환 필드는 [root-tools](../../docs/structure/root-tools.md), 타입은 `src/lib/types.ts`에 유지한다. 명령은 Tauri와 개발 CLI가 공유하고 facade는 `api/rootTools.ts`이다. 아래 serial은 필수이며 공백을 허용하지 않는다.
+
+```ts
+root_inspect({serial}) → RootState
+root_tools_capabilities({}) → {writeEnabled:boolean,switchEnabled:boolean}
+resukisu_releases({}) → RootRelease[]
+root_package_prepare({id,tag?:string|null}) → RootPackage
+root_preset_export({dest}) → string
+root_modules_inspect({serial}) → RootModuleInventory
+root_module_install({serial,sha256,confirm,confirmExternal}) → RootModuleInventory
+root_module_action({serial,moduleId,action:"disable"|"remove",confirm}) → null
+root_module_reconcile({serial,confirm}) → RootModuleInventory
+root_switch_prepare({serial,stockPath,target:"magisk"|"resukisu",confirm}) → RootSwitch
+root_switch_status({serial,verifyStock:boolean}) → RootSwitch
+root_external_patch_import({serial,stockPath,patchedPath,confirmSamePhone}) → RootImportedImage
+resukisu_install({serial,sha256,confirm}) → null
+root_switch_finish({serial}) → RootSwitch
+firmware_update_root_plan({request:RootUpdateRequest}) → RootUpdatePlan
+```
+
+- RootState: access granted/unavailable/denied/unknown, engine magisk/kernelsu-family/conflicting/unknown, magiskMarkers/kernelsuMarkers boolean|null. 조회는 기기 읽기이며 su 승인 창이 뜰 수 있다.
+- RootPackage: id/version/path/sha256/moduleId/external. 준비는 PC 다운로드·검증·캐시만, ReSukiSU tag 필수·다른 버전 대체 없음. AshReXcue KO·PlayStoreFix 2 ZIP은 동봉 원본 핀(external=true), OverlayFS를 포함한 공개 모듈은 지정 저장소 최신 stable(external=false). OverlayFS 저장소는 RipperHybrid/Meta-Overlayfsx이고 조회/검증 실패 시 동봉 대체 없음. preset export는 카페 HMA JSON 바이트를 그대로 선택한 존재하는 절대 PC 폴더에 create_new로 저장한다.
+- Inventory: engine/modules[{id,state}]/rebootRequired/uncertain. 설치·끄기·제거 예약은 root-tools-write+명시 확인+독점 실행권 뒤이며 GUI는 REAL_STEPS.root도 요구한다. 설치 intent/ACK 뒤 새 boot ID·활성 모듈 확인까지 다음 설치 금지. reconcile은 재부팅 뒤 사람의 검토로 PC 불확정 기록만 해제하며 기기에 쓰거나 성공을 보증하지 않는다.
+- Switch: stage/target/fingerprint/stockSha256/partition/modules/bootId/historyOffset. prepare는 root-tools-write+fastboot-write, 살아 있는 단일 루트·이미 언락·현재 순정 IMG를 요구한다. 고정 경로 정리 전 intent 저장. verifyStock은 새 부팅·지문·정리 이후 같은 기기 양 슬롯 이력·su 미감지, finish는 stock-verified 뒤 예상 엔진 감지로 PC 기록 갱신한다. KernelSU 세부 포크는 미확정이다.
+- 외부 IMG 가져오기는 root-tools-write+같은 폰 패치 확인, 현재 지문/순정 부모/변경된 init_boot 헤더·크기·해시 검증과 후속 동일 기기 기록 증명을 만든다. 생성 출처 확인은 사용자 진술이다. APK 설치는 준비한 ReSukiSU 해시/핀·arm64 확인 후 Android 설치 검증을 사용한다.
+- UpdateRequest: root/unlocked:boolean|null/intent:stock|preserve|install-magisk/partition/backupSelected. Plan: action/blockers/requirements/warnings/humanAfterBackup/writeReady:false. PC 안내 전용이며 Caller 관찰값은 쓰기 권한이 아니다. 실제 업데이트·목표 이미지 사전 패치 연결은 미구현.
+
+리뷰 후 실행 정책: root_switch_prepare의 ReSukiSU 대상은 init_boot를 정리 전에 검사한다. root_module_install은 전환 기록이 미완료/손상이면 전송 전에 거부한다. root_switch_status(verifyStock=true), root_switch_finish, root_external_patch_import, root_module_reconcile 및 공통 boot_image_check는 PC 근거 기록을 변경하므로 WriteOperation+blocking 완료 대기를 사용한다. 단순 status(verifyStock=false)는 기존 guarded 조회다. 인자·반환 타입과 기본 Cargo/REAL_STEPS 게이트는 유지한다.
+
+
 2026-10-05 추가: `flash_history_archive({ confirm: boolean }) -> string`은 PC의 손상 flash-history.jsonl을 별도 파일로 보관한다. 확인 없으면 실패하며 정상 이력은 삭제하지 않는다. 공유 쓰기 잠금으로 기기 변경과 동시 실행하지 않고 USB를 열지 않는다. 보관 후에는 새 순정 양 슬롯 기록이 필요하다.
 
 2026-10-05 개발 CLI: 기존 Tauri 명령 시그니처·반환·이벤트 이름은 유지한다. AppHandle이 필요한 엔진은 `events::Events`를 받는 공통 실행 함수에 위임하고 `dev-cli` 실행 파일도 같은 함수를 호출한다. CLI 입력/출력·명령 카탈로그는 별도 개발 계약이며 일반 앱에 CLI 명령을 추가하지 않는다. 세부 사항은 `../04-engine/dev-cli.md`.
@@ -302,6 +334,21 @@ EFS 실행 규칙 (카페 조사 반영, 2026-10-03 — tasks/research-cafe-omd-
 - "VoLTE 활성화 설정"(persist.dbg.*_avail_ovr)은 설정을 켠다는 뜻이지 통신사 서비스 검증이 아님
 
 ## flasher / session (M6)
+
+### 구현됨: PC 전용 패키지 검사 (`newflasher-add`)
+
+```ts
+invoke('firmware_package_inspect', { dir: string, targetFingerprint: string }) → FirmwarePackageReport
+// facade: api.firmwarePackageInspect(dir, targetFingerprint) → ApiResult<FirmwarePackageReport>
+// dir는 절대 경로의 로컬 순정 폴더. update.xml에 유일한 fingerprint가 있고 요청 대상과 일치해야 함.
+// files: relativePath/bytes/sha256/sin(partition/compressed/members)/decision(include|preserve|block, reason)
+// upstreamCommit/targetFingerprint/manifestSha256/totalBytes/candidateBytes/blockers/writeReady:false
+// include는 기록 후보이며 실행 허가가 아님. profile/지역/기기 identity/boot delivery는 아직 미검증.
+// PC에서 읽기만 함: 파일 삭제/추출/다운로드/ADB/USB/드라이버 변경 없음. 브라우저 mock 성공 없음.
+// malformed SIN/XML, 경로/링크/크기/지문 불일치는 FLASH_<CODE>|... 오류.
+```
+
+CLI도 같은 명령을 PC-only로 등록한다. 새 준비/실행/취소 계약은 아직 등록하지 않았다. 구현/검증 범위는 [진행 기록](../04-engine/newflasher-native-progress.md)에 있다.
 
 **미구현 설계**: 아래 `fw_prepare` / `newflasher_run`은 기존 래퍼 계약이다. 2026-10-08 작성한 [네이티브 엔진 계획](../04-engine/newflasher-native.md)의 §7에 전체 패키지 준비·Flash mode 검사·계획 ID 기반 실행·취소·상태 조회와 구조화 이벤트를 제안했다. 구현 시 facade/타입/Rust 등록과 함께 확정하고 아래 구형 계약을 정리한다. 현재 사용 가능한 API로 취급하지 않는다.
 

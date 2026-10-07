@@ -1,6 +1,65 @@
 // 도메인 타입 — .plans/03-data/mock-schema.md 참조
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string };
 export type Unsubscribe = () => void;
+
+export interface RootState {
+  access: "granted" | "unavailable" | "denied" | "unknown";
+  engine: "magisk" | "kernelsu-family" | "conflicting" | "unknown";
+  magiskMarkers: boolean | null;
+  kernelsuMarkers: boolean | null;
+}
+export interface RootUpdateRequest {
+  root: RootState; unlocked: boolean | null; intent: "stock" | "preserve" | "install-magisk";
+  partition: string; backupSelected: boolean;
+}
+export interface RootUpdatePlan {
+  action: "stock-only" | "magisk-target-patch-then-fastboot" | "blocked";
+  blockers: string[]; requirements: string[]; warnings: string[]; humanAfterBackup: boolean; writeReady: false;
+}
+export interface RootRelease { tag: string; prerelease: boolean; publishedAt: string }
+export interface RootPackage { id: string; version: string; path: string; sha256: string; moduleId: string | null; external: boolean }
+export interface RootModule { id: string; state: "enabled" | "disabled" | "removing" }
+export interface RootModuleInventory { engine: RootState["engine"]; modules: RootModule[]; rebootRequired: boolean; uncertain: boolean }
+export interface RootSwitch {
+  stage: "cleanup-intent" | "cleaned-awaiting-stock" | "stock-verified" | "complete";
+  target: "magisk" | "resukisu"; fingerprint: string; stockSha256: string; partition: string;
+  modules: RootModule[]; bootId: string; historyOffset: number;
+}
+export interface RootImportedImage { path: string; sha256: string; partition: "boot" | "init_boot"; fingerprint: string }
+/** Injected facade operations; domain code has no runtime API dependency. */
+export interface RootImagePort {
+  fastbootGetvar(): Promise<FastbootVars | null>;
+  fastbootFlash(partition: string, path: string, confirm: boolean, expectedSerial: string, expectedSha256: string): Promise<ApiResult<null>>;
+  fastbootReboot(target: "os" | "bootloader" | "fastboot", expectedSerial: string): Promise<ApiResult<null>>;
+}
+export interface RootPreparationPort {
+  magiskPrepare(): Promise<ApiResult<MagiskPrepared>>;
+  magiskPatch(request: MagiskPatchRequest): Promise<ApiResult<PatchResult>>;
+  magiskInstall(serial: string, apkPath: string, apkSha256: string): Promise<ApiResult<null>>;
+}
+
+/** PC-only native flasher inspection; this report never authorizes hardware writes. */
+export interface FirmwarePackageFile {
+  relativePath: string;
+  bytes: number;
+  sha256: string;
+  sin: {
+    partition: string;
+    compressed: boolean;
+    members: { name: string; bytes: number; sha256: string }[];
+  } | null;
+  decision: { disposition: "include" | "preserve" | "block"; reason: string };
+}
+export interface FirmwarePackageReport {
+  upstreamCommit: string;
+  targetFingerprint: string;
+  manifestSha256: string;
+  totalBytes: number;
+  candidateBytes: number;
+  files: FirmwarePackageFile[];
+  blockers: string[];
+  writeReady: false;
+}
 export type DeviceMode = "android" | "bootloader-fastboot" | "fastbootd" | "flashmode";
 
 export type TriState = boolean | "unknown";

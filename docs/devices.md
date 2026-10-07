@@ -1,5 +1,9 @@
 # 기기별 동작과 검증 메모
 
+2026-10-08 `newflasher-add`: 새 ReSukiSU 외부 패치 입력은 모델 표의 `init_boot` 기종에 한정합니다. 이는 LKM/GKI·커널·Android 버전 호환성 검증 완료를 뜻하지 않습니다. `boot` 기종은 현재 Magisk 경로와 새 ReSukiSU 경로를 구분하며 후자는 차단합니다. 리뷰 후 전환 준비 API도 정리·삭제 전에 이 조건을 검사합니다. 기존 XQ-DQ44/Magisk 실측은 새 엔진 감지·전환·모듈 도구의 실기기 검증으로 승계하지 않습니다. 세부 동작은 [루트 도구](structure/root-tools.md), 미검증 목록은 [단일 체크리스트](../.plans/04-engine/device-test-checklist.md)에 유지합니다.
+
+2026-10-08 `newflasher-add`: Newflasher 네이티브 오프라인 코어와 PC 검사 API를 추가했다. **실제 기기 업데이트/USB 연결은 검증하지 않았다.** 첫 예정 profile은 XQ-DQ44 같은 지역 source→target 조합이며, 아래 기존 VoLTE/루팅 실측은 이 업데이트 엔진의 성공 근거가 아니다. [진행 기록](../.plans/04-engine/newflasher-native-progress.md).
+
 기준일: 2026-10-08. 코드의 모델 분기와 실제 단말 검증 기록을 함께 관리합니다. **전체 GUI 호환성 테스트 완료 기기는 아직 없습니다.** 같은 기종이라도 모델·지역·펌웨어·통신사·SIM 조건이 다르면 별도로 기록합니다.
 
 ## 코드가 선택하는 알고리즘

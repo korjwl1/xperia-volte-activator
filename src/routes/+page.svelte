@@ -3,6 +3,7 @@
   import { Button } from "$lib/components/ui/button";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import { wizard } from "$lib/stores/wizard.svelte";
+  import { rootToolsState } from "$lib/stores/rootTools.svelte";
   import DeviceStatusView from "$lib/views/DeviceStatusView.svelte";
   import VolteConfigView from "$lib/views/VolteConfigView.svelte";
   import WarningView from "$lib/views/WarningView.svelte";
@@ -26,6 +27,7 @@
     let cleanup: (() => void) | undefined;
     void observeDesktopWindow(
       () => {
+        if (rootToolsState.busy) return true;
         if (!wizard.runUnfinished) return false;
         closeAsk = true;
         return true;
@@ -46,7 +48,7 @@
   let saveFailed = $state(false);
   let closeError = $state("");
   async function confirmClose() {
-    if (closing || wizard.runInDanger) return;
+    if (closing || wizard.runInDanger || rootToolsState.busy) return;
     closing = true;
     closeError = "";
     try {

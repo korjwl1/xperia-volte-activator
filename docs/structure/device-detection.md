@@ -1,5 +1,7 @@
 # 기기 감지와 연결
 
+2026-10-08 추가: 수동 루트 도구는 첫 화면의 boolean 루트 표시와 별개로 `root_inspect`를 클릭 시 호출합니다. su 권한(granted/unavailable/denied/unknown)·버전·권한 있는 `/data/adb` 마커로 Magisk/KernelSU 계열/충돌/불명을 구분합니다. 관리자 앱 패키지명이나 su 거부만으로 비루팅을 판정하지 않습니다. 공통 su 경로와 세부 포크 식별 한계는 [루트 도구](root-tools.md)에 있습니다. 이 화면에서는 기기 목록 폴링을 멈추고 선택 기기를 고정합니다.
+
 기준일: 2026-10-07. 담당: `adb.rs`, `ims.rs`, `usbmode.rs`, `usb_driver.rs`, `device_io.rs`, `vendor/adb_client`와 프론트 `data/devices.ts`.
 
 ## ADB 연결

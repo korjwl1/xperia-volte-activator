@@ -1,8 +1,8 @@
 # Newflasher 기반 네이티브 펌웨어 엔진 설계
 
-status: draft
+status: in-progress — offline core
 
-작성일: 2026-10-08. 사용자 요청에 따른 **레퍼런스·통합·검증 계획**이다. Rust 코드, 화면, 실행 플래그는 이번에 변경하지 않는다. 전체 펌웨어 기록 엔진은 아직 미구현이다.
+작성일: 2026-10-08. 사용자 요청에 따른 **레퍼런스·통합·검증 계획**이다. 이후 사용자 요청으로 `newflasher-add` 워크트리에서 오프라인 코어 구현을 시작했다. 로컬 패키지 검사·SIN·S1·전송/기록 코어와 Windows transport를 작성했으며 하드웨어 실행·전체 업데이트 화면은 연결하지 않았다. [현재 구현과 검증 기록](newflasher-native-progress.md)을 먼저 확인한다. 아래 전체 설계의 완료를 뜻하지 않는다.
 
 ## 1. 목표와 범위
 
@@ -75,7 +75,7 @@ Windows 원본은 `CreateFile`과 OVERLAPPED `ReadFile`/`WriteFile` 경로다. �
 
 ## 4. 예정 모듈 구조
 
-아래 경로는 새로 만들 예정이며 현재 구현 파일이 아니다.
+아래는 최종 예정 구조다. 현재 구현한 모듈과 남은 `profile/plan` 등은 [진행 기록](newflasher-native-progress.md)에 구분한다.
 
 ```text
 src-tauri/src/flasher/
@@ -148,7 +148,7 @@ SHA-256과 출처 검사는 Sony 서명 검증을 대신하지 않는다. host�
 
 ## 7. 우리 프로그램에 연결할 계약안
 
-아래 이름·타입은 **미구현 제안**이다. 구현 때 [계약 문서](../02-contracts/tauri-commands.md), facade·타입·Rust 등록·mock을 같은 변경에서 확정한다.
+아래 이름·타입은 **미구현 제안**이다. 첫 구현에는 PC 전용 `firmware_package_inspect(dir, targetFingerprint)`만 추가했다. 그 검사 결과는 실행 권한이 아니다. 구현 때 [계약 문서](../02-contracts/tauri-commands.md), facade·타입·Rust 등록·mock을 같은 변경에서 확정한다.
 
 | 제안 계약 | 책임 | 기기 영향 |
 |---|---|---|
@@ -201,7 +201,7 @@ Cargo `firmware-write` 신설을 제안한다. 기본 feature `[]`와 `REAL_STEP
 - locked stock / unlocked stock / Magisk 유지 / root unknown, 순정 성공 뒤 IMG 기록 실패, 생략 백업·불완전 백업·백업 뒤 대기/재개.
 - 기본 build와 쓰기 feature build 모두 미승인 쓰기·직접 invoke를 차단하는지 검사.
 
-실기기 항목은 구현 때 기존 `device-test-checklist.md`에 추가한다. 현재 수정 중인 체크리스트를 이 문서 작업에서 변경하지 않는다.
+실기기 항목은 `newflasher-add` 브랜치의 기존 `device-test-checklist.md`에 추가했다. 메인 폴더의 미커밋 체크리스트 변경은 수정하지 않는다.
 
 실측에는 모델/지역·출발→목표 지문/Android·Windows 드라이버·USB descriptor·잠금/root·active slot·백업 선택·제외 목록·기록 ACK·재부팅 결과를 남긴다. 데이터 접근/대표 앱·사진·문서, root 정책, SIM별 IMS·실제 통화, Bluetooth 등 기종별 후속 기능을 따로 확인한다. 대표 데이터 확인을 전체 무손실 증명으로 표현하지 않는다.
 
@@ -215,4 +215,4 @@ Cargo `firmware-write` 신설을 제안한다. 기본 feature `[]`와 `REAL_STEP
 - `docs/devices.md`, `README.md`: 검증된 조합과 범위. 미검증 모델을 완료 기기로 표시하지 않음.
 - 라이선스 고지·upstream 대응표·배포 구성과 상위 로컬 구형 D6/M6 계획: 네이티브 방식에 맞게 정리.
 
-이번 작성으로 구현 완료나 기기 쓰기 승인이 추가되지는 않는다. 실제 구현·배포 활성화는 위 순서와 기존 실행 게이트를 따른다.
+오프라인 코어 구현은 전체 업데이트 완료나 기기 쓰기 승인을 뜻하지 않는다. 실제 실행·배포 활성화는 위 순서와 기존 실행 게이트를 따른다.
