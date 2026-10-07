@@ -25,6 +25,7 @@
   },
   "bundle": {
     "active": true,
+    "resources": ["src/flasher/NOTICE.md"],
     "targets": "all",
     "icon": [
       "icons/32x32.png",

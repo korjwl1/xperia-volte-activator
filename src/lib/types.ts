@@ -1,6 +1,29 @@
 // 도메인 타입 — .plans/03-data/mock-schema.md 참조
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string };
 export type Unsubscribe = () => void;
+
+/** PC-only native flasher inspection; this report never authorizes hardware writes. */
+export interface FirmwarePackageFile {
+  relativePath: string;
+  bytes: number;
+  sha256: string;
+  sin: {
+    partition: string;
+    compressed: boolean;
+    members: { name: string; bytes: number; sha256: string }[];
+  } | null;
+  decision: { disposition: "include" | "preserve" | "block"; reason: string };
+}
+export interface FirmwarePackageReport {
+  upstreamCommit: string;
+  targetFingerprint: string;
+  manifestSha256: string;
+  totalBytes: number;
+  candidateBytes: number;
+  files: FirmwarePackageFile[];
+  blockers: string[];
+  writeReady: false;
+}
 export type DeviceMode = "android" | "bootloader-fastboot" | "fastbootd" | "flashmode";
 
 export type TriState = boolean | "unknown";

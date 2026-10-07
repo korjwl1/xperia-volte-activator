@@ -42,6 +42,8 @@ GitHub에서 읽는 현재 시스템 설명은 `docs/structure/overview.md`, 기
 
 ## 필수 작업 규칙
 
+예외(사용자 요청 2026-10-08, `newflasher-add` 워크트리): **Newflasher 고정 소스 기반 Rust 네이티브 엔진 구현·오프라인 검증·커밋 허용**. 계획은 `.plans/04-engine/newflasher-native.md`. 메인 폴더의 미커밋 변경·다른 작업 폴더를 수정하지 않는다. 실제 ADB/USB/COM/Flash mode 질의·쓰기·드라이버 설치를 실행하지 않는다. 기기 식별/profile/boot delivery 검증 전에는 하드웨어 플래시 API를 등록하지 않고 기존 기본 쓰기 feature/REAL_STEPS를 유지한다. 공개 문서에는 브랜치 구현과 실기기 미검증을 구분한다.
+
 1. **.plans 문서 의무**: 뷰를 작성·변경하면 대응하는 `.plans/01-views/<view>.md`를 같은 커밋에서 갱신한다.
    - 새 뷰 → 목적/상태 필드/버튼→백엔드 계약 매핑을 문서에 기록
    - 새 백엔드 계약 → `.plans/02-contracts/tauri-commands.md`에 시그니처 추가하고 facade와 타입을 함께 갱신

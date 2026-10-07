@@ -1,5 +1,16 @@
 # 실기기 검증 체크리스트
 
+## Newflasher 네이티브 (`newflasher-add`, 2026-10-08, 미실행)
+
+- [ ] XQ-DQ44 같은 지역의 source→target 지문·Android·패키지/NOERASE·layout·boot delivery를 검증한 profile을 만든다. 로컬 검사 report를 쓰기 권한으로 사용하지 않는다.
+- [ ] Windows 실제 GordonGate 드라이버/SetupDi 경로·VID/PID를 확인한다. 기존 `usbmode`의 0xADDE와 원본 0xB00B 차이, 장치 없음/복수/교체/모드 간 identity를 확인한다.
+- [ ] 부분 전송·disconnect·CancelIoEx 완료 지연에서 버퍼/실행권/PC 보호 유지와 unmatched journal intent 처리를 확인한다.
+- [ ] 사전 백업 결과·사용자 다음 진행 뒤 순정 SIN/서명·chunk·erase·양 슬롯 예외·세션 TA/Sync·부팅을 제한된 조합에서 검증한다. 데이터 접근·대표 앱·사진/문서·IMS·실제 통화와 기타 기능을 따로 기록한다.
+- [ ] locked stock / unlocked stock / 선택한 Magisk 유지에 맞는 후속 작업과 목표 지문 확인을 검증한다. root 실패/IMS 미확인/부팅 실패를 전체 성공으로 표시하지 않는다.
+- [ ] 별도 판올림·다른 모델/지역/슬롯 조합은 각각 검증한다. 새로운 모델 표만으로 활성화하지 않는다.
+
+현재 하드웨어 플래시 API/쓰기 feature는 추가하지 않았으며 PC 검사와 fake/C-harness만 검증했다. 상세는 [진행 기록](newflasher-native-progress.md).
+
 - [ ] 2026-10-06 직접 USB SYNC 세션 재사용: 앱 데이터 완료 후 DCIM의 동일 샘플 ABBA 전송 비교, 매회 PC 크기·해시 및 회차간 내용 일치. 실제 세션 재사용 여부와 측정 시간 기록.
 - [ ] 2026-10-06 수정한 세션 재사용·버퍼 저장 엔진으로 DCIM/fs-rest 완료 및 전체 선택 항목 PC 해시 검증. 샘플 비교만으로 전체 백업 완료 주장 금지.
 

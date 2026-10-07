@@ -10,6 +10,7 @@ mod env;
 mod events;
 mod fastboot;
 mod firmware;
+mod flasher;
 mod guard;
 mod host;
 mod ims;
@@ -110,6 +111,7 @@ pub fn run() {
             firmware::firmware_fetch,
             firmware::firmware_versions,
             firmware::firmware_dir_check,
+            flasher::firmware_package_inspect,
             boot_image::boot_image_check,
             adb::root_check,
             adb::screen_state,

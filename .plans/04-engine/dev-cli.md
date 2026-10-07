@@ -6,6 +6,8 @@
 
 ## 같은 엔진을 사용한다
 
+2026-10-08 `newflasher-add`: `firmware_package_inspect`를 PC-only 명령으로 추가했다. `args={dir:"<절대 펌웨어 폴더>",targetFingerprint:"<목표 지문>"}`이며 Tauri와 같은 `flasher::firmware_package_inspect`를 호출한다. 파일 읽기·검사만 하고 ADB/USB를 조회하지 않는다. 결과 `writeReady=false`와 blocker는 실제 플래시 허용이 아니라는 뜻이다. 검사 성공을 업데이트 성공으로 해석하지 않는다. [진행 기록](newflasher-native-progress.md)을 참조한다.
+
 Cargo `dev-cli` feature를 켰을 때만 별도 `xva-dev` 실행 파일이 포함된다. `debug/release`는 최적화 프로필이고 개발 CLI 포함 여부는 feature로 정한다. CLI는 기존 라이브러리에 링크하며 Tauri 창·데몬·별도 adb/EfsTools 프로세스를 띄우지 않는다.
 
 Tauri 명령은 기존 알고리즘을 `*_with_events`에 위임하고 CLI도 같은 함수를 호출한다. AppHandle이 없는 명령은 기존 명령 함수를 직접 호출한다. 진행 출력만 `events::Events`를 통해 앱 이벤트 또는 CLI JSON Lines로 전달된다. 이미지 검사·서명 핀·펌웨어 대조·양 슬롯 기록·EFS 리드백·리락 이력 판정 코드는 공유한다. 코드 수정 후 **재빌드한** CLI와 앱에는 같은 엔진 수정이 적용된다.

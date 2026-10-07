@@ -71,7 +71,7 @@ strip = true
 
 # 작업 중 절전·Windows 종료 방지 (guard.rs)
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Power", "Win32_System_Threading", "Win32_System_Shutdown", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_System_Diagnostics_ToolHelp", "Win32_Devices_DeviceAndDriverInstallation"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Power", "Win32_System_Threading", "Win32_System_Shutdown", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_System_Diagnostics_ToolHelp", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_Security"] }
 
 # adb_client 3.2.3에 I/O 시간 상한을 넣은 사본 (원본은 USB 읽기·서버 소켓 상한이 없어 기기가 멈추면
 # 실행권·연결 잠금을 앱 재시작까지 잡는다). 변경 목록은 vendor/adb_client/PATCHES.md.

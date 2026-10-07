@@ -53,6 +53,7 @@ requests! {
         version: Option<String> = Value::Null, dest: Option<String> = Value::Null
     }
     FirmwareDirCheck("firmware_dir_check", false, true, true) { dir: String = "<absolute firmware folder>", partition: String = "init_boot" }
+    FirmwarePackageInspect("firmware_package_inspect", false, true, true) { dir: String = "<absolute firmware folder>", target_fingerprint: String = "<target firmware fingerprint>" }
     BootImageCheck("boot_image_check", false, true, false) { serial: String = "sha256:<serialKey>", path: String = "<stock image path>", fingerprint: String = "<extraction fingerprint>" }
     MagiskPrepare("magisk_prepare", false, true, true) {}
     MagiskPatch("magisk_patch", true, cfg!(feature = "root-write"), false) { request: crate::magisk::MagiskPatchRequest = json!({"serial":"sha256:<serialKey>", "apkPath":"<verified APK>", "imagePath":"<stock image>", "partition":"init_boot", "imageSha256":"<stock SHA256>", "fingerprint":"<extraction fingerprint>", "apkSha256":"<APK SHA256>"}) }
@@ -184,6 +185,9 @@ async fn dispatch(req: Request, events: Events) -> Result<Value, Value> {
         } => packed(firmware::firmware_fetch(Some(serial), partition, version, dest).await),
         Request::FirmwareDirCheck { dir, partition } => {
             packed(firmware::firmware_dir_check(dir, partition).await)
+        }
+        Request::FirmwarePackageInspect { dir, target_fingerprint } => {
+            packed(crate::flasher::firmware_package_inspect(dir, target_fingerprint).await)
         }
         Request::BootImageCheck {
             serial,

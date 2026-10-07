@@ -303,6 +303,21 @@ EFS 실행 규칙 (카페 조사 반영, 2026-10-03 — tasks/research-cafe-omd-
 
 ## flasher / session (M6)
 
+### 구현됨: PC 전용 패키지 검사 (`newflasher-add`)
+
+```ts
+invoke('firmware_package_inspect', { dir: string, targetFingerprint: string }) → FirmwarePackageReport
+// facade: api.firmwarePackageInspect(dir, targetFingerprint) → ApiResult<FirmwarePackageReport>
+// dir는 절대 경로의 로컬 순정 폴더. update.xml에 유일한 fingerprint가 있고 요청 대상과 일치해야 함.
+// files: relativePath/bytes/sha256/sin(partition/compressed/members)/decision(include|preserve|block, reason)
+// upstreamCommit/targetFingerprint/manifestSha256/totalBytes/candidateBytes/blockers/writeReady:false
+// include는 기록 후보이며 실행 허가가 아님. profile/지역/기기 identity/boot delivery는 아직 미검증.
+// PC에서 읽기만 함: 파일 삭제/추출/다운로드/ADB/USB/드라이버 변경 없음. 브라우저 mock 성공 없음.
+// malformed SIN/XML, 경로/링크/크기/지문 불일치는 FLASH_<CODE>|... 오류.
+```
+
+CLI도 같은 명령을 PC-only로 등록한다. 새 준비/실행/취소 계약은 아직 등록하지 않았다. 구현/검증 범위는 [진행 기록](../04-engine/newflasher-native-progress.md)에 있다.
+
 **미구현 설계**: 아래 `fw_prepare` / `newflasher_run`은 기존 래퍼 계약이다. 2026-10-08 작성한 [네이티브 엔진 계획](../04-engine/newflasher-native.md)의 §7에 전체 패키지 준비·Flash mode 검사·계획 ID 기반 실행·취소·상태 조회와 구조화 이벤트를 제안했다. 구현 시 facade/타입/Rust 등록과 함께 확정하고 아래 구형 계약을 정리한다. 현재 사용 가능한 API로 취급하지 않는다.
 
 ```ts
