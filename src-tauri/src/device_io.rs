@@ -103,7 +103,7 @@ pub(crate) use su;
 /// 루트 셸 명령(동적 문자열) — `su!`와 같은 위치 탐색. 명령 전체를 홑따옴표 한 덩어리로 넘긴다.
 pub(crate) fn su_command(cmd: &str) -> String {
     format!(
-        "\"$(command -v su || echo /debug_ramdisk/su)\" -c '{}'",
+        concat!(su_path!(), " -c '{}'"),
         cmd.replace('\'', "'\\''")
     )
 }
