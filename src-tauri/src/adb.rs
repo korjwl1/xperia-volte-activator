@@ -431,13 +431,15 @@ fn bootloader_state(flash_locked: &str, vbmeta_state: &str, rooted: bool) -> &'s
         "unlocked" => Some(false),
         _ => None,
     };
+    // 진짜 루팅(su·커널 모듈)이 확인되면 부트로더는 언락이다 — Sony는 잠긴 상태로 패치 부트를 못 올린다.
+    // 이때 보이는 "잠김" 속성은 Play Integrity 모듈(TrickyStore·PIF)의 위장이므로 그대로 믿지 않는다(2026-10-09 실측).
+    if rooted {
+        return "unlocked";
+    }
     let locked = match (a, b) {
         (Some(x), Some(y)) if x == y => x,
         _ => return "unknown",
     };
-    if locked && rooted {
-        return "unknown";
-    }
     if locked {
         "locked"
     } else {
@@ -665,10 +667,14 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
         serial = "unknown".into();
     }
 
+    // 진짜 루팅 근거: su가 보이거나(su_visible) 루트 데몬·KernelSU LKM(__ROOTD__)이 있음 — 매니저 앱만(__KSUMGR__)은 제외
+    let genuine_root = su_raw.is_some_and(|raw| {
+        su_visible(raw) || raw.lines().any(|l| l.trim().starts_with("__ROOTD__="))
+    });
     let bootloader = bootloader_state(
         &get("ro.boot.flash.locked"),
         &get("ro.boot.vbmeta.device_state"),
-        su_raw.is_some_and(su_visible),
+        genuine_root,
     );
     let rooted = root_state(su_raw, bootloader);
 
@@ -1757,8 +1763,8 @@ Filesystem     1K-blocks      Used Available Use% Mounted on\n\
         // 실측: 잠긴 정상 기기
         assert_eq!(bootloader_state("1", "locked", false), "locked");
         assert_eq!(bootloader_state("0", "unlocked", true), "unlocked");
-        // 잠김 위장(루팅인데 locked) / 두 값 불일치 → 판별 불가
-        assert_eq!(bootloader_state("1", "locked", true), "unknown");
+        // 진짜 루팅이면 잠김으로 위장돼도(Integrity 모듈) 언락으로 본다 — Sony는 잠긴 채 패치 부트 불가
+        assert_eq!(bootloader_state("1", "locked", true), "unlocked");
         assert_eq!(bootloader_state("1", "unlocked", false), "unknown");
         assert_eq!(bootloader_state("", "", false), "unknown");
         assert_eq!(bootloader_state("0", "", false), "unknown"); // 한쪽만으로는 확정하지 않음

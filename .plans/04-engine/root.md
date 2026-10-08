@@ -136,3 +136,7 @@ invoke('root_reboot', { serial, target: 'os'|'bootloader' }) → void   // adb r
   - `screen_state`로 화면·잠금을 읽는다. 꺼져 있으면 `screen_wake`(WAKEUP 키)로 켜고, 잠겨 있으면 "잠금을 풀어 주세요"를 띄우고 기다린다. 풀린 뒤에 su를 요청한다.
   - Magisk(v30.7 소스 `SuRequestViewModel`/`SuRequestHandler`)는 10초 무응답이나 거부를 기본 "영구" 거부로 저장한다. 그 뒤 요청은 창 없이 거부된다.
   - 그래서 거부되면 "Magisk 앱 → 슈퍼유저 탭에서 Shell 켜기"를 안내하고 같은 확인을 2초마다 반복한다. 창이 반복해서 뜨지 않고, 켜는 순간 진행한다.
+
+## 2026-10-09 부트로더 판정 — Integrity 위장 보정
+
+Play Integrity 모듈(TrickyStore·PIF)을 설치하면 `ro.boot.flash.locked`·`ro.boot.vbmeta.device_state`가 "잠김"으로 위장된다. 진짜 루팅(su 가시 또는 /proc/modules의 kernelsu·루트 데몬)이 확인되면 부트로더는 언락으로 판정한다 — Sony는 잠긴 상태로 패치 부트를 올릴 수 없으므로 루팅=언락이다. 매니저 앱만 있는 상태(`__KSUMGR__`)는 진짜 루팅 근거로 보지 않는다.
