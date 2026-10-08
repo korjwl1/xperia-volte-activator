@@ -174,6 +174,15 @@ fn dependencies(id: &str, engine: Engine, modules: &[Module], r: &Record) -> Res
     }
     Ok(())
 }
+/// 그 모듈이 폰에 조금이라도 남아 있는지(설치된 것·다음 부팅에 적용될 것). 확인 자체가 실패하면 "있음"으로 본다(안전 쪽)
+fn module_on_disk(dev: &mut dyn ADBDeviceExt, id: &str) -> bool {
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.') {
+        return true;
+    }
+    let cmd = format!("if [ -e /data/adb/modules/{id} ] || [ -e /data/adb/modules_update/{id} ]; then echo yes; else echo no; fi");
+    !matches!(crate::device_io::shell(dev, &crate::device_io::su_command(&cmd)).as_deref().map(str::trim), Ok("no"))
+}
+
 fn inventory_work(dev: &mut dyn ADBDeviceExt, dir: &Path) -> Result<Inventory, String> {
     let root = crate::root_state::inspect(dev)?;
     if root.access != Access::Granted
@@ -182,7 +191,20 @@ fn inventory_work(dev: &mut dyn ADBDeviceExt, dir: &Path) -> Result<Inventory, S
         return Err("루트 권한과 단일 엔진을 확인하세요".into());
     }
     let key = crate::device_io::identity_key(dev)?;
-    let r = read_record(&super::key_path(dir, &key, "root-modules")?)?;
+    let record_path = super::key_path(dir, &key, "root-modules")?;
+    let mut r = read_record(&record_path)?;
+    // 불확정으로 남은 설치라도 폰에 그 모듈의 흔적이 전혀 없으면 "설치 안 됨"으로 정리한다 — 다시 설치할 수 있다
+    // (2026-10-09: ksud가 설치 전에 거부했는데 불확정으로 남아 다음 설치를 계속 막았다)
+    if r.pending {
+        if let Some(id) = r.pending_module.clone() {
+            if !module_on_disk(dev, &id) {
+                r.pending = false;
+                r.uncertain = false;
+                r.pending_module = None;
+                super::save(&record_path, &r)?;
+            }
+        }
+    }
     let boot = boot_id(dev)?;
     let modules = list(dev)?;
     let missing = r.pending
@@ -258,7 +280,20 @@ pub fn install_work(
         ),
         _ => return Err("루트 엔진 불명".into()),
     };
-    crate::device_io::shell_write(dev, command)?;
+    if let Err(e) = crate::device_io::shell_write(dev, command) {
+        // 설치 명령이 거부됐고 폰에 흔적도 없으면 확실히 설치 안 됨 — 불확정으로 남기지 않고 다시 시도할 수 있게 한다
+        let _ = crate::device_io::shell(dev, "rm -f /data/local/tmp/xvolte-module.zip");
+        if let Some(id) = package.module_id.as_deref() {
+            if !module_on_disk(dev, id) {
+                r.pending = false;
+                r.uncertain = false;
+                r.pending_module = None;
+                super::save(&path, &r)?;
+                return Err(format!("모듈 설치 실패(설치되지 않음 — 다시 시도할 수 있습니다): {e}"));
+            }
+        }
+        return Err(e);
+    }
     crate::device_io::shell_write(dev, "rm -f /data/local/tmp/xvolte-module.zip")?;
     let installed_id = package.module_id.ok_or("모듈 ID 없음")?;
     r.installed
@@ -540,6 +575,27 @@ mod tests {
         let serialized = serde_json::to_value(&state).unwrap();
         assert_eq!(serialized["installed"]["neozygisk"], "neozygisk");
         assert_eq!(serialized["bootId"], "22222222-2222-2222-2222-222222222222");
+    }
+    #[test]
+    fn refused_install_without_any_trace_is_cleared_for_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let hash = prepared(dir.path());
+        let mut d = fake();
+        d.answer_shell(
+            "sha256sum /data/local/tmp/xvolte-module.zip",
+            &format!("{hash}  /data/local/tmp/xvolte-module.zip"),
+        );
+        let command =
+            crate::device_io::su!("'magisk --install-module /data/local/tmp/xvolte-module.zip'");
+        d.answer_shell(command, "Error: Android is Booting!");
+        d.shell_exit_codes.insert(command.into(), 1);
+        // 폰의 모듈 폴더에 흔적이 없다 — 확실히 설치 안 됨
+        let probe = crate::device_io::su_command("if [ -e /data/adb/modules/neozygisk ] || [ -e /data/adb/modules_update/neozygisk ]; then echo yes; else echo no; fi");
+        d.answer_shell(&probe, "no\n");
+        let err = install_work(&mut d, dir.path(), &hash, true).err().expect("install must fail");
+        assert!(err.contains("다시 시도할 수 있습니다"), "{err}");
+        let state = inventory_work(&mut d, dir.path()).unwrap();
+        assert!(!state.uncertain && !state.reboot_required);
     }
     #[test]
     fn install_failure_retains_durable_uncertainty_and_no_auto_retry() {
