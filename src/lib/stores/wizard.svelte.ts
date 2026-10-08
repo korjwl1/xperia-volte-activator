@@ -732,7 +732,14 @@ export class Wizard {
     if (this.startupJournalChecked || !this.device?.serial || this.device.state !== "device") return;
     this.startupJournalChecked = true;
     await this.checkJournal();
+    // 앱이 막 뜬 순간에는 백엔드 호출(IPC)이 실패할 수 있다 — 읽기 실패면 잠시 뒤 다시 확인한다(2026-10-08: 팝업이 안 뜬 원인)
+    if (this.journalReadBlocked && !this.journalMismatch && this.startupJournalRetries < 5) {
+      this.startupJournalRetries++;
+      this.startupJournalChecked = false;
+      setTimeout(() => void this.checkStartupJournal(), 2000);
+    }
   }
+  private startupJournalRetries = 0;
 
   /** 같은 폰의 끝나지 않은 작업이 있으면 pendingJournal에 두고 true */
   async checkJournal(): Promise<boolean> {
