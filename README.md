@@ -2,6 +2,20 @@
 
 Sony Xperia의 백업, 부트로더 작업, 루팅과 VoLTE 패치를 연결하는 Windows용 개발 중 도구입니다. Tauri 2·Svelte 5·TypeScript·Rust로 구성하며 ADB와 EFS/NV는 Rust 엔진을 사용합니다.
 
+## 화면
+
+**기기 연결** — 연결된 Xperia와 펌웨어, 부트로더·루팅 상태, SIM별 VoLTE 상태를 확인합니다.
+
+![기기 연결 화면](docs/screenshots/device-status.png)
+
+**진행 방법 선택** — 자동 진행, 수동 진행, 업데이트를 선택합니다.
+
+![진행 방법 선택 화면](docs/screenshots/workflow-modes.png)
+
+**수동 진행** — 필요한 기능을 선택하며, 기기 조건에 맞지 않는 기능은 비활성화됩니다.
+
+![수동 기능 선택 화면](docs/screenshots/manual-tasks.png)
+
 ## 호환성 검증
 
 전체 GUI 절차의 호환성 테스트가 끝난 기기는 아직 없습니다. 다음 환경에서는 일부 단계의 실기기 동작을 확인했습니다.
