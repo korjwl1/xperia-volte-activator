@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { drawSplash, SPLASH_HEIGHT, SPLASH_STILL_TIME, SPLASH_WIDTH } from "$lib/splash/draw";
 
   // 앱 첫 실행 때 첫 기기 조회가 끝날 때까지 빈 화면을 가린다(2026-10-08 사용자 승인 시안).
@@ -10,12 +10,16 @@
   let leaving = $state(false);
   const FADE_MS = 450;
 
+  // 주의: leaving을 바꾸면 이 effect가 다시 돌므로 정리 함수로 타이머를 지우면 onDone이 영영 불리지 않는다
+  // (2026-10-08 실측: 스플래시가 투명한 채 남아 시작 팝업이 안 뜨고 애니메이션이 계속 돌았다). 타이머는 화면을 떠날 때만 지운다
+  let doneTimer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
-    if (!ready || leaving) return;
-    leaving = true;
-    const timer = setTimeout(onDone, FADE_MS);
-    return () => clearTimeout(timer);
+    if (ready && !leaving) {
+      leaving = true;
+      doneTimer = setTimeout(onDone, FADE_MS);
+    }
   });
+  onDestroy(() => clearTimeout(doneTimer));
 
   onMount(() => {
     const ctx = canvas.getContext("2d", { alpha: false });
