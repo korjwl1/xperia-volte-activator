@@ -16,7 +16,9 @@ status: implemented / gated (조건부 리락·언루팅 구현, 쓰기 기본 �
 3. root_reboot(bootloader)와 모드 대기. 실패·취소·제한 시간 초과 시 중단한다.
 4. fastboot_flash에 expectedSerial과 expectedSha256을 전달해 같은 기기·같은 버퍼인지 확인한 뒤 양 슬롯 기록. 슬롯별 started/done/failed 이력을 동기 저장한다.
 5. fastboot_reboot(os)의 실제 성공 응답과 같은 기기의 ADB 복귀를 확인한다.
-6. root_check가 여전히 uid=0을 반환하면 실패 처리한다. 조회 실패는 미확인 로그를 남긴다. 사용자가 Magisk에서 루트 해제 여부를 확인하고 앱을 직접 삭제한다. 앱 삭제는 자동 수행하지 않는다.
+6. root_check가 여전히 uid=0을 반환하면 실패 처리한다. 조회 실패는 미확인 로그를 남긴다. 루트 해제가 확인되면 `magisk_uninstall`로 Magisk 앱(com.topjohnwu.magisk)을 삭제한다(2026-10-08 사용자 결정). 확인하지 못했거나 앱 숨기기로 이름이 바뀐 경우는 사용자가 직접 삭제한다.
+
+2026-10-08: 수동 언루팅은 초기화가 없으므로 백업 단계를 넣지 않는다. 리락은 `REAL_STEPS.relock`으로 언락(`fastboot`)과 분리했고 실기기 검증 전까지 끈다. 기기 상태의 루팅 판정은 su 경로 외에 루트 데몬(magiskd·ksud·apd)도 보고, 프로세스 목록을 읽었는데 둘 다 없으면 언락 상태에서도 "루팅 아님"으로 표시한다.
 
 펌웨어 업데이트가 시뮬레이션인 계획과 실전 부트 기록을 섞지 않는다. 한 슬롯만 성공하면 실패로 중단하며 자동 롤백은 구현되지 않았다.
 

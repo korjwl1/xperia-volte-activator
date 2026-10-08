@@ -3,7 +3,7 @@ import { transport } from "./transport";
 import { REAL_STEPS } from "$lib/data/runMode";
 
 const rootWrite = <T>(command: string, args: Record<string, unknown>): Promise<ApiResult<T>> => {
-  if (!REAL_STEPS.root) return Promise.resolve({ ok: false, error: "루팅 실전 실행이 비활성화되어 있습니다" });
+  if (!REAL_STEPS.rootTools) return Promise.resolve({ ok: false, error: "루팅 도구 실전 실행이 비활성화되어 있습니다" });
   return transport.result<T>(command, args);
 };
 export const rootToolsApi = {

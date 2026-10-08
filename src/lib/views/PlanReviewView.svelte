@@ -31,8 +31,10 @@
 
   const bootloaderKnown = $derived(wizard.device?.bootloader === "locked" || wizard.device?.bootloader === "unlocked");
   const restoring = $derived(wizard.mode === "manual" && wizard.manualTask === "restore");
+  // 언루팅은 초기화가 없어 백업을 고르지 않는다(사용자 결정 2026-10-08) — 백업 선택 화면 자체를 보이지 않는다
+  const noBackup = $derived(wizard.mode === "manual" && wizard.manualTask === "unroot");
   const extraOptions = $derived(wizard.mode !== "manual" && wizard.mode !== "update" && !wizard.opts.backupOnly);
-  const taskBlocked = $derived(wizard.mode === "update" ? "전체 펌웨어의 Newflasher 기록 연결·기기별 검증을 준비 중입니다" : restoring && (!wizard.backupDir || wizard.restoreSourceState !== "done") ? "복구할 원본 백업 폴더를 먼저 검증하세요" : selectedModuleSets(wizard.opts.modules).length && !wizard.moduleSelection.settingsAck ? "선택한 모듈 세트의 매니저 설정을 확인하세요" : selectedModuleSets(wizard.opts.modules).length && !REAL_STEPS.root ? "루팅 모듈 설치 실전 기능이 비활성화되어 있습니다" : null);
+  const taskBlocked = $derived(wizard.mode === "update" ? "전체 펌웨어의 Newflasher 기록 연결·기기별 검증을 준비 중입니다" : restoring && (!wizard.backupDir || wizard.restoreSourceState !== "done") ? "복구할 원본 백업 폴더를 먼저 검증하세요" : selectedModuleSets(wizard.opts.modules).length && !wizard.moduleSelection.settingsAck ? "선택한 모듈 세트의 매니저 설정을 확인하세요" : selectedModuleSets(wizard.opts.modules).length && !REAL_STEPS.rootTools ? "루팅 모듈 설치 실전 기능이 비활성화되어 있습니다" : null);
   const sizesLoading = $derived(wizard.sizesState === "loading");
 
   // ── 항목별 용량: 실측(storage_sizes) 매핑, 실측 불가 항목은 고정 추정치 ──
@@ -165,7 +167,7 @@
     if (taskBlocked || efsBlocked || planSteps.length === 0 || wizard.journalBlocked || wizard.pendingJournal) return;
     // 방어: 백업 선택 + 경로 미지정 or 용량 부족
     // 용량 계산 중에는 여유 공간 판단이 불완전하므로 실행 보류
-    if (!restoring && anyBackupChecked && (!wizard.backupPath.trim() || diskWarning || diskUnknown || sizesLoading)) {
+    if (!restoring && !noBackup && anyBackupChecked && (!wizard.backupPath.trim() || diskWarning || diskUnknown || sizesLoading)) {
       showPathAlert = true;
       // 연속 클릭 시 이전 타이머가 새 알림을 일찍 닫지 않게 다시 건다
       clearTimeout(pathAlertTimer);
@@ -193,7 +195,7 @@
   <div class="flex-1 min-h-0 flex gap-4 p-4 lg:p-6">
     <!-- 좌: 옵션 (더 넓게) -->
     <div class="flex-[7] min-w-0 flex flex-col gap-4">
-      <div class="shrink-0 flex gap-1 rounded-lg bg-muted p-1">
+      {#if !noBackup}<div class="shrink-0 flex gap-1 rounded-lg bg-muted p-1">
         <button
           class="flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors
             {activeTab === 'backup' ? 'bg-background elev-1 text-foreground' : 'text-muted-foreground hover:text-foreground'}"
@@ -208,11 +210,16 @@
         >
           루팅
         </button>{/if}
-      </div>
+      </div>{/if}
 
       <div class="flex-1 min-h-0 overflow-y-auto">
         {#if REAL_STEPS.efs && patching}<EfsSetup bind:dirty={efsNeedsSave} />{/if}
-        {#if activeTab === "backup"}
+        {#if noBackup}
+          <div class="rounded-xl bg-muted p-4 text-sm leading-relaxed">
+            <p class="font-semibold">백업 없이 진행합니다</p>
+            <p class="mt-1 text-muted-foreground">언루팅은 순정 부트 이미지만 다시 기록하므로 폰 데이터가 초기화되지 않습니다. 오른쪽 실행 순서를 확인하고 [실행]을 누르세요.</p>
+          </div>
+        {:else if activeTab === "backup"}
           {#if restoring}
             <div class="sticky top-0 z-10 mb-3 rounded-xl bg-info-container text-info p-3 space-y-2 text-xs">
               <p>복구할 원본 백업 폴더를 선택하세요. 현재 기기와 원본 기기·파일 해시를 대조합니다.</p>

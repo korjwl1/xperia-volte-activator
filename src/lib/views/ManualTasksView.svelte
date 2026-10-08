@@ -5,7 +5,7 @@
   import { wizard } from "$lib/stores/wizard.svelte";
   import { MANUAL_TASKS, manualTaskProblem } from "$lib/domain/workflow";
   const icons = { backup: HardDrive, restore: FolderOpen, unlock: LockOpen, relock: Lock, root: ShieldCheck, unroot: ShieldOff, volte: Signal, verify: Phone, "root-manager": RefreshCw, "root-modules": Package };
-  let checking = $state(true);
+  let checking = $state(false);
   let deviceStatus: SelectionDeviceStatus;
 </script>
 

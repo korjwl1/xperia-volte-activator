@@ -3,7 +3,11 @@ export interface ExecutionFlags {
   backup: boolean;
   restore: boolean;
   fastboot: boolean;
+  /** 리락(초기화 동반)은 언락과 따로 켠다 — 실기기 검증 전에는 끈다(2026-10-08 사용자 결정) */
+  relock: boolean;
   root: boolean;
+  /** 루팅 도구(엔진 전환·모듈 설치) — 실기기 검증 전이라 루팅과 따로 끈다(2026-10-08) */
+  rootTools: boolean;
   verify: boolean;
   efs: boolean;
 }
@@ -18,9 +22,10 @@ export function liveStepEnabled(id: string, flags: ExecutionFlags): boolean {
   switch (id) {
     case "backup": return flags.backup;
     case "restore": return flags.restore;
-    case "unlock": case "relock": return flags.fastboot;
+    case "unlock": return flags.fastboot;
+    case "relock": return flags.fastboot && flags.relock;
     case "root": case "unroot": return flags.root && flags.fastboot;
-    case "root-modules": return flags.root;
+    case "root-modules": return flags.rootTools;
     case "efs-input": case "efs-preflight": case "efs": case "verify":
     case "volte-props": case "comm-check": return flags.efs;
     case "fw-verify": return flags.verify;
@@ -41,7 +46,7 @@ export function buildFeatureProblem(ids: readonly string[], features: EngineCapa
 }
 
 export function executionPlanProblem(ids: readonly string[], flags: ExecutionFlags): string | null {
-  if (ids.includes("root-modules") && !flags.root) return "루팅 모듈 설치 실전 기능이 비활성화되어 있습니다";
+  if (ids.includes("root-modules") && !flags.rootTools) return "루팅 모듈 설치 실전 기능이 비활성화되어 있습니다";
   if (!hasLiveActions(flags)) return null;
   if (ids.includes("fw-flash")) return "전체 펌웨어 기록이 아직 구현되지 않아 이 실전 계획을 시작할 수 없습니다";
   for (const id of ids) {

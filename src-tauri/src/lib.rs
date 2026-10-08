@@ -148,6 +148,7 @@ pub fn run() {
             magisk::magisk_prepare,
             magisk::magisk_patch,
             magisk::magisk_install,
+            magisk::magisk_uninstall,
             magisk::root_reboot,
             backup::backup_prepare,
             backup::contacts_restore_check,

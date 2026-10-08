@@ -379,6 +379,30 @@ pub async fn magisk_install(
     crate::tasks::blocking("Magisk 설치", work).await
 }
 
+/// Magisk 앱 삭제 — 언루팅으로 루트가 사라진 뒤 앱이 남지 않게 한다(사용자 결정 2026-10-08).
+/// 설치돼 있지 않으면 아무것도 하지 않고 false. 앱 숨기기로 이름을 바꾼 Magisk는 찾지 못한다.
+#[tauri::command]
+pub async fn magisk_uninstall(serial: Option<String>) -> Result<bool, String> {
+    ensure_root_write()?;
+    require_serial(&serial)?;
+    let operation = crate::device_io::WriteOperation::acquire()?;
+    let work = move || {
+        let _operation = operation;
+        adb::with_first_device(&serial, |dev| {
+            let listed = crate::device_io::shell(dev, "pm list packages com.topjohnwu.magisk")?;
+            if !listed.lines().any(|l| l.trim() == "package:com.topjohnwu.magisk") {
+                return Ok(false);
+            }
+            let out = crate::device_io::shell(dev, "pm uninstall com.topjohnwu.magisk")?;
+            if out.trim() != "Success" {
+                return Err(format!("Magisk 앱 삭제 실패: {}", out.trim()));
+            }
+            Ok(true)
+        })
+    };
+    crate::tasks::blocking("Magisk 앱 삭제", work).await
+}
+
 /// adb 재부팅 — fastboot_reboot의 adb 짝 (fastboot 진입/복귀)
 #[tauri::command]
 pub async fn root_reboot(serial: Option<String>, target: String) -> Result<(), String> {

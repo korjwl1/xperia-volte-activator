@@ -4,7 +4,7 @@
   import { TriangleAlert, Download, LoaderCircle } from "@lucide/svelte/icons";
   import { updateProblem } from "$lib/domain/workflow";
   wizard.ensureFirmwareVersions();
-  let checking = $state(true);
+  let checking = $state(false);
   const reason = $derived(updateProblem(wizard.device));
   const versions = $derived([...new Map((wizard.fwVersions?.versions ?? []).filter(v => v.version !== wizard.device?.firmware).map(v => [v.version, v])).values()]);
 </script>

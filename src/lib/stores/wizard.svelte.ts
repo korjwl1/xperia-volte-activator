@@ -463,7 +463,7 @@ export class Wizard {
     this.moduleInstructionResolve = null; this.moduleInstruction = ""; resolve?.(completed);
   }
   get backupLive(): boolean { return REAL_STEPS.backup || this.opts.backupOnly === true; }
-  get executionFlags() { return this.opts.backupOnly ? { backup: true, restore: false, fastboot: false, root: false, verify: false, efs: false } : REAL_STEPS; }
+  get executionFlags() { return this.opts.backupOnly ? { backup: true, restore: false, fastboot: false, relock: false, root: false, rootTools: false, verify: false, efs: false } : REAL_STEPS; }
   backupPath = $state("");
   sizes: Record<string, number> | null = $state(null); // storage_sizes 실측
   sizesState = $state<LoadState>("idle");
@@ -2768,8 +2768,15 @@ export class Wizard {
     if (gen !== this.runGen) return;
     if (stillRooted === true) return this.failStep("순정 기록 후에도 루트 권한이 남아 있습니다 — 이미지와 기기 상태를 확인해 주세요");
     if (stillRooted === null) this.log(cur, "[미확인] 루트 해제 상태를 자동으로 확인하지 못했습니다 — 폰의 Magisk에서 직접 확인해 주세요");
+    // 루트가 사라진 것을 확인한 뒤에만 Magisk 앱을 지운다(사용자 결정 2026-10-08) — 확인 못 했으면 사용자가 앱으로 확인하도록 남긴다
+    if (stillRooted === false) {
+      const removed = await api.magiskUninstall(this.device?.serial);
+      if (gen !== this.runGen) return;
+      if (!removed.ok) this.log(cur, `[실패] ${removed.error} — 설정 → 앱에서 Magisk를 직접 삭제해 주세요`);
+      else this.log(cur, removed.value ? "[언루팅] Magisk 앱을 삭제했습니다" : "[언루팅] Magisk 앱이 없습니다(앱 숨기기로 이름을 바꿨다면 직접 삭제해 주세요)");
+    }
     cur.progress = 1;
-    this.log(cur, "[완료] 순정 이미지 기록·재연결 — Magisk 앱을 열어 루트가 해제됐는지 확인한 뒤 앱을 직접 삭제해 주세요");
+    this.log(cur, "[완료] 순정 이미지 기록·재연결·루트 해제 확인");
     this.log(cur, "[안내] Play 프로텍트 인증이 안 되면 Play 스토어 > 앱 정보 > 저장공간 > 데이터 삭제를 해주세요");
     this.stepDone(cur);
   }

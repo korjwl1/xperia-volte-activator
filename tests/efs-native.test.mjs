@@ -4,7 +4,9 @@ import { createServer } from "vite";
 
 let server, Wizard, api, flags, transport, originalApi, originalFlags, originalInvoke, buildPlan, bootPartition, deviceWorkflow, decodeJournal, executionPlanProblem;
 const configured = { port: "COM9", presetRoot: "C:/bundle", snapshotRoot: "C:/snapshots" };
-const liveFlags = { backup: true, restore: true, fastboot: true, root: true, verify: true, efs: true };
+const liveFlags = { backup: true, restore: true, fastboot: true, relock: true, root: true, rootTools: true, verify: true, efs: true };
+// 기본값이 일부 실전으로 바뀌었으므로(2026-10-08) 시뮬레이션 기준선은 명시적으로 모두 끈다
+const offFlags = { backup: false, restore: false, fastboot: false, relock: false, root: false, rootTools: false, verify: false, efs: false };
 const ok = value => ({ ok: true, value });
 const warning = { code: "nvPrefixVerification", target: "NV 71", message: "Only explicit bytes verified" };
 before(async () => {
@@ -21,7 +23,7 @@ before(async () => {
 });
 beforeEach(() => {
   delete globalThis.window;
-  Object.assign(flags, originalFlags);
+  Object.assign(flags, offFlags);
   Object.assign(api, originalApi, {
     journalSave: async () => true, runGuard: async () => true,
     engineCapabilities: async () => ok({ fastbootWrite: true, rootWrite: true, efsWrite: true }),
@@ -71,11 +73,12 @@ test("supported live routes require every device engine and simulation accepts a
   }
   assert.equal(executionPlanProblem(ids, { ...liveFlags, verify: false }), null);
   assert.match(executionPlanProblem(["final-verify"], { ...liveFlags, verify: false, efs: false }), /final-verify/);
-  assert.equal(executionPlanProblem(["efs-input", "efs", "verify", "final-verify"], { ...originalFlags, efs: true }), null);
-  assert.equal(executionPlanProblem(["backup"], { ...originalFlags, backup: true }), null);
-  assert.equal(executionPlanProblem([...ids, "fw-flash", "relock"], originalFlags), null);
+  assert.equal(executionPlanProblem(["efs-input", "efs", "verify", "final-verify"], { ...offFlags, efs: true }), null);
+  assert.equal(executionPlanProblem(["backup"], { ...offFlags, backup: true }), null);
+  assert.equal(executionPlanProblem([...ids, "fw-flash", "relock"], offFlags), null);
   assert.equal(executionPlanProblem([...ids, "relock"], liveFlags), null);
   assert.match(executionPlanProblem(["relock"], { ...liveFlags, fastboot: false }), /relock/);
+  assert.match(executionPlanProblem(["relock"], { ...liveFlags, relock: false }), /relock/);
 });
 
 test("live firmware update and mixed simulation stop before any engine or manual prompt", async () => {
@@ -333,7 +336,7 @@ test("skipping the pre-unroot network check does not block device work or author
   assert.equal(w.callVerified, false);
   assert.equal(w.imsUnverified, false);
   const relock = wizard("relock");
-  flags.fastboot = true;
+  flags.fastboot = true; flags.relock = true;
   let writes = 0;
   api.fastbootRelock = async () => { writes++; return ok(null); };
   relock.tick(); await settled(relock);

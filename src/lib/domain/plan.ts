@@ -187,7 +187,8 @@ function manualPlan(device: DeviceStatus, config: VolteConfig, opts: PlanOptions
   const partition = deviceWorkflow(device.model, [], false).partition;
   return finalize([
     { id: "prep", kind: "setup", title: "순정 이미지 준비", desc: "현재 기기·펌웨어와 같은 순정 부트 이미지 확인", estSec: 300, manual: ["firmware-select"] },
-    ...(hasBackup ? [backupStep()] : []),
+    // 언루팅은 초기화가 없어 백업이 필요 없다(사용자 결정 2026-10-08)
+    ...(hasBackup && task !== "unroot" ? [backupStep()] : []),
     { id: task, kind: task, title: task === "root" ? "루팅" : "언루팅", desc: task === "root" ? `Magisk로 ${partition} 패치·기록·매니저 설치·권한 확인` : `순정 ${partition} 양 슬롯 복원·OS 복귀·루트 확인`, risk: "warn", estSec: 600 },
   ]);
 }

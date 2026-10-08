@@ -121,6 +121,8 @@ export interface Api extends EfsApi, RootToolsApi {
   magiskPatch(request: MagiskPatchRequest): Promise<ApiResult<PatchResult>>;
   /** Magisk 앱 설치 (root-write 게이트) */
   magiskInstall(serial: string | undefined, apkPath: string, apkSha256: string): Promise<ApiResult<null>>;
+  /** Magisk 앱 삭제(언루팅 뒤) — 지웠으면 true, 설치돼 있지 않으면 false */
+  magiskUninstall(serial: string | undefined): Promise<ApiResult<boolean>>;
   /** adb 재부팅 — os | bootloader (root-write 또는 fastboot-write 게이트) */
   rootReboot(serial: string | undefined, target: "os" | "bootloader" | "fastboot"): Promise<ApiResult<null>>;
   /** Magisk 패치 로그 이벤트 구독 */
@@ -344,7 +346,7 @@ const hybridApi: Api = {
   },
 
   async fastbootLock(confirm, partition, stockPath, expectedSerial) {
-    if (!REAL_STEPS.fastboot) return { ok: false, error: "fastboot 실전 실행이 비활성화되어 있습니다" };
+    if (!REAL_STEPS.fastboot || !REAL_STEPS.relock) return { ok: false, error: "리락 실전 실행이 비활성화되어 있습니다" };
     return await invokeResult<UnlockResult>("fastboot_lock", { confirm, partition, stockPath, expectedSerial });
   },
 
@@ -377,6 +379,11 @@ const hybridApi: Api = {
   async magiskPatch(request) {
     if (!REAL_STEPS.root) return { ok: false, error: "루팅 실전 실행이 비활성화되어 있습니다" };
     return await invokeResult<PatchResult>("magisk_patch", { request });
+  },
+
+  async magiskUninstall(serial) {
+    if (!REAL_STEPS.root) return { ok: false, error: "루팅 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<boolean>("magisk_uninstall", { serial: serial ?? null });
   },
 
   async magiskInstall(serial, apkPath, apkSha256) {

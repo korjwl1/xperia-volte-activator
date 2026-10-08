@@ -383,14 +383,16 @@ fn su_visible(su_raw: &str) -> bool {
         .any(|l| l.starts_with('/') && l.ends_with("/su"))
 }
 
-/// su가 보이면 루팅. 안 보여도 부트로더가 잠김으로 확정된 경우에만 "아님" —
-/// 언락 상태에서는 su를 셸에 숨긴 Magisk(앱 전용 권한 등)를 구분할 수 없어 판별 불가로 둔다.
-/// su 구간 표식이 없으면(출력 끊김) 판별 불가.
+/// su가 보이거나 루트 데몬(magiskd·ksud·apd)이 떠 있으면 루팅. 부트로더가 잠겨 있으면 "아님".
+/// 언락 상태에서 su가 셸에 숨겨져도 Magisk·KernelSU·APatch 데몬은 떠 있으므로, 프로세스 목록을 읽을 수 있는데
+/// su도 데몬도 없으면 "아님"으로 본다(언루팅 뒤 "판별 불가"가 뜨던 문제, 2026-10-08 사용자 지적).
+/// su 구간 표식이 없거나(출력 끊김) 프로세스 목록을 못 읽으면 판별 불가.
 fn root_state(su_raw: Option<&str>, bootloader: &str) -> Rooted {
     match su_raw {
         None => Rooted::Unknown,
-        Some(raw) if su_visible(raw) => Rooted::Yes,
+        Some(raw) if su_visible(raw) || raw.lines().any(|l| l.trim().starts_with("__ROOTD__=")) => Rooted::Yes,
         Some(_) if bootloader == "locked" => Rooted::No,
+        Some(raw) if raw.lines().any(|l| l.trim() == "__PS_OK__") => Rooted::No,
         Some(_) => Rooted::Unknown,
     }
 }
@@ -585,11 +587,14 @@ fn flag(v: &str) -> Option<bool> {
     }
 }
 
-/// 기기 상태 조회 (getprop + which su — 모두 읽기 전용)
+/// 기기 상태 조회 (getprop + su 위치 — 모두 읽기 전용, su를 실행하지 않는다)
+/// Magisk 30.7은 su를 PATH가 아닌 /debug_ramdisk/su에만 둔다(XQ-DQ44 실측) — `which su`만 보면 루팅 폰을
+/// "판별 불가"로 봤다. PATH에 없으면 알려진 위치의 실행 파일 여부만 본다(권한 요청 창이 뜨지 않음).
 fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<DeviceOut, String> {
     let raw = shell(
         dev,
-        "getprop; echo __SU__; which su || true; echo __ISUB__; \
+        "getprop; echo __SU__; which su || for p in /debug_ramdisk/su /system/xbin/su /sbin/su; do [ -x \"$p\" ] && echo \"$p\"; done; true; \
+         ps -A -o NAME >/dev/null 2>&1 && echo __PS_OK__; ps -A -o NAME 2>/dev/null | grep -xE 'magiskd|ksud|apd' | sed 's/^/__ROOTD__=/'; echo __ISUB__; \
          dumpsys isub | sed -n '/^Active subscriptions:/,/^All subscriptions:/p' \
            | grep -oE 'simSlotIndex=-?[0-9]+( portIndex=-?[0-9]+)? isEmbedded=(true|false|[01])' || true; echo __IMS__; \
          { dumpsys activity service com.android.phone/.TelephonyDebugService 2>&1; echo __IMS_RC__=$?; } \
@@ -1738,7 +1743,15 @@ Filesystem     1K-blocks      Used Available Use% Mounted on\n\
             Rooted::Yes
         );
         assert_eq!(root_state(Some("\n"), "locked"), Rooted::No);
-        // 언락 상태에서 su가 안 보이면 셸에 숨긴 루팅과 구분할 수 없다
+        // Magisk 30.7: PATH에 없고 /debug_ramdisk/su만 있다(XQ-DQ44 실측) — 위치 검사 결과로 루팅 판정
+        assert_eq!(root_state(Some("/debug_ramdisk/su\n"), "unlocked"), Rooted::Yes);
+        // 언락 상태: su를 숨겨도 루트 데몬이 보이면 루팅, 프로세스 목록을 읽었는데 둘 다 없으면 루팅 아님(언루팅 뒤)
+        assert_eq!(root_state(Some("__PS_OK__
+__ROOTD__=magiskd
+"), "unlocked"), Rooted::Yes);
+        assert_eq!(root_state(Some("__PS_OK__
+"), "unlocked"), Rooted::No);
+        // 프로세스 목록을 못 읽으면 숨긴 루팅과 구분할 수 없다
         assert_eq!(root_state(Some(""), "unlocked"), Rooted::Unknown);
         assert_eq!(root_state(Some(""), "unknown"), Rooted::Unknown);
         // USB 직접 연결에서 섞여 오는 오류 문구는 su 경로가 아니다

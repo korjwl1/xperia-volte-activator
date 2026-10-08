@@ -11,10 +11,14 @@ export const SIMULATED_RUN = true;
 //   최종 확인의 재부팅은 Rust root_reboot(쓰기 기능 빌드)를 쓴다. 펌웨어 기록이 시뮬레이션인 동안 fw-verify 실전은 기록 엔진 미구현으로 즉시 실패한다.
 // 실전 조합은 실행 전에 전체 계획을 검사한다. 한 단계라도 모의 기기 작업이면 시작을 거부한다.
 export const REAL_STEPS: ExecutionFlags = {
-  backup: false,
-  restore: false,
-  fastboot: false,
-  root: false,
+  // 2026-10-08 실기기(XQ-DQ44) 검증을 마친 단계만 켠다(사용자 결정) — 백업·복원·언락·루팅·언루팅·VoLTE.
+  // 리락(초기화 동반)·펌웨어 업데이트 확인은 검증 전이라 끈다.
+  backup: true,
+  restore: true,
+  fastboot: true,
+  relock: false,
+  root: true,
+  rootTools: false,
   verify: false,
-  efs: false,
+  efs: true,
 };

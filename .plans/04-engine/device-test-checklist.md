@@ -45,6 +45,8 @@ status: 진행 전 — 2026-10-05 기준 아래 항목은 모두 **실기기에�
 
 ## 규칙
 
+- 2026-10-08 사용자 결정: 실기기 검증을 마친 백업·복원·언락·루팅·언루팅·VoLTE(EFS)는 기본 실전으로 켠다(`REAL_STEPS` backup/restore/fastboot/root/efs, Cargo 기본 `fastboot-write`·`root-write`·`efs-write`). 리락(`REAL_STEPS.relock`), 루팅 도구(`REAL_STEPS.rootTools`, `root-tools-write`), 업데이트 확인(`verify`)은 미검증이라 끈다. 아래 규칙은 아직 꺼진 단계에 적용한다.
+
 - 단계의 `REAL_STEPS` 플래그(`src/lib/data/runMode.ts`)와 쓰기 Cargo 기능(`fastboot-write`·`root-write`·`efs-write`)은 **그 단계의 항목이 모두 체크되기 전까지 켜서 배포하지 않는다.**
 - 확인할 때는 `[x]`로 바꾸고 날짜·기종(모델·펌웨어)·결과 한 줄을 적는다. 실패하면 체크하지 말고 "결과"에 증상을 적은 뒤 코드를 고친다.
 - 파괴 단계(언락·기록·리락)는 백업 완료·순정 펌웨어 준비 상태에서, 복구 가능한 테스트 기기로만 확인한다.
@@ -119,7 +121,7 @@ status: 진행 전 — 2026-10-05 기준 아래 항목은 모두 **실기기에�
   - fastbootd `getvar:all`은 347개 변수로 INFO 256 상한을 넘었다 → 상한 4096. 끊긴 응답이 남아 fastbootd가 멈췄다 → 장치를 열 때 남은 응답을 비운다.
   - Magisk 30.7은 `/system/bin/su`가 없고 `/debug_ramdisk/su`만 있다 → su 명령은 PATH에 없으면 그 경로를 쓴다.
 - [ ] GUI 루팅 단계 전체(fastbootd 진입·드라이버·기록·복귀·su 승인 화면 깨우기/잠금 대기/거부 안내) 재실행 검증 — 다음 루팅 기기에서
-- [ ] 언루팅: 순정 이미지 양 슬롯 재기록(fastbootd) 후 정상 부팅·루팅 해제 확인
+- [x] 언루팅: 순정 이미지 양 슬롯 재기록(fastbootd) 후 정상 부팅·루팅 해제 확인 — 2026-10-08 XQ-DQ44 67.2.A.3.178, GUI 수동 언루팅. init_boot_a/_b 순정(sha e75e093e…) 기록 성공, 재부팅 후 su·magiskd 없음. Magisk 앱 자동 삭제는 이 테스트 뒤 추가돼 미검증.
 - [ ] Magisk APK 신뢰 범위: `magisk_prepare`가 받은 캐시(magisk/ 안, 다이제스트 기록 일치)로만 패치·설치되는가
 - [ ] 패치 결과의 출처 기록에 순정 부모 이미지 해시·파티션·펌웨어 지문이 남고, 동일 기기의 검사 기록으로 이후 플래시가 통과하는가
 

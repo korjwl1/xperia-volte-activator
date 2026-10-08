@@ -59,7 +59,7 @@ test("manual card eligibility handles lock, root, unknown and unsupported-device
   assert.equal(manualTaskProblem("backup", device({ rooted: false, bootloader: "locked" })), null);
 });
 test("single manual task plans ignore leftover SIM, firmware and post-processing options", () => {
-  for (const [task, expected] of [["restore", ["restore"]], ["root", ["prep", "backup", "root"]], ["unroot", ["prep", "backup", "unroot"]], ["relock", ["prep", "backup", "unroot", "relock", "setup-relock"]]]) {
+  for (const [task, expected] of [["restore", ["restore"]], ["root", ["prep", "backup", "root"]], ["unroot", ["prep", "unroot"]], ["relock", ["prep", "backup", "unroot", "relock", "setup-relock"]]]) {
     const d = device({ rooted: task === "root" ? false : true });
     assert.deepEqual(buildPlan(d, config(), opts(task), true).map(s => s.id), expected);
   }

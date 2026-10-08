@@ -4,7 +4,7 @@
   import { ArrowLeft, CircleCheck, TriangleAlert, Phone } from "@lucide/svelte/icons";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { cellularReady, imsLabel, imsDetail } from "$lib/domain/communication";
-  let checking = $state(true);
+  let checking = $state(false);
 </script>
 
 <div class="flex-1 min-h-0 flex flex-col">

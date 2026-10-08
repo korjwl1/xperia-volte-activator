@@ -4,7 +4,7 @@
   import { ArrowLeft, Zap, LayoutGrid, Download, TriangleAlert } from "@lucide/svelte/icons";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { updateProblem } from "$lib/domain/workflow";
-  let checking = $state(true);
+  let checking = $state(false);
   let deviceStatus: SelectionDeviceStatus;
   const updateReason = $derived(updateProblem(wizard.device));
   const modes = [

@@ -36,7 +36,7 @@
   let error = $state("");
   let updatePlan = $state<RootUpdatePlan | null>(null);
   const busy = $derived(rootToolsState.busy);
-  const canWrite = $derived(caps.writeEnabled && REAL_STEPS.root && riskAck && !!serial);
+  const canWrite = $derived(caps.writeEnabled && REAL_STEPS.rootTools && riskAck && !!serial);
   const canFlash = $derived(canWrite && REAL_STEPS.fastboot && caps.switchEnabled);
   const openSwitch = $derived(switched && switched.stage !== "complete");
   const newEngineAllowed = $derived(switched?.stage === "stock-verified" || (!openSwitch && root?.access === "unavailable" && root.engine === "unknown"));
