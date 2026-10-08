@@ -1,5 +1,14 @@
 # 루팅 엔진 (M4) — Magisk 자동 패치·기록·설치 구현 설계
 
+## 2026-10-08 후속 범위
+
+[수동 루트 도구](root-tools.md)를 별도 구현했다. 기존 Magisk 패치 진입에 단일 엔진 감지·진행 중 전환/순정 복원 상태 검사를 추가하여 KernelSU나 권한 불명 상태에서 바로 덮어쓰지 않는다. 공통 su 후보도 PATH·ramdisk·legacy xbin·system bin 순으로 확장했다.
+
+기존 임의 커스텀 IMG 비지원 원칙의 제한적 예외는 사용자 요청의 ReSukiSU 반수동 경로다. 현재 순정 부모·지문·같은 기기 확인·init_boot 헤더/해시와 명시적인 같은 폰 패치 확인을 요구한다. boot 기종·미래 업데이트 이미지·LKM 자동 패치 이식은 범위 밖이며 기존 현재 지문 검사도 유지한다. 새 기능 실기기 검증은 기존 Magisk 30.7 사례로 대신하지 않는다.
+
+후속 리뷰: 공통 boot_image_check가 플래시 대조 근거를 PC에 쓰는 동안 다른 기록/재부팅과 겹치지 않게 WriteOperation+blocking으로 변경했다. 읽기 결과를 PC에 저장하는 호출이며 기기 쓰기 feature는 새로 요구하지 않는다. 수동 도구의 Magisk 준비는 매니저 설치 실패/진행 중에 패치 IMG를 적용 가능 상태로 게시하지 않는다. [리뷰 기록](root-tools-review-20261008.md).
+
+
 status: implemented (실기기 검증 대기 — 최신 통합 리뷰: integrated-review.md, root/fastboot 양쪽 실행 게이트 필요)
 
 - 상위 정책: `tasks/plan.md` §12(Magisk 산출물 근거 강화)·M4 마일스톤, §3-3(의존성)

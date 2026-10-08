@@ -1,5 +1,5 @@
 // 위자드 상태 머신 + 실행 시뮬레이션 러너 (mock)
-import type { CallCheck, CommunicationSnapshot, FirmwareDirInfo, AppItem, FirmwareResult, FirmwareVersions, SettingsOverview, SimInfo, BackupGroup, DeviceStatus, EnvCheckItem, ManualId, ManualPrompt, ManualTask, WorkflowMode, PlanStep, RunJournal, RunStep, VolteConfig } from "$lib/types";
+import type { CallCheck, CommunicationSnapshot, FirmwareDirInfo, AppItem, FirmwareResult, FirmwareVersions, SettingsOverview, SimInfo, BackupGroup, DeviceStatus, EnvCheckItem, ManualId, ManualPrompt, ManualTask, WorkflowMode, PlanStep, RunJournal, RunStep, VolteConfig, RootModuleSelection } from "$lib/types";
 import { api } from "$lib/api";
 import { LINKS, maskSecret } from "$lib/data/links";
 import { deviceWorkflow, patchProcedureProblem } from "$lib/data/devices";
@@ -15,11 +15,13 @@ import { decodeJournal } from "$lib/domain/journal";
 import { waitUntil } from "$lib/domain/waitUntil";
 import { callsComplete, cellularReady, imsLabel, newCallCheck, type CallItem } from "$lib/domain/communication";
 import { MANUAL_TASKS, manualTaskProblem, updateProblem } from "$lib/domain/workflow";
+import { automaticModulesProblem, emptyModuleSelection, installModuleSets, selectedModuleSets, waitForModuleReboot } from "$lib/domain/moduleSets";
+import { requireResult } from "$lib/domain/rootTools";
 
 /** 목 모드 언락 코드 예시값 — 16자리 16진수 형식만 맞춘 가짜 값(실전 fastboot에서는 채우지 않음) */
 const MOCK_UNLOCK_CODE = "0x1234567890ABCDEF";
 
-export type WizardView = "device" | "mode-select" | "manual-tasks" | "communication" | "warning" | "step1" | "step2" | "step3" | "step4";
+export type WizardView = "device" | "mode-select" | "manual-tasks" | "communication" | "root-tools" | "warning" | "step1" | "step2" | "step3" | "step4";
 
 export const MACRO_STEPS = [
   { id: 1, view: "step1" as const, label: "사전 옵션 선택" },
@@ -326,7 +328,7 @@ export class Wizard {
     if (task === "unlock" || task === "relock") this.volteConfig.bootloaderAction = task;
     this.optionsFor = null; this.omdAck = false; this.riskAck = false;
     this.backupDir = ""; this.backupSummary = null;
-    this.view = task === "verify" ? "communication" : task === "backup" ? "step2" : "warning";
+    this.view = task === "root-manager" || task === "root-modules" ? "root-tools" : task === "verify" ? "communication" : task === "backup" ? "step2" : "warning";
     if (task === "backup") await this.checkJournal();
   }
 
@@ -361,6 +363,7 @@ export class Wizard {
   /** 실행 진행 상태 초기화 — 새 실행·재개·세션 변경·처음으로 공통 (실행 결과물·입력값은 유지) */
   private resetExecution() {
     this.autoAdvance = null;
+    this.finishModuleInstruction(false);
     void api.efsCancel();
     this.efsRunConfiguration = null;
     this.backupIncompleteAccepted = false;
@@ -447,6 +450,18 @@ export class Wizard {
   // ── 2단계(작업 옵션 선택) — 이전/다음 이동 시 유지, 다른 기기거나 처음으로 가면 초기화 ──
   groups: BackupGroup[] = $state([]); // 백업 항목 (항목 단위 checked)
   opts = $state<PlanOptions>({ unroot: false, relock: false, restore: true });
+  get moduleSetProblem(): string | null { return automaticModulesProblem(this.device, this.volteConfig, this.opts); }
+  get moduleSelection(): RootModuleSelection { return this.opts.modules ?? emptyModuleSelection(); }
+  setModuleSelection(selection: RootModuleSelection) {
+    this.opts.modules = this.moduleSetProblem ? emptyModuleSelection() : selection;
+  }
+  clearModuleSets() { if (selectedModuleSets(this.opts.modules).length) this.opts.modules = emptyModuleSelection(); }
+  moduleInstruction = $state("");
+  private moduleInstructionResolve: ((completed: boolean) => void) | null = null;
+  finishModuleInstruction(completed: boolean) {
+    const resolve = this.moduleInstructionResolve;
+    this.moduleInstructionResolve = null; this.moduleInstruction = ""; resolve?.(completed);
+  }
   get backupLive(): boolean { return REAL_STEPS.backup || this.opts.backupOnly === true; }
   get executionFlags() { return this.opts.backupOnly ? { backup: true, restore: false, fastboot: false, root: false, verify: false, efs: false } : REAL_STEPS; }
   backupPath = $state("");
@@ -621,6 +636,8 @@ export class Wizard {
   get journalBlocked() {return this.journalReadBlocked || this.pendingJournal!==null;}
 
   launch() {
+    if (this.mode === "automatic" && this.moduleSetProblem) this.clearModuleSets();
+    if (selectedModuleSets(this.opts.modules).length && !this.moduleSelection.settingsAck) return;
     if (this.mode === "update" || this.plan.some(step => step.enabled && step.id === "fw-flash")) return;
     if (this.mode === "manual" && this.manualTask === "restore" && (!this.backupDir || this.restoreSourceState !== "done")) return;
     if (this.journalReadBlocked || this.pendingJournal || this.plan.length === 0) return;
@@ -1039,6 +1056,12 @@ export class Wizard {
 
   private async startCheckedRun() {
     const gen = this.runGen;
+    if (this.runSteps.some(step => step.id === "root-modules")) {
+      const caps = await this.track(api.rootToolsCapabilities());
+      if (gen !== this.runGen) return;
+      if (!caps.ok || !caps.value.writeEnabled) return this.failStep(caps.ok ? "이 빌드에는 root-tools-write 기능이 없습니다" : caps.error);
+      if (!this.moduleSelection.settingsAck || this.moduleSetProblem) return this.failStep(this.moduleSetProblem ?? "모듈 세트의 매니저 설정을 확인하세요");
+    }
     const planProblem = executionPlanProblem(this.runSteps.map(s => s.id), this.executionFlags);
     if (planProblem) return this.failStep(planProblem);
     if (hasLiveActions(this.executionFlags)) {
@@ -1132,6 +1155,8 @@ export class Wizard {
         return REAL_STEPS.root
           ? { start: () => this.runRealRoot(cur), resume: () => this.dispatchEngine(() => this.finishRealRoot(cur)), danger: true }
           : null;
+      case "root-modules":
+        return { start: () => this.runRealModuleSets(cur), danger: true };
       case "volte-props":
         return REAL_STEPS.efs ? { start: () => this.runRealVolteProps(cur), danger: true } : null;
       case "comm-check":
@@ -2469,6 +2494,28 @@ export class Wizard {
     this.autoAdvance = null;
     // No next I/O until the previous engine's finally/unsubscription and lock release settled.
     this.begin();
+  }
+
+  /** Automatic retained-root modules use the same sequence as the manual set installer. */
+  private async runRealModuleSets(cur: RunStep) {
+    const gen = this.runGen, serial = this.device?.serial ?? "";
+    const selection = JSON.parse(JSON.stringify(this.moduleSelection)) as RootModuleSelection;
+    const check = () => { if (gen !== this.runGen || cur !== this.runSteps[this.cursor] || this.stepError) throw new Error("모듈 세트 설치가 중단되었습니다"); };
+    check();
+    if (this.moduleSetProblem) throw new Error(this.moduleSetProblem);
+    const caps = requireResult(await api.rootToolsCapabilities()); check();
+    if (!caps.writeEnabled) throw new Error("이 빌드에는 root-tools-write 기능이 없습니다");
+    await installModuleSets(api, serial, selection, {
+      check,
+      progress: (message, done, total) => { check(); this.log(cur, message); cur.progress = total ? done / total : 0; void this.persist(true); },
+      rebooted: (engine, previousBootId) => waitForModuleReboot(api, serial, engine, check, previousBootId),
+      instruction: async message => {
+        check(); this.moduleInstruction = message;
+        const completed = await new Promise<boolean>(resolve => this.moduleInstructionResolve = resolve);
+        check(); if (!completed) throw new Error("모듈 설정 확인 전에 설치를 중단했습니다");
+      },
+    });
+    check(); this.stepDone(cur);
   }
 
   /** 실전 복구 러너 — APK 재설치 → tar 스트리밍 → 설정 → 연락처 전송 후, 문자·통화(smsie)는 수동 개입 */

@@ -20,6 +20,7 @@ export function liveStepEnabled(id: string, flags: ExecutionFlags): boolean {
     case "restore": return flags.restore;
     case "unlock": case "relock": return flags.fastboot;
     case "root": case "unroot": return flags.root && flags.fastboot;
+    case "root-modules": return flags.root;
     case "efs-input": case "efs-preflight": case "efs": case "verify":
     case "volte-props": case "comm-check": return flags.efs;
     case "fw-verify": return flags.verify;
@@ -40,6 +41,7 @@ export function buildFeatureProblem(ids: readonly string[], features: EngineCapa
 }
 
 export function executionPlanProblem(ids: readonly string[], flags: ExecutionFlags): string | null {
+  if (ids.includes("root-modules") && !flags.root) return "루팅 모듈 설치 실전 기능이 비활성화되어 있습니다";
   if (!hasLiveActions(flags)) return null;
   if (ids.includes("fw-flash")) return "전체 펌웨어 기록이 아직 구현되지 않아 이 실전 계획을 시작할 수 없습니다";
   for (const id of ids) {

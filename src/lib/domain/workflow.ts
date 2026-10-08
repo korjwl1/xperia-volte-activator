@@ -11,6 +11,8 @@ export const MANUAL_TASKS: { id: ManualTask; title: string; detail: string }[] =
   { id: "unroot", title: "언루팅", detail: "현재 펌웨어 순정 부트 이미지 복원" },
   { id: "volte", title: "VoLTE 패치", detail: "선택한 SIM의 통신사 설정 적용" },
   { id: "verify", title: "통신 확인", detail: "SIM별 IMS 등록 상태·실제 통화 확인" },
+  { id: "root-manager", title: "루팅 매니저 변경", detail: "Magisk ↔ ReSukiSU · 모듈·엔진 설정 정리" },
+  { id: "root-modules", title: "루팅 모듈 설치", detail: "모듈 세트 선택 · 의존 세트 자동 포함" },
 ];
 export function updateProblem(device: DeviceStatus | null): string | null {
   if (!device || device.state !== "device") return "Android에서 연결되고 USB 디버깅이 승인된 기기가 필요합니다";
@@ -20,6 +22,7 @@ export function manualTaskProblem(task: ManualTask, device: DeviceStatus | null)
   if (!device || device.state !== "device") return "연결된 Android 기기를 확인하세요";
   if (task === "backup" || task === "restore") return null;
   if (task === "verify") return device.sims.some(s => s.carrier !== null && s.state !== "ABSENT") ? null : "인식된 SIM이 필요합니다";
+  if (task === "root-modules") return device.bootloader === "unlocked" && device.rooted === true ? null : "언락·루팅된 기기가 필요합니다";
   if (!bootPartition(device.model)) return "이 기종의 부트 파티션·작업 절차가 확인되지 않았습니다";
   if (device.bootloader === "unknown") return "부트로더 상태를 다시 확인하세요";
   if (task === "unlock") return device.bootloader === "locked" ? null : "이미 언락된 기기입니다";

@@ -42,6 +42,12 @@ GitHub에서 읽는 현재 시스템 설명은 `docs/structure/overview.md`, 기
 
 ## 필수 작업 규칙
 
+예외(사용자 요청 2026-10-08 후속, `newflasher-add`): `../root-method.md`와 `../for-rooted-phone.md`를 읽고 **ReSukiSU 버전 선택·반수동 패치·수동 엔진 전환·모듈 준비/설치/재부팅 확인 기능의 코드와 화면 구현·오프라인 검증을 허용**한다. 카페 전용 ZIP·HMA 프리셋은 사용자 지시에 따라 `src-tauri/assets/root/`에 원본·해시·출처를 함께 포함한다. 새로운 기기 변경 기능은 `root-tools-write`(기본 꺼짐), 기존 root/fastboot 게이트와 확인 절차를 유지한다. 실제 폰 연결·조작은 실행하지 않는다. 입력 문서의 무손실·금융앱 호환 보장이나 미검증 기종/버전 범위를 구현 설명에 그대로 옮기지 않는다. 현재 설명은 `docs/structure/root-tools.md`, 계획·검증 기록은 `.plans/04-engine/root-tools.md`.
+
+후속 소스 정책(사용자 요청 2026-10-08): **HMA 카페 JSON 프리셋은 원본 그대로 동봉·내보내기·가져오기 안내를 유지**한다. 직접 목록/범위를 구성하는 절차로 대체하지 않는다. HMA 프로그램은 기존 공식 GitHub 배포를 사용한다. **OverlayFS는 `RipperHybrid/Meta-Overlayfsx`의 GitHub 최신 stable ZIP을 실행 시 조회·다운로드·검증**하며 카페 사본을 동봉하지 않는다. AshReXcue KO와 PlayStoreFix v3.4는 원본 동봉을 유지한다. PlayStoreFix의 공개 기반과 카페판 차이·조사 한계는 `docs/structure/play-store-fix.md`에 기록한다.
+
+예외(사용자 요청 2026-10-08, `newflasher-add` 워크트리): **Newflasher 고정 소스 기반 Rust 네이티브 엔진 구현·오프라인 검증·커밋 허용**. 계획은 `.plans/04-engine/newflasher-native.md`. 메인 폴더의 미커밋 변경·다른 작업 폴더를 수정하지 않는다. 실제 ADB/USB/COM/Flash mode 질의·쓰기·드라이버 설치를 실행하지 않는다. 기기 식별/profile/boot delivery 검증 전에는 하드웨어 플래시 API를 등록하지 않고 기존 기본 쓰기 feature/REAL_STEPS를 유지한다. 공개 문서에는 브랜치 구현과 실기기 미검증을 구분한다.
+
 1. **.plans 문서 의무**: 뷰를 작성·변경하면 대응하는 `.plans/01-views/<view>.md`를 같은 커밋에서 갱신한다.
    - 새 뷰 → 목적/상태 필드/버튼→백엔드 계약 매핑을 문서에 기록
    - 새 백엔드 계약 → `.plans/02-contracts/tauri-commands.md`에 시그니처 추가하고 facade와 타입을 함께 갱신
@@ -70,3 +76,8 @@ pnpm.cmd tauri dev  # 데스크톱 윈도우 (Rust 백엔드 연동 — dev 서�
 ```
 PowerShell에서는 `pnpm.cmd` 사용(실행 정책이 .ps1을 차단함).
 Rust 빌드에는 MSVC 필요 — `src-tauri` 빌드 시 vcvars 환경(또는 Visual Studio Build Tools + C++ 워크로드) 필요.
+
+
+## 2026-10-08 main GUI 후속 요청
+
+사용자가 확인한 main에 작업 종류 분기·수동 매니저 변경/모듈 세트 설치·자동 루팅 유지 시 세트 선택을 반영한다. 세트의 의존성을 코드/문서에서 함께 유지하고 초기화/언루팅/리락으로 쓸 수 없는 선택은 해제·비활성화한다. 새 펌웨어 버전 선택은 VoLTE 인식 기기의 전용 Newflasher 업데이트 경로에만 두고 자동/수동 순정 이미지는 현재 설치 버전 기준으로 준비한다. 앞의 newflasher-add 작업 제한은 당시 격리 작업 범위 기록이며 현재 main 수정 요청을 막지 않는다. 기본 쓰기 게이트와 이번 작업의 실기기 테스트 금지는 유지한다.

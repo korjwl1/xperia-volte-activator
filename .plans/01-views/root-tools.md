@@ -1,0 +1,15 @@
+# view: RootTools — 수동 매니저 변경 / 모듈 세트
+
+status: implemented / live default disabled (2026-10-08)
+
+수동 그리드의 root-manager/root-modules로 진입하며 section=manager/modules를 각각 표시한다. 대상 모델·시리얼을 고정하고 호출 중 뒤로/창 닫기를 막는다. 조회 버튼으로 rootInspect/rootModulesInspect를 요청하며 폰 su 승인은 사람이 한다.
+
+매니저 전환은 기존 순정 준비 → 모듈/엔진 정리 → 양 슬롯 순정 복원 → 순정 부팅 확인 → 새 매니저/패치 → 적용 → 최종 확인이다. Magisk는 기존 prepare/patch/install, ReSukiSU는 태그 선택·서명 검증 APK·같은 폰의 수동 패치 결과 검증을 사용한다. 미완료 전환 중 모듈 설치는 native에서도 차단한다.
+
+모듈 section은 ModuleSetSelector의 A/B 세트, B→A 자동 의존, Zygisk/Integrity 택일, 선택 추가 모듈을 표시한다. 설치 버튼은 위험·매니저 설정 확인, REAL_STEPS.root + root-tools-write, 정상 inventory와 재부팅 완료가 필요하다. 공통 installModuleSets를 순차 실행하고 설치별 OS 재부팅/활성 확인 및 ModuleInstruction 폰 설정 확인을 거친다. 실패/중단 뒤 다음 모듈을 설치하지 않는다.
+
+상태: root/inventory/caps/선택 엔진·태그/순정·패치 IMG/전환 기록/세트 선택/설정 안내·resolve/취소/위험 동의/로그·오류. installed 영수증으로 중복 설치만 생략하며 폰 설정은 재확인한다. HMA 원본 JSON 내보내기, WebUI/MMRL 설치 안내와 모듈 비활성/제거/오류 재확인을 유지한다.
+
+비주얼: MD3 톤·lucide·시스템 테마·pane 스크롤, 좌 기능/우 로그. 모듈은 세트 카드·의존 배지·선택 드롭다운, 매니저 변경은 별도 section. 첫 화면의 별도 루트 도구 버튼은 제거했다.
+
+[계약](../02-contracts/tauri-commands.md) · [현재 동작](../../docs/structure/root-tools.md).

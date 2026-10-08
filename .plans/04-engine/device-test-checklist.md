@@ -1,5 +1,33 @@
 # 실기기 검증 체크리스트
 
+## 2026-10-08 수동 루트 도구 — 전부 실기기 미검증
+
+- [ ] Magisk PATH/ramdisk·KernelSU 표준 su 실행 경로, 승인·거부·시간 초과·충돌 마커 판정. 거부를 순정으로 간주하지 않고 기존 DIAG/VoLTE su 동작 회귀 확인
+- [ ] 정확한 모델/지역/펌웨어/커널/ReSukiSU 태그·LKM/GKI 적합성 기록. init_boot 경로 별도 검증, boot 기종은 활성화 전 별도 작업
+- [ ] Magisk→ReSukiSU 및 KernelSU 계열→Magisk: 백업·모듈 목록/intent·고정 정리·양 슬롯 순정 기록·새 OS/지문·새 이력 확인. 기존/한 슬롯/다른 폰 이력·su 거부 차단
+- [ ] 정리 실패/PC 저장 실패/중단 후 자동 재정리 없음, 숨긴 매니저 직접 제거·설정 재구성·복구 절차 확인
+- [ ] 선택 ReSukiSU APK 설치/핀·같은 폰 수동 패치/결과 IMG PC 검증/기기·파티션·해시 게이트/양 슬롯 기록/OS 재승인 확인
+- [ ] OverlayFS metamodule 활성화와 재부팅, Zygisk 택일·PIF/Integrity Box 택일·Store→Addon·Magisk+Next Shamiko 조건 및 외부 설치 확인
+- [ ] 공유 ID zygisksu/playintegrityfix의 설치 영수증 소유권·종류 미확정 차단·끄기/재부팅 후 교체. 도구 밖에서 변경한 모듈은 현재 출처부터 재확인
+- [ ] 모듈 intent/전송 해시/엔진 CLI/ACK·새 boot ID·실제 활성 목록. 미활성·실패·분리/재연결 결과 불확정과 자동 재설치 금지·수동 오류 검토 확인
+- [ ] 끄기·제거 예약·재부팅·HMA JSON 수동 가져오기/사용 앱 범위 확인. 설치 성공과 앱·Play Integrity 결과 구분
+- [ ] 호출 중 기기 목록 고정·이탈/닫기 차단·독점 실행권·PC 보호 및 해제. 기본 빌드 root-tools-write/REAL_STEPS 비활성 유지
+- [ ] PC 근거 저장 호출 지연 시 종료까지 실행권·화면 잠금 유지. 조회/파일 준비/매니저 설치 실패 뒤 이전 결과로 버튼이 열리지 않음. 미완료/손상된 전환에서 모듈 설치 차단, boot→ReSukiSU 전환 준비 거부가 기존 모듈을 삭제하지 않음
+
+PC에서 파일 준비·핀·CRC 검사와 FakeADB 테스트를 통과해도 위 항목을 체크하지 않는다.
+
+
+## Newflasher 네이티브 (`newflasher-add`, 2026-10-08, 미실행)
+
+- [ ] XQ-DQ44 같은 지역의 source→target 지문·Android·패키지/NOERASE·layout·boot delivery를 검증한 profile을 만든다. 로컬 검사 report를 쓰기 권한으로 사용하지 않는다.
+- [ ] Windows 실제 GordonGate 드라이버/SetupDi 경로·VID/PID를 확인한다. 기존 `usbmode`의 0xADDE와 원본 0xB00B 차이, 장치 없음/복수/교체/모드 간 identity를 확인한다.
+- [ ] 부분 전송·disconnect·CancelIoEx 완료 지연에서 버퍼/실행권/PC 보호 유지와 unmatched journal intent 처리를 확인한다.
+- [ ] 사전 백업 결과·사용자 다음 진행 뒤 순정 SIN/서명·chunk·erase·양 슬롯 예외·세션 TA/Sync·부팅을 제한된 조합에서 검증한다. 데이터 접근·대표 앱·사진/문서·IMS·실제 통화와 기타 기능을 따로 기록한다.
+- [ ] locked stock / unlocked stock / 선택한 Magisk 유지에 맞는 후속 작업과 목표 지문 확인을 검증한다. root 실패/IMS 미확인/부팅 실패를 전체 성공으로 표시하지 않는다.
+- [ ] 별도 판올림·다른 모델/지역/슬롯 조합은 각각 검증한다. 새로운 모델 표만으로 활성화하지 않는다.
+
+현재 하드웨어 플래시 API/쓰기 feature는 추가하지 않았으며 PC 검사와 fake/C-harness만 검증했다. 상세는 [진행 기록](newflasher-native-progress.md).
+
 - [ ] 2026-10-06 직접 USB SYNC 세션 재사용: 앱 데이터 완료 후 DCIM의 동일 샘플 ABBA 전송 비교, 매회 PC 크기·해시 및 회차간 내용 일치. 실제 세션 재사용 여부와 측정 시간 기록.
 - [ ] 2026-10-06 수정한 세션 재사용·버퍼 저장 엔진으로 DCIM/fs-rest 완료 및 전체 선택 항목 PC 해시 검증. 샘플 비교만으로 전체 백업 완료 주장 금지.
 
@@ -203,3 +231,15 @@ status: 진행 전 — 2026-10-05 기준 아래 항목은 모두 **실기기에�
 - [ ] DCIM(130 GB) 복원 시간 측정
 - [ ] push 방식 APK 설치를 실기기에서 다시 확인
 - [ ] 루트 없는 기기에서 앱 데이터가 건너뛰어지고 안내되는지
+
+
+### 2026-10-08 작업 종류·모듈 세트 GUI (실기기 미검증)
+
+- [ ] main에서 자동/수동/업데이트 선택과 기기 교체/연결 실패 카드 상태 확인
+- [ ] 수동 매니저 변경 양방향 절차와 모듈 세트 A/B 설치·의존 선택 확인
+- [ ] 자동 루팅 유지 시 세트 적용, 언루팅/리락/언락 초기화 시 선택 해제 확인
+- [ ] KernelSU OverlayFS 선행·실제 재부팅 후 모듈 활성/영수증 대조 확인
+- [ ] 설치 실패·불확정·취소·재개 시 후속 설치 차단과 설정 재확인
+- [ ] 실제 PIF Action/TrickyAddon/HMA 카페 JSON 가져오기 및 사용자 앱/IMS 확인
+
+이번 검증은 가짜 API/기기와 브라우저 DOM 검사입니다. 기본 feature/REAL_STEPS를 켜거나 실기기를 변경하지 않았습니다.

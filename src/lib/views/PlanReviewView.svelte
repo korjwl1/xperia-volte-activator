@@ -14,9 +14,12 @@
   import { REAL_STEPS } from "$lib/data/runMode";
   import { patchProcedureProblem } from "$lib/data/devices";
   import EfsSetup from "$lib/components/EfsSetup.svelte";
+  import ModuleSetSelector from "$lib/components/ModuleSetSelector.svelte";
+  import { selectedModuleSets } from "$lib/domain/moduleSets";
 
   // 선택 상태·실측 결과는 스토어에 보관 — 이전/다음으로 오가도 유지 (기기가 바뀔 때만 초기화)
   wizard.ensureOptions();
+  $effect(() => { if (wizard.moduleSetProblem) wizard.clearModuleSets(); });
 
   let activeTab = $state<"backup" | "rooting">("backup");
   let showPathAlert = $state(false);
@@ -29,7 +32,7 @@
   const bootloaderKnown = $derived(wizard.device?.bootloader === "locked" || wizard.device?.bootloader === "unlocked");
   const restoring = $derived(wizard.mode === "manual" && wizard.manualTask === "restore");
   const extraOptions = $derived(wizard.mode !== "manual" && wizard.mode !== "update" && !wizard.opts.backupOnly);
-  const taskBlocked = $derived(wizard.mode === "update" ? "전체 펌웨어의 Newflasher 기록 연결·기기별 검증을 준비 중입니다" : restoring && (!wizard.backupDir || wizard.restoreSourceState !== "done") ? "복구할 원본 백업 폴더를 먼저 검증하세요" : null);
+  const taskBlocked = $derived(wizard.mode === "update" ? "전체 펌웨어의 Newflasher 기록 연결·기기별 검증을 준비 중입니다" : restoring && (!wizard.backupDir || wizard.restoreSourceState !== "done") ? "복구할 원본 백업 폴더를 먼저 검증하세요" : selectedModuleSets(wizard.opts.modules).length && !wizard.moduleSelection.settingsAck ? "선택한 모듈 세트의 매니저 설정을 확인하세요" : selectedModuleSets(wizard.opts.modules).length && !REAL_STEPS.root ? "루팅 모듈 설치 실전 기능이 비활성화되어 있습니다" : null);
   const sizesLoading = $derived(wizard.sizesState === "loading");
 
   // ── 항목별 용량: 실측(storage_sizes) 매핑, 실측 불가 항목은 고정 추정치 ──
@@ -303,9 +306,7 @@
             </div>
           {:else if !patching}
             <div class="px-1 text-[11px] text-muted-foreground">
-              {wizard.device?.rooted === true
-                ? "VoLTE 패치를 선택하지 않았습니다 — 펌웨어 업데이트 후 풀리는 루팅만 새 버전으로 다시 적용합니다"
-                : "VoLTE 패치를 선택하지 않아 언락 · 루팅 관련 옵션이 없습니다"}
+              VoLTE 패치를 선택하지 않아 자동 루팅 작업이 없습니다
             </div>
           {:else if bootloaderKnown}
             <div class="mb-3 px-1 text-[11px] text-muted-foreground">
@@ -342,6 +343,12 @@
           {:else}
             <div class="px-1 text-[11px] text-muted-foreground">
               부트로더 상태를 확인할 수 없어 루팅 · VoLTE 적용만 진행됩니다
+            </div>
+          {/if}
+          {#if wizard.mode === "automatic"}
+            <div class="mt-5 border-t pt-4 space-y-3">
+              <h2 class="text-sm font-semibold">루팅 유지 시</h2>
+              <ModuleSetSelector selection={wizard.moduleSelection} onChange={selection => wizard.setModuleSelection(selection)} disabled={!!wizard.moduleSetProblem} reason={wizard.moduleSetProblem} />
             </div>
           {/if}
         {/if}

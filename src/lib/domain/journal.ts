@@ -1,5 +1,6 @@
 import { MANUAL_IDS, MANUAL_TASK_IDS, STEP_KINDS, type RunJournal } from "$lib/types";
 import { CALL_ITEMS } from "$lib/domain/communication";
+import { isModuleSelection } from "$lib/domain/moduleSets";
 
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === "string";
@@ -7,6 +8,7 @@ const texts = (value: unknown): value is string[] => Array.isArray(value) && val
 const integer = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const option = (value: unknown) => object(value) && ["unroot", "relock", "restore"].every(key => typeof value[key] === "boolean")
   && (value.backupOnly === undefined || typeof value.backupOnly === "boolean")
+  && (value.modules === undefined || (isModuleSelection(value.modules) && (value.modules.sets.length === 0 || (value.mode === "automatic" && !value.unroot && !value.relock))))
   && (value.mode === undefined || ["automatic", "manual", "update"].includes(value.mode as string))
   && (value.manualTask === undefined || (value.mode === "manual" && MANUAL_TASK_IDS.includes(value.manualTask as never)))
   && (value.mode !== "manual" || value.manualTask !== undefined)
@@ -79,12 +81,13 @@ export function decodeJournal(raw: string): RunJournal | null {
     }
     if ((value.opts as Record<string,unknown>).backupOnly === true && (value.steps.length!==1 || value.backupItems.length===0 || value.steps.some(step => step.id !== "backup" || step.kind!=="backup" || step.wipe || (step.manual ?? []).some((id: unknown)=>!["backup-notice", "usb-debug", "smsie-export"].includes(id as string))) || config.bootloaderAction!==null || config.firmware!==null || config.sims.some(sim=>sim.carrier!==null))) return null;
     const opts = value.opts as Record<string, unknown>;
+    if (value.steps.some(step => step.id === "root-modules") && (opts.mode !== "automatic" || !isModuleSelection(opts.modules) || opts.modules.sets.length === 0 || !opts.modules.settingsAck || value.steps.some(step => ["unlock", "unroot", "relock", "fw-flash"].includes(step.id)) || !config.sims.some(sim => sim.carrier !== null))) return null;
     if (opts.mode === "update" && (opts.unroot || opts.relock || opts.restore || config.bootloaderAction !== null || config.sims.some(sim => sim.carrier !== null))) return null;
     if (opts.mode === "manual") {
       const allowed: Record<string, string[]> = {
         backup: ["backup"], restore: ["restore"], unlock: ["prep", "backup", "unlock", "setup-min"],
         relock: ["prep", "backup", "unroot", "relock", "setup-relock"], root: ["prep", "backup", "root"],
-        unroot: ["prep", "backup", "unroot"], volte: ["efs-input", "backup", "efs-preflight", "efs", "verify", "volte-props", "final-verify"], verify: [],
+        unroot: ["prep", "backup", "unroot"], volte: ["efs-input", "backup", "efs-preflight", "efs", "verify", "volte-props", "final-verify"], verify: [], "root-manager": [], "root-modules": [],
       };
       if (opts.unroot || opts.relock || opts.restore || config.firmware !== null || value.steps.some(step => !allowed[opts.manualTask as string]?.includes(step.id))) return null;
     }

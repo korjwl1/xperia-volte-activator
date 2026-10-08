@@ -1,10 +1,21 @@
 # 개발용 단계 실행 CLI
 
+## 2026-10-08 루트 도구 명령
+
+새 카탈로그에 엔진 조회·ReSukiSU 릴리스/선택 태그 준비·동봉/공개 모듈 준비·HMA 내보내기·수동 전환/모듈 관리·업데이트 루트 안내를 추가했다. 정확한 camelCase 인자/반환은 [계약](../02-contracts/tauri-commands.md), 절차는 [루트 도구](../../docs/structure/root-tools.md)를 따른다.
+
+`root_tools_capabilities`, `resukisu_releases`, `root_package_prepare`, `root_preset_export`, `firmware_update_root_plan`은 PC-only이며 폰·USB를 열지 않는다. 준비는 인터넷 다운로드와 PC 저장을 포함할 수 있다. 모듈 설치/변경·APK 설치·외부 패치 증명에는 `root-tools-write`와 `--allow-device-write`, 정리에는 `fastboot-write`도 필요하다. `root-tools-write`는 root-write를 포함하고 기본 꺼짐이다. 명령/실행 기록의 feature에 rootToolsWrite를 표시한다. 이 기능들을 넣은 검증 CLI는 `--features dev-cli,root-tools-write,fastboot-write,efs-write`로 재빌드한다.
+
+CLI가 엔진 전환 순서나 모듈 재부팅을 자동 진행하지 않는다. cleanup-intent·불확정 설치는 자동 반복하지 않으며 stock 복원 이력/OS 확인 후 사람의 다음 호출을 기다린다. 판올림/Newflasher 실기기 실행 명령은 추가하지 않았다.
+
+
 2026-10-06 전송 비교 추가: `backup_transfer_probe`는 `serial`, `remoteRoot`, `dest`, `maxFiles`, `maxTotalBytes`를 받는다. 공유 저장소의 읽기만 수행하며 기기 쓰기 허용 옵션은 필요 없다. 1–64개 파일·회차당 최대512 MiB, 실제 백업과 분리된 PC 진단 폴더 사용. 같은 파일을 per-file/batch/batch/per-file 순서로 받아 전송 시간과 크기·PC 재독 해시·회차간 해시 일치를 기록한다. 두 모드는 동일한 버퍼와 내구성 설정이며 세션 재사용 효과를 비교한다. 직접 USB/TCP의 재사용 여부가 결과에 포함된다. 서버 경유는 재사용 미지원이므로 결과의 `sessionReuse=false`를 그대로 표시한다. 실제 큰 사진 전송 비교는 현재 앱 데이터 완료 후 실행 예정이다.
 
 2026-10-05 구현. 실기기 통신은 이번 구현 과정에서 실행하지 않았다. 검토 대상은 README의 Xperia 1 V JP · XQ-DQ44이다.
 
 ## 같은 엔진을 사용한다
+
+2026-10-08 `newflasher-add`: `firmware_package_inspect`를 PC-only 명령으로 추가했다. `args={dir:"<절대 펌웨어 폴더>",targetFingerprint:"<목표 지문>"}`이며 Tauri와 같은 `flasher::firmware_package_inspect`를 호출한다. 파일 읽기·검사만 하고 ADB/USB를 조회하지 않는다. 결과 `writeReady=false`와 blocker는 실제 플래시 허용이 아니라는 뜻이다. 검사 성공을 업데이트 성공으로 해석하지 않는다. [진행 기록](newflasher-native-progress.md)을 참조한다.
 
 Cargo `dev-cli` feature를 켰을 때만 별도 `xva-dev` 실행 파일이 포함된다. `debug/release`는 최적화 프로필이고 개발 CLI 포함 여부는 feature로 정한다. CLI는 기존 라이브러리에 링크하며 Tauri 창·데몬·별도 adb/EfsTools 프로세스를 띄우지 않는다.
 

@@ -5,11 +5,12 @@
 
 import type { MagiskPatchRequest, FirmwareDirInfo, AdbStatus, AppItem, BackupProgress, BackupSummary, PreparedBackup, DeviceStatus, EnvCheckItem, FastbootVars, FirmwareResult, FirmwareVersions, MagiskPrepared, PatchResult, RestoreOutcome, RelockGate, SettingsOverview, SmsIeOutcome, UnlockResult } from "$lib/types";
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
-import type { ApiResult } from "$lib/types";
+import type { ApiResult, FirmwarePackageReport } from "$lib/types";
 import { REAL_STEPS } from "$lib/data/runMode";
 import { canReboot, type EngineCapabilities } from "$lib/domain/execution";
 import { classifyApp, SAMPLE_FLAGS, type AppFlag } from "$lib/data/appRules";
 import { efsApi, type EfsApi } from "./efs";
+import { rootToolsApi, type RootToolsApi } from "./rootTools";
 import { inDesktop as inTauri, transport } from "./transport";
 export { inDesktop, observeDesktopWindow } from "./transport";
 
@@ -17,7 +18,9 @@ export { inDesktop, observeDesktopWindow } from "./transport";
 const invokeBackend = transport.optional;
 const invokeResult = transport.result;
 
-export interface Api extends EfsApi {
+export interface Api extends EfsApi, RootToolsApi {
+  /** PC-only inspection of a local full firmware package. Never returns write authorization. */
+  firmwarePackageInspect(dir: string, targetFingerprint: string): Promise<ApiResult<FirmwarePackageReport>>;
   /** null = 조회 실패(일시적 오류 포함), [] = 연결된 기기 없음 */
   deviceList(): Promise<DeviceStatus[] | null>;
   deviceStatus(serial: string): Promise<DeviceStatus | null>;
@@ -125,8 +128,12 @@ export interface Api extends EfsApi {
 }
 
 const hybridApi: Api = {
+  async firmwarePackageInspect(dir, targetFingerprint) {
+    return invokeResult<FirmwarePackageReport>("firmware_package_inspect", { dir, targetFingerprint });
+  },
   async engineCapabilities() { return invokeResult<EngineCapabilities>("engine_capabilities", {}); },
   ...efsApi,
+  ...rootToolsApi,
   async deviceList() {
     if (inTauri()) {
       // 데스크톱: 백엔드 실측이 유일한 소스 — mock으로 위장하지 않음

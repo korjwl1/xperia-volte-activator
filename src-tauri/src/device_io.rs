@@ -82,11 +82,20 @@ pub struct ShellOutput {
     pub code: u8,
 }
 
-/// 루트 셸 명령 — `su`가 PATH에 없으면 Magisk 실제 위치를 쓴다.
+/// Fixed su candidates. KernelSU can intercept /system/bin/su execution without a disk file.
+/// Never mistake /data/adb/ksud for a generic su executable.
+macro_rules! su_path {
+    () => {
+        "\"$(command -v su || if [ -x /debug_ramdisk/su ]; then echo /debug_ramdisk/su; elif [ -x /system/xbin/su ]; then echo /system/xbin/su; else echo /system/bin/su; fi)\""
+    };
+}
+pub(crate) use su_path;
+
+/// 루트 셸 명령 — PATH, Magisk ramdisk, legacy xbin, KernelSU 표준 경로를 같은 순서로 사용한다.
 /// 실기기(XQ-DQ44, Magisk 30.7): `/system/bin/su`가 없고 `/debug_ramdisk/su`에만 있어 `su -c`가 "su 없음"으로 끝났다.
 macro_rules! su {
     ($cmd:literal) => {
-        concat!("\"$(command -v su || echo /debug_ramdisk/su)\" -c ", $cmd)
+        concat!($crate::device_io::su_path!(), " -c ", $cmd)
     };
 }
 pub(crate) use su;
@@ -94,7 +103,7 @@ pub(crate) use su;
 /// 루트 셸 명령(동적 문자열) — `su!`와 같은 위치 탐색. 명령 전체를 홑따옴표 한 덩어리로 넘긴다.
 pub(crate) fn su_command(cmd: &str) -> String {
     format!(
-        "\"$(command -v su || echo /debug_ramdisk/su)\" -c '{}'",
+        concat!(su_path!(), " -c '{}'"),
         cmd.replace('\'', "'\\''")
     )
 }

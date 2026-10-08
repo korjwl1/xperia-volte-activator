@@ -32,6 +32,7 @@
   import { GUIDES } from "$lib/data/guides";
   import { SIMULATED_RUN } from "$lib/data/runMode";
   import { Checkbox } from "$lib/components/ui/checkbox";
+  import ModuleInstruction from "$lib/components/ModuleInstruction.svelte";
 
   async function pickFirmware() {
     const dir = await api.pickFolder();
@@ -94,6 +95,7 @@
     </Alert>
   {/if}
 
+  {#if wizard.moduleInstruction}<ModuleInstruction message={wizard.moduleInstruction} onComplete={() => wizard.finishModuleInstruction(true)} onCancel={() => wizard.finishModuleInstruction(false)} />{/if}
   <!-- 상단: 현재 단계 + 전체 진행률 + 컨트롤 -->
   <Card class="elev-1 shrink-0">
     <CardContent class="py-3 space-y-2">

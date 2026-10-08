@@ -2,9 +2,9 @@
 
 status: partially implemented (GUI / offline tests)
 
-작성일: 2026-10-07. 사용자 요청에 따른 구현 전 계획이다. 이번 작업은 이 문서만 작성한다.
+작성일: 2026-10-07. 사용자 요청에 따른 구현 전 계획이다. 현재 화면·계획 분기를 구현했으며 전체 펌웨어 기록은 미완성이다.
 
-갱신일: 2026-10-08. 업데이트 안내·백업 선택, 데이터 유지의 한계, 새 버전 부트 이미지 사전 패치와 후속 기록 정책, [Newflasher 네이티브 엔진 설계](newflasher-native.md)를 추가했다. 화면/엔진 구현은 아직 하지 않는다.
+갱신일: 2026-10-08. 업데이트 안내·백업 선택, 데이터 유지의 한계, 새 버전 부트 이미지 사전 패치와 후속 기록 정책, [Newflasher 네이티브 엔진 설계](newflasher-native.md)를 추가했다. 화면 분기/백업 뒤 대기는 구현됐으며 전체 기록은 차단한다.
 
 ## 1. 확정 요구사항
 
@@ -215,7 +215,7 @@ type ManualOperation = "backup" | "restore" | "unlock" | "relock"
   | "root" | "unroot" | "volte-patch" | "communication-check";
 type UpdatePolicy = "preserve-volte" | "repatch";
 type UpdateRootPolicy = "stock" | "preserve-magisk" | "install-magisk";
-// 자동 흐름의 동시 업데이트는 repatch, 업데이트 전용은 preserve-volte.
+// 2026-10-08: 자동 동시 업데이트 제거, 전용 preserve-volte만 남긴다.
 // install-magisk는 이미 unlocked인 비루팅 기기의 명시적 선택에만 사용.
 // continuation에는 백업 뒤 대기와 사용자 중단/재개 대기를 구분해 저장한다.
 ```
@@ -294,6 +294,6 @@ type UpdateRootPolicy = "stock" | "preserve-magisk" | "install-magisk";
 - 화면 기준: 저장소 `.opencode/skills/desktop-ui/SKILL.md`.
 
 
-## 2026-10-08 ?? ??? ??? ??
+## 2026-10-08 구현과 후속 요구
 
-??/??/???? 3?, ?? 8? ??, USIM? ?? ??/?? ??, ?? ?? ??, ?? ?? ???, ?? ?? ? ?? ??/?? ? ??? ?? ??? ????. ?? ?? ??? [workflow](../../docs/structure/workflow.md). ??? ?? ??? ?? ?????? ? ??? ??/?? ??? ????. ?? ?? ?? ??? ??? ????, ? ??? VoLTE ?? ??? ?? Newflasher ???? ??. ? ?? ??? ?? ?? ????/repatch? ?????. ?? ??? ??? ?? ?? ???? ?? ??? ?? ????.
+자동/수동/업데이트 3열, 수동 10개 작업, 단독 부트로더/새 펌웨어 카드 제거, 공통 백업과 복구 원본 검증, 엔진 정리 후 자동 연결/백업 뒤 대기/기록 호환을 구현했다. 새 펌웨어 조회/선택은 VoLTE 인식 기기의 전용 Newflasher 경로에만 있다. 위 초기 자동 동시 업데이트/repatch 설계는 철회되었다. 수동 매니저 변경과 세트 설치, 자동 루팅 유지 시의 A/B 의존 세트 및 초기화/언루팅/리락 비활성화를 추가했다. 현재 동작은 [workflow](../../docs/structure/workflow.md). 전체 기록·목표 IMG 루팅 유지·실기기 완료 기준은 계속 미완료다.

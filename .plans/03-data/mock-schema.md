@@ -55,7 +55,8 @@ DeviceStatus += state:'device'|'unauthorized'|'offline'|'usb'…,  SimInfo += st
 
 2026-10-06 단계 대기: RunJournal v1의 optional `awaitingNext: string|null`은 cursor 직전 완료/스킵 단계 id와 대조한다. optional `backupOmissions: {apps: BackupSummary.omittedApps, pending:boolean}`은 제외 안내의 확인 여부를 유지하며 구조·개수·바이트·boolean 타입을 검사한다. 구형 기록은 필드 없이 읽을 수 있다. mock도 메인 단계 완료 후 자동으로 진행하지 않고 [다음]을 기다린다.
 
+## 2026-10-08 화면·모듈 세트 반영
 
-## 2026-10-08 ?? ?? ??
+WorkflowMode=automatic|manual|update, ManualTask는 10개 작업이다. RunJournal.opts에 optional mode/manualTask/modules 추가. modules는 sets/zygisk/integrity/extras/settingsAck를 저장하고 B→A 의존성을 검증한다. 부적절한 후처리/수동 작업 섞임은 거부한다. RootModuleInventory.installed는 패키지 ID→실제 module ID 영수증이다. 기본 mock/실전 플래그는 변경하지 않는다.
 
-WorkflowMode=automatic|manual|update, ManualTask=backup|restore|unlock|relock|root|unroot|volte|verify. RunJournal.opts? optional mode/manualTask? ????. ?? ?? ??? ?? ?? ??? ??? ????. VolteConfig.firmware? ?? UI?? update ??, bootloaderAction? ?? ?? ?? ???. ?? ?? mock? ??? VoLTE off?.
+RootModuleInventory는 installed 영수증과 bootId를 반환합니다. 세트 러너는 매 재부팅 직전 부팅 ID를 조회하고 변경된 ID 및 모듈 활성/엔진 상태를 확인한 뒤에만 이어갑니다. 구형 응답에 ID가 없거나 ACK만 성공하면 다음 설치를 막습니다.

@@ -1,14 +1,16 @@
 // 실행 계획 생성 — 단일 공급원. "실행 순서" 미리보기와 실제 실행이 모두 이 결과를 쓴다.
 // 순서/내용은 원본 CLI(cliInterface.py)의 언락 → 루팅 → EFS 업로드 → VoLTE 설정 → 언루팅 → 리락 흐름과
 // 수동 가이드의 "수동 업데이트"(newflasher, .ta·userdata 제외)를 따른다.
-import type { DeviceStatus, ManualId, ManualTask, PlanStep, VolteConfig, WorkflowMode } from "$lib/types";
+import type { DeviceStatus, ManualId, ManualTask, PlanStep, VolteConfig, WorkflowMode, RootModuleSelection } from "$lib/types";
 import { CARRIER_LABEL } from "$lib/types";
 import { deviceWorkflow } from "$lib/data/devices";
 import { manualTaskProblem, updateProblem } from "$lib/domain/workflow";
+import { automaticModulesProblem, selectedModuleSets } from "$lib/domain/moduleSets";
 
 export interface PlanOptions {
   mode?: WorkflowMode;
   manualTask?: ManualTask;
+  modules?: RootModuleSelection;
   backupOnly?: boolean;
   unroot: boolean;
   relock: boolean;
@@ -139,6 +141,9 @@ export function buildPlan(
     }
   }
 
+  if (opts.mode === "automatic" && !automaticModulesProblem(device, config, opts) && selectedModuleSets(opts.modules).length) {
+    steps.push({ id: "root-modules", kind: "root-modules", title: "루팅 모듈 세트 설치", desc: "의존 세트 포함 · 엔진별 설치 순서 · 재부팅과 적용 확인", risk: "warn", estSec: 900 });
+  }
   if (unroot) {
     steps.push({ id: "unroot", kind: "unroot", title: "언루팅", desc: `순정 ${workflow.partition ?? "부트"} 이미지로 복원합니다 — 리락 전 필수`, risk: "warn", estSec: 180 });
   }
@@ -178,6 +183,7 @@ function manualPlan(device: DeviceStatus, config: VolteConfig, opts: PlanOptions
     return buildPlan(device, { ...config, firmware: null, bootloaderAction: null }, { unroot: false, relock: false, restore: false }, hasBackup);
   }
   if (task === "verify") return [];
+  if (task === "root-manager" || task === "root-modules") return [];
   const partition = deviceWorkflow(device.model, [], false).partition;
   return finalize([
     { id: "prep", kind: "setup", title: "순정 이미지 준비", desc: "현재 기기·펌웨어와 같은 순정 부트 이미지 확인", estSec: 300, manual: ["firmware-select"] },

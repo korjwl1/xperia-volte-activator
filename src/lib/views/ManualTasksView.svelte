@@ -1,10 +1,10 @@
 <script lang="ts">
   import { Button } from "$lib/components/ui/button";
   import SelectionDeviceStatus from "$lib/components/SelectionDeviceStatus.svelte";
-  import { ArrowLeft, HardDrive, FolderOpen, LockOpen, Lock, ShieldCheck, ShieldOff, Signal, Phone, TriangleAlert } from "@lucide/svelte/icons";
+  import { ArrowLeft, HardDrive, FolderOpen, LockOpen, Lock, ShieldCheck, ShieldOff, Signal, Phone, TriangleAlert, RefreshCw, Package } from "@lucide/svelte/icons";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { MANUAL_TASKS, manualTaskProblem } from "$lib/domain/workflow";
-  const icons = { backup: HardDrive, restore: FolderOpen, unlock: LockOpen, relock: Lock, root: ShieldCheck, unroot: ShieldOff, volte: Signal, verify: Phone };
+  const icons = { backup: HardDrive, restore: FolderOpen, unlock: LockOpen, relock: Lock, root: ShieldCheck, unroot: ShieldOff, volte: Signal, verify: Phone, "root-manager": RefreshCw, "root-modules": Package };
   let checking = $state(true);
   let deviceStatus: SelectionDeviceStatus;
 </script>

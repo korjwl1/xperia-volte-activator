@@ -313,6 +313,12 @@ pub(crate) async fn magisk_patch_with_events(
         adb::with_first_device(&serial, move |dev| {
             crate::boot_image::verify_fingerprint(dev, &origin.fingerprint)?;
             let key = crate::device_io::identity_key(dev)?;
+            crate::root_tools::switch::require_install_stage(
+                dev,
+                out_dir.parent().ok_or("앱 데이터 폴더 없음")?,
+                "magisk",
+                &origin.sha256,
+            )?;
             let mut outcome_logs: Vec<String> = vec![];
             let r = patch::run_patch(
                 dev,
