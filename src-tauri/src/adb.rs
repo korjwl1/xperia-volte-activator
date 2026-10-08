@@ -1140,15 +1140,16 @@ pub async fn app_flags(serial: Option<String>) -> Result<Vec<AppFlagOut>, String
 /// screen: "developer" = 개발자 옵션 / "about" = 휴대전화 정보(빌드번호 연타로 개발자 옵션 활성화)
 #[tauri::command]
 pub async fn open_settings_screen(serial: Option<String>, screen: String) -> Result<(), String> {
-    let action = match screen.as_str() {
-        "developer" => "android.settings.APPLICATION_DEVELOPMENT_SETTINGS",
-        "about" => "android.settings.DEVICE_INFO_SETTINGS",
+    // 루팅 매니저 앱 화면도 띄운다(루트 권한 승인 안내 — 앱을 직접 찾아 열지 않아도 되게, 2026-10-09 사용자 요청)
+    let command = match screen.as_str() {
+        "developer" => "am start -a android.settings.APPLICATION_DEVELOPMENT_SETTINGS",
+        "about" => "am start -a android.settings.DEVICE_INFO_SETTINGS",
+        "resukisu" => "monkey -p com.resukisu.resukisu -c android.intent.category.LAUNCHER 1",
+        "magisk" => "monkey -p com.topjohnwu.magisk -c android.intent.category.LAUNCHER 1",
         _ => return Err("알 수 없는 설정 화면입니다".into()),
     };
     guarded(Duration::from_secs(15), move || {
-        with_first_device(&serial, |dev| {
-            shell(dev, &format!("am start -a {action}")).map(|_| ())
-        })
+        with_first_device(&serial, |dev| shell(dev, command).map(|_| ()))
     })
     .await
 }

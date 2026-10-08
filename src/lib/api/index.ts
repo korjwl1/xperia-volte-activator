@@ -41,7 +41,7 @@ export interface Api extends EfsApi, RootToolsApi {
   /** 부트로더 모드 폰에 Windows fastboot 드라이버가 없으면 Sony 공식 드라이버를 받아 연결(UAC 한 번) — fastboot 실전에서만 */
   fastbootDriverEnsure(productName: string): Promise<ApiResult<string>>;
   /** 폰에 설정 화면 띄우기 — developer: 개발자 옵션 / about: 휴대전화 정보 */
-  openSettingsScreen(serial: string | undefined, screen: "developer" | "about"): Promise<boolean>;
+  openSettingsScreen(serial: string | undefined, screen: "developer" | "about" | "resukisu" | "magisk"): Promise<boolean>;
   /** 클립보드 복사 */
   copyText(text: string): Promise<boolean>;
   /** 설정 백업 개요(키 개수·자동 복원 대상 현재 값), 조회 실패 시 null */

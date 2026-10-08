@@ -64,7 +64,7 @@ const MANUAL_TEXT: Record<ManualId, Omit<ManualPrompt, "id">> = {
   "resukisu-patch": {
     title: "ReSukiSU로 부트 이미지 패치 (폰 조작)",
     steps: [
-      "ReSukiSU 매니저 설치와 순정 init_boot 이미지 전송은 자동으로 끝났습니다 — 폰 잠금을 풀어 주세요",
+      "자동 패치를 할 수 없어 폰에서 직접 패치합니다 — ReSukiSU 매니저 설치와 순정 init_boot 전송은 끝났습니다",
       "폰에서 ReSukiSU 앱을 열고 홈 화면의 [설치] → [파일 선택 후 패치]를 고릅니다",
       "Download 폴더의 xvolte_stock_init_boot_….img 파일을 선택하고 패치를 시작합니다(파티션·KMI는 앱이 고른 기본값 유지)",
       "패치가 끝나 Download에 kernelsu_patched_….img가 생기면 자동으로 받아 검사하고 다음으로 진행합니다",
@@ -1319,7 +1319,7 @@ export class Wizard {
       case "backup": return items.map((l) => `${l} 백업`);
       case "restore": return items.map((l) => `${l} 복원`);
       case "root": return this.opts.rootEngine === "resukisu"
-        ? ["ReSukiSU 매니저 받기·설치", "순정 이미지 전송", "폰에서 패치", "패치 결과 확인", "패치 이미지 기록"]
+        ? ["ReSukiSU 매니저 받기·설치", "부트 이미지 패치", "패치 결과 받기", "패치 결과 확인", "패치 이미지 기록"]
         : ["Magisk 받기", "부트 이미지·패치 도구 전송", "Magisk 패치", "패치 결과 확인", "패치 이미지 기록", "Magisk 앱 설치"];
       case "efs-preflight": return ["DIAG 포트 전환", "EFS 프로토콜 초기화", "응답 확인"];
       case "efs":
@@ -1367,6 +1367,7 @@ export class Wizard {
   /** 루트 승인 진행 안내(화면·잠금·거부 상태) */
   suGrantHint = $state("");
   private suDenied = false;
+  private managerOpened = false;
   /** 루트 승인 감지 — 화면 켜기 → 잠금 해제 대기 → su 요청.
    *  Magisk(v30.7 소스)는 요청 창에 10초 안에 응답이 없거나 거부하면 Shell을 기본 "영구" 거부로 저장한다.
    *  그 뒤로는 창 없이 바로 거부되므로, 슈퍼유저 탭에서 Shell을 켜도록 안내하고 같은 확인을 반복한다(창이 반복해서 뜨지 않는다). */
@@ -1384,7 +1385,9 @@ export class Wizard {
       return false;
     }
     const ksu = this.opts.rootEngine === "resukisu";
-    if (ksu) this.suGrantHint = "ReSukiSU 앱 → 슈퍼유저 탭에서 [Shell]의 루트 권한을 켜 주세요 — 켜면 자동으로 진행합니다";
+    // ReSukiSU는 승인 창이 없으니 앱을 대신 띄워 둔다(한 번만). Magisk는 거부를 기억한 경우에만 앱을 띄운다
+    if ((ksu || this.suDenied) && !this.managerOpened) { this.managerOpened = true; void api.openSettingsScreen(serial, ksu ? "resukisu" : "magisk"); }
+    if (ksu) this.suGrantHint = "폰에 ReSukiSU 앱을 띄웠습니다 — 슈퍼유저 탭에서 [Shell]의 루트 권한을 켜 주세요. 켜면 자동으로 진행합니다";
     else if (!this.suDenied) this.suGrantHint = "폰 화면의 Magisk 슈퍼유저 요청 창에서 10초 안에 [허용]을 눌러 주세요";
     const ok = await api.rootCheck(serial);
     if (ok === true) return true;
@@ -1671,6 +1674,7 @@ export class Wizard {
       this.watchManual(cur, id, "연락처 가져오기 확인", async () => (await this.verifyManual("contacts-import")) === null, 3000);
     if (id === "su-grant") {
       this.suDenied = false;
+      this.managerOpened = false;
       this.suGrantHint = "";
       this.watchManual(cur, id, "루트 권한(uid=0) 확인", () => this.suGrantReady(), 2000);
     }
@@ -3070,6 +3074,19 @@ export class Wizard {
     if (!installed.ok) return this.failStep(`ReSukiSU 매니저 설치 실패: ${installed.error}`);
     this.log(cur, `[루팅] ReSukiSU ${tag} 매니저 설치 (sha256 ${prepared.value.sha256.slice(0, 12)}…)`);
     this.markSub(cur, 1);
+    // 매니저 APK 안의 패치 도구를 셸 권한으로 돌려 자동 패치(2026-10-09 실측) — 실패하면 폰에서 직접 패치하는 방식으로
+    cur.progress = 0.2;
+    this.log(cur, "[루팅] ReSukiSU 패치 도구로 순정 init_boot를 자동 패치합니다");
+    const auto = await api.resukisuAutoPatch(serial, imagePath, prepared.value.sha256);
+    if (gen !== this.runGen) return;
+    if (auto.ok) {
+      this.resukisuPatched = auto.value;
+      this.resukisuStage = null;
+      this.markSub(cur, 2);
+      void this.persist(true);
+      return this.continueResukisuRoot(cur);
+    }
+    this.log(cur, `[루팅] 자동 패치 실패(${auto.error}) — 폰의 ReSukiSU 앱에서 직접 패치하는 방식으로 진행합니다`);
     cur.progress = 0.15;
     // 재부팅 직후 첫 잠금 해제 전에는 폰 저장소(Download)가 열리지 않는다 — 화면을 켜고 잠금 해제를 기다린다
     const unlocked = await this.waitForScreenUnlock(gen, cur);

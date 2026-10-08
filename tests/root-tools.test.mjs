@@ -14,7 +14,7 @@ test("every root tools facade command is registered in the native handler", () =
   const source = fs.readFileSync("src/lib/api/rootTools.ts", "utf8");
   const backend = fs.readFileSync("src-tauri/src/lib.rs", "utf8").split("tauri::generate_handler![")[1];
   const commands = [...source.matchAll(/(?:transport\.result|rootWrite)[^\n]*?\("([a-z_]+)"/g)].map(m => m[1]);
-  assert.equal(new Set(commands).size, 17);
+  assert.equal(new Set(commands).size, 18);
   for (const command of commands) assert.match(backend, new RegExp(`::${command}\\s*[,]`));
 });
 test("root inspection has no browser success and preserves denied root without claiming stock", async () => {

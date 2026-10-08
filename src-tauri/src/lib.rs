@@ -133,6 +133,7 @@ pub fn run() {
             root_tools::switch::resukisu_install,
             root_tools::switch::resukisu_stage_stock,
             root_tools::switch::resukisu_fetch_patched,
+            root_tools::switch::resukisu_auto_patch,
             root_tools::switch::root_switch_finish,
             boot_image::boot_image_check,
             adb::root_check,

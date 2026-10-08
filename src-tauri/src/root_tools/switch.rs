@@ -360,6 +360,82 @@ pub fn stage_work(dev: &mut dyn ADBDeviceExt, stock: &Path) -> Result<Staged, St
         since,
     })
 }
+/// ReSukiSU 패치 자동화(2026-10-09 실측) — 검증한 매니저 APK 안의 패치 도구(lib/arm64-v8a/libksud.so)를
+/// 폰 임시 폴더에서 셸 권한으로 실행한다(`ksud boot-patch`). 루트가 없어도 되고 KMI는 폰 커널에서 스스로 찾는다.
+/// 결과는 PC로 받아 돌려주며, 검증되지 않은 파일이므로 반드시 root_external_patch_import로 검사한 뒤 기록한다.
+#[tauri::command]
+pub async fn resukisu_auto_patch(serial: String, stock_path: String, apk_sha256: String) -> Result<String, String> {
+    super::write_gate(&serial, true)?;
+    let dir = super::data_dir()?;
+    let operation = device_io::WriteOperation::acquire()?;
+    crate::tasks::blocking("ReSukiSU auto patch", move || {
+        let _operation = operation;
+        crate::adb::with_first_device(&Some(serial), |dev| {
+            auto_patch_work(dev, &dir, Path::new(&stock_path), &apk_sha256)
+        })
+    })
+    .await
+}
+const AUTO_DIR: &str = "/data/local/tmp/xvolte-ksu";
+fn ksud_from_apk(apk: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(apk)).map_err(|_| "매니저 APK 형식 오류".to_string())?;
+    let mut entry = zip
+        .by_name("lib/arm64-v8a/libksud.so")
+        .map_err(|_| "매니저 APK에 패치 도구(libksud.so)가 없습니다".to_string())?;
+    if entry.size() > 64 * 1024 * 1024 {
+        return Err("패치 도구 크기 이상".into());
+    }
+    let mut out = Vec::with_capacity(entry.size() as usize);
+    entry.read_to_end(&mut out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+pub fn auto_patch_work(dev: &mut dyn ADBDeviceExt, dir: &Path, stock: &Path, apk_sha256: &str) -> Result<String, String> {
+    let origin = check_stock(dev, stock)?;
+    if origin.partition != "init_boot" {
+        return Err("ReSukiSU 패치 경로는 init_boot 기종만 준비됐습니다".into());
+    }
+    let (package, apk) = super::packages::load(dir, apk_sha256)?;
+    if package.id != "resukisu" {
+        return Err("ReSukiSU 매니저 APK가 필요합니다".into());
+    }
+    let ksud = ksud_from_apk(&apk)?;
+    let stock_bytes = boot_image::read(stock)?;
+    device_io::shell(dev, &format!("rm -rf {AUTO_DIR} && mkdir -p {AUTO_DIR}/out"))?;
+    let result = (|| {
+        dev.push(&mut std::io::Cursor::new(&ksud), &format!("{AUTO_DIR}/ksud"))
+            .map_err(|e| format!("패치 도구 전송 실패: {e}"))?;
+        dev.push(&mut std::io::Cursor::new(&stock_bytes), &format!("{AUTO_DIR}/stock.img"))
+            .map_err(|e| format!("순정 이미지 전송 실패: {e}"))?;
+        let log = device_io::shell(
+            dev,
+            &format!("cd {AUTO_DIR} && chmod 755 ksud && ./ksud boot-patch -b stock.img -o out --partition init_boot --allow-shell 2>&1"),
+        )
+        .map_err(|e| format!("ReSukiSU 패치 실패: {e}"))?;
+        let listing = device_io::shell(dev, &format!("ls {AUTO_DIR}/out"))?;
+        let name = listing
+            .lines()
+            .map(str::trim)
+            .find(|n| n.starts_with("kernelsu_patched_") && n.ends_with(".img"))
+            .ok_or_else(|| format!("패치 결과가 없습니다: {}", log.lines().last().unwrap_or_default()))?
+            .to_string();
+        let mut bytes = Vec::new();
+        dev.pull(&format!("{AUTO_DIR}/out/{name}"), &mut bytes)
+            .map_err(|e| format!("패치 결과 받기 실패: {e}"))?;
+        if bytes.is_empty() || bytes.len() as u64 > PATCHED_MAX {
+            return Err("패치 결과 크기 이상".into());
+        }
+        let local = dir
+            .join("root-images")
+            .join(format!("incoming-resukisu-{}.img", boot_image::sha256(&bytes)));
+        crate::storage::atomic_write(&local, &bytes)?;
+        Ok(local.to_string_lossy().into_owned())
+    })();
+    // 임시 폴더는 성공·실패와 관계없이 지운다
+    let _ = device_io::shell(dev, &format!("rm -rf {AUTO_DIR}"));
+    result
+}
+
 /// ReSukiSU 매니저가 만든 패치 결과를 PC로 받는다. 아직 없거나 쓰는 중이면 None(자동 감지가 다시 묻는다).
 /// 받은 파일은 검증 전 상태이므로 반드시 root_external_patch_import로 순정 부모·기기·헤더를 검사한 뒤 기록한다.
 #[tauri::command]
