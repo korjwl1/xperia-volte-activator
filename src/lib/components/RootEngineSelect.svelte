@@ -22,8 +22,14 @@
     if (next === "resukisu" && blocked) return;
     if (next === "magisk" && magiskBlocked) return;
     wizard.opts = { ...wizard.opts, rootEngine: next, resukisuTag: next === "resukisu" ? wizard.opts.resukisuTag : undefined };
-    if (next === "resukisu" && releases.length === 0) await load();
+    if (next === "resukisu" && releases.length === 0 && !loading) { requested = true; await load(); }
   }
+
+  // 매니저 변경처럼 ReSukiSU가 미리 골라진 채로 열리면 버전 목록을 바로 불러온다(누를 때만 부르던 문제, 2026-10-08)
+  let requested = false;
+  $effect(() => {
+    if (engine === "resukisu" && !blocked && !requested) { requested = true; void load(); }
+  });
 
   async function load() {
     loading = true;
