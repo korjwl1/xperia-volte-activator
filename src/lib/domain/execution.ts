@@ -8,6 +8,8 @@ export interface ExecutionFlags {
   root: boolean;
   /** 루팅 도구(엔진 전환·모듈 설치) — 실기기 검증 전이라 루팅과 따로 끈다(2026-10-08) */
   rootTools: boolean;
+  /** VoLTE 되돌리기(패치 전 모뎀 설정 복원) — 실기기 검증 전 */
+  volteRollback: boolean;
   verify: boolean;
   efs: boolean;
 }
@@ -28,6 +30,7 @@ export function liveStepEnabled(id: string, flags: ExecutionFlags): boolean {
     case "root-modules": return flags.rootTools;
     case "efs-input": case "efs-preflight": case "efs": case "verify":
     case "volte-props": case "comm-check": return flags.efs;
+    case "efs-rollback": return flags.efs && flags.volteRollback;
     case "fw-verify": return flags.verify;
     case "final-verify": return flags.verify || flags.efs;
     case "fw-flash": return false;
@@ -40,7 +43,7 @@ export interface EngineCapabilities { fastbootWrite: boolean; rootWrite: boolean
 export function buildFeatureProblem(ids: readonly string[], features: EngineCapabilities): string | null {
   if (ids.some(id => ["unlock", "relock", "root", "unroot"].includes(id)) && !features.fastbootWrite) return "이 빌드에는 fastboot-write 기능이 없습니다";
   if (ids.some(id => ["root", "unroot"].includes(id)) && !features.rootWrite) return "이 빌드에는 root-write 기능이 없습니다";
-  if (ids.some(id => ["efs-input", "efs-preflight", "efs", "verify", "volte-props", "comm-check"].includes(id)) && !features.efsWrite) return "이 빌드에는 efs-write 기능이 없습니다";
+  if (ids.some(id => ["efs-input", "efs-preflight", "efs", "verify", "volte-props", "comm-check", "efs-rollback"].includes(id)) && !features.efsWrite) return "이 빌드에는 efs-write 기능이 없습니다";
   if (ids.includes("final-verify") && !Object.values(features).some(Boolean)) return "이 빌드에는 최종 OS 재부팅 기능이 없습니다";
   return null;
 }

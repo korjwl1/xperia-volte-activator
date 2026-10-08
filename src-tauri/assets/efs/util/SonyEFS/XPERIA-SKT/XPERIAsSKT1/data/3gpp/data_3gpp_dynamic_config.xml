@@ -1,0 +1,24 @@
+<data_3gpp_dynamic_configuration>
+  <version>1.0</version>
+  <generic_config>
+  <carrier>SKT</carrier>
+    <ui_config>
+      <rat value="5G">
+	   <Home_Roam>
+        <Basic>
+          <IndConfig>1</IndConfig>
+           <ConnectConfig>
+            <Config>SCG</Config>
+            <Timer1>11</Timer1>
+            <KeepTimerOnULI>1</KeepTimerOnULI>
+            <Timer2>3</Timer2>
+           </ConnectConfig>
+           <IdleConfig>
+            <Config>SIB2</Config>
+           </IdleConfig>
+        </Basic>
+	   </Home_Roam>
+      </rat>
+    </ui_config>
+  </generic_config>
+</data_3gpp_dynamic_configuration>

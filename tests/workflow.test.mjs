@@ -59,12 +59,12 @@ test("manual card eligibility handles lock, root, unknown and unsupported-device
   assert.equal(manualTaskProblem("backup", device({ rooted: false, bootloader: "locked" })), null);
 });
 test("single manual task plans ignore leftover SIM, firmware and post-processing options", () => {
-  for (const [task, expected] of [["restore", ["restore"]], ["root", ["prep", "backup", "root"]], ["unroot", ["prep", "unroot"]], ["relock", ["prep", "backup", "unroot", "relock", "setup-relock"]]]) {
+  for (const [task, expected] of [["restore", ["restore"]], ["root", ["prep", "root"]], ["unroot", ["prep", "unroot"]], ["relock", ["prep", "unroot", "relock", "setup-relock"]]]) {
     const d = device({ rooted: task === "root" ? false : true });
     assert.deepEqual(buildPlan(d, config(), opts(task), true).map(s => s.id), expected);
   }
   const patch = buildPlan(device(), config(), opts("volte"), true).map(s => s.id);
-  for (const forbidden of ["unlock", "unroot", "relock", "root", "restore", "fw-download", "fw-flash"]) assert.ok(!patch.includes(forbidden), forbidden);
+  for (const forbidden of ["backup", "unlock", "unroot", "relock", "root", "restore", "fw-download", "fw-flash"]) assert.ok(!patch.includes(forbidden), forbidden);
   assert.deepEqual(buildPlan(device({ bootloader: "locked" }), config(), opts("root"), true), []);
 });
 test("update plan excludes other device writes and direct launch stays blocked", () => {
@@ -124,10 +124,10 @@ test("manual restore rejects incomplete, foreign and changed backups before any 
   w.groups = [{ items: [{ id: "dcim", checked: false }] }];
   const valid = { complete: true, deviceKey: "a".repeat(64), errors: [], items: [{ id: "dcim", status: "done" }] };
   for (const invalid of [{ ...valid, complete: false }, { ...valid, deviceKey: "b".repeat(64) }]) {
-    api.backupManifestCheck = async () => invalid;
+    api.backupManifestRead = async () => invalid;
     await w.loadRestoreSource("backup"); assert.equal(w.backupDir, ""); assert.equal(w.restoreSourceState, "failed");
   }
-  api.backupManifestCheck = async () => valid;
+  api.backupManifestRead = async () => valid; api.backupManifestCheck = async () => valid;
   await w.loadRestoreSource("backup"); assert.equal(w.restoreSourceState, "done"); assert.equal(w.groups[0].items[0].checked, true);
   let writes = 0; api.restoreRun = async () => { writes++; };
   api.backupManifestCheck = async () => ({ ...valid, complete: false });
@@ -139,4 +139,11 @@ test("workflow journals preserve mode/task, accept old records and reject extra 
   assert.ok(decodeJournal(JSON.stringify(j)));
   j.opts.manualTask = "restore"; assert.equal(decodeJournal(JSON.stringify(j)), null);
   delete j.opts.mode; delete j.opts.manualTask; assert.ok(decodeJournal(JSON.stringify(j)));
+});
+test("root manager change is unroot (wipe) then root with the other engine, without unlock or backup", () => {
+  const d = device({ rooted: true });
+  const plan = buildPlan(d, config(), { ...opts("root-manager"), rootEngine: "resukisu" }, true);
+  assert.deepEqual(plan.map(s => s.id), ["prep", "unroot", "root"]);
+  assert.match(plan[2].title, /ReSukiSU/);
+  assert.deepEqual(buildPlan(d, config(), opts("volte-rollback"), true).map(s => s.id), ["efs-rollback"]);
 });

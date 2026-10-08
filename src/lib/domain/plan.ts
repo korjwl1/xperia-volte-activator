@@ -12,6 +12,9 @@ export interface PlanOptions {
   manualTask?: ManualTask;
   modules?: RootModuleSelection;
   backupOnly?: boolean;
+  /** 처음 루팅할 엔진 — 없으면 Magisk. ReSukiSU는 폰에서 매니저로 직접 패치한다(2026-10-08 사용자 결정) */
+  rootEngine?: "magisk" | "resukisu";
+  resukisuTag?: string;
   unroot: boolean;
   relock: boolean;
   restore: boolean;
@@ -149,14 +152,14 @@ export function buildPlan(
   }
   if (relock) {
     steps.push({ id: "relock", kind: "relock", title: "부트로더 리락", desc: "순정 복원·현재 펌웨어 확인 후 리락 — 기기가 초기화됩니다", risk: "danger", wipe: true, estSec: 120 });
-    // 초기화 후 최종 확인·복구에 adb 연결이 필요
+    // 초기화 후 최종 확인·복원에 adb 연결이 필요
     steps.push(setupAfterWipe("setup-relock"));
   }
-  // 복구는 초기화가 실제로 일어나는 경우에만 (초기화 없이 복원하면 기존 데이터에 덮어씀)
+  // 복원은 초기화가 실제로 일어나는 경우에만 (초기화 없이 복원하면 기존 데이터에 덮어씀)
   if (wipes && opts.restore && hasBackup) {
-    steps.push({ id: "restore", kind: "restore", title: "복구", desc: "백업한 데이터를 기기로 복원", estSec: 1500 });
+    steps.push({ id: "restore", kind: "restore", title: "복원", desc: "백업한 데이터를 기기로 복원", estSec: 1500 });
   }
-  // 최종 확인은 리락·복구까지 끝난 뒤
+  // 최종 확인은 리락·복원까지 끝난 뒤
   if (patch || update !== null) {
     steps.push({ id: "final-verify", kind: "final-verify", title: "최종 확인", desc: "재부팅 후 VoLTE 작동 여부 확인", estSec: 300, manual: ["ims-check"] });
   }
@@ -176,19 +179,31 @@ function manualPlan(device: DeviceStatus, config: VolteConfig, opts: PlanOptions
   const task = opts.manualTask;
   if (!task || manualTaskProblem(task, device)) return [];
   if (task === "backup") return hasBackup ? finalize([backupStep()]) : [];
-  if (task === "restore") return hasBackup ? finalize([{ id: "restore", kind: "restore", title: "복구", desc: "선택한 기존 백업 데이터를 현재 기기에 복원", risk: "danger", estSec: 1500 }]) : [];
-  if (task === "unlock" || task === "relock") return finalize(bootloaderOnlyPlan(device, task, { ...opts, restore: false }, hasBackup));
+  if (task === "restore") return hasBackup ? finalize([{ id: "restore", kind: "restore", title: "복원", desc: "선택한 기존 백업 데이터를 현재 기기에 복원", risk: "danger", estSec: 1500 }]) : [];
+  // 수동 언락·리락은 백업을 함께 묶지 않는다 — 백업은 확인 화면의 [백업부터 하러 가기]로 따로 진행(2026-10-08 사용자 결정)
+  if (task === "unlock" || task === "relock") return finalize(bootloaderOnlyPlan(device, task, { ...opts, restore: false }, false));
   if (task === "volte") {
     // Keep only this task's SIM choices; stale firmware/post-processing cannot add other writes.
-    return buildPlan(device, { ...config, firmware: null, bootloaderAction: null }, { unroot: false, relock: false, restore: false }, hasBackup);
+    // 수동 작업은 백업을 함께 묶지 않는다(2026-10-08 사용자 결정) — 백업은 수동 [백업]으로 따로 진행
+    return buildPlan(device, { ...config, firmware: null, bootloaderAction: null }, { unroot: false, relock: false, restore: false }, false);
   }
   if (task === "verify") return [];
-  if (task === "root-manager" || task === "root-modules") return [];
+  // 되돌리기: 기록된 패치 전 모뎀 설정 사본으로 복원 → 재부팅. 언락·루팅은 다시 하지 않는다(루팅된 폰 필요)
+  if (task === "volte-rollback") return finalize([{ id: "efs-rollback", kind: "efs-rollback", title: "VoLTE 되돌리기", desc: "패치 전 모뎀 설정 사본으로 복원 · DIAG 연결 · 재부팅", risk: "danger", estSec: 300 }]);
+  if (task === "root-modules") return [];
+  // 매니저 변경 = 기존 루팅 해제(모듈·매니저 데이터 전부 삭제) → 다른 엔진으로 루팅. 언락·초기화 없음
+  if (task === "root-manager") {
+    const partition = deviceWorkflow(device.model, [], false).partition;
+    const target = opts.rootEngine === "resukisu" ? "ReSukiSU" : "Magisk";
+    return finalize([
+      { id: "prep", kind: "setup", title: "순정 이미지 준비", desc: "현재 기기·펌웨어와 같은 순정 부트 이미지 확인", estSec: 300, manual: ["firmware-select"] },
+      { id: "unroot", kind: "unroot", title: "기존 루팅 해제", desc: `모듈·매니저 데이터를 모두 지우고 순정 ${partition} 복원`, risk: "warn", estSec: 300 },
+      { id: "root", kind: "root", title: `${target}로 루팅`, desc: `${target}로 ${partition} 패치·기록·권한 확인`, risk: "warn", estSec: 600 },
+    ]);
+  }
   const partition = deviceWorkflow(device.model, [], false).partition;
   return finalize([
     { id: "prep", kind: "setup", title: "순정 이미지 준비", desc: "현재 기기·펌웨어와 같은 순정 부트 이미지 확인", estSec: 300, manual: ["firmware-select"] },
-    // 언루팅은 초기화가 없어 백업이 필요 없다(사용자 결정 2026-10-08)
-    ...(hasBackup && task !== "unroot" ? [backupStep()] : []),
     { id: task, kind: task, title: task === "root" ? "루팅" : "언루팅", desc: task === "root" ? `Magisk로 ${partition} 패치·기록·매니저 설치·권한 확인` : `순정 ${partition} 양 슬롯 복원·OS 복귀·루트 확인`, risk: "warn", estSec: 600 },
   ]);
 }
@@ -230,7 +245,7 @@ function bootloaderOnlyPlan(device: DeviceStatus, only: "unlock" | "relock", opt
     steps.push(setupAfterWipe("setup-relock"));
   }
   if (opts.restore && hasBackup) {
-    steps.push({ id: "restore", kind: "restore", title: "복구", desc: "백업한 데이터를 기기로 복원", estSec: 1500 });
+    steps.push({ id: "restore", kind: "restore", title: "복원", desc: "백업한 데이터를 기기로 복원", estSec: 1500 });
   }
   return steps;
 }

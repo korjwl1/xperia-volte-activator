@@ -1,0 +1,134 @@
+#-----------------------------------------------------------------------
+# 네트워크 핵심 설정 (2025년 한국 환경) - KT
+# overrideconfig (균형형 Balanced)
+# 작성: [소니코리아 사용자모임]
+# 일자: 2025년 8월 29일
+#
+# 설정 목적:
+#   - 원본 사업자 설정 유지
+#   - 핸드오버 안정성/배터리 소모 최소화
+#   - 국내: VoLTE 기본 / VoWiFi 정책은 원본값 유지
+#-----------------------------------------------------------------------
+#=======================================================================
+
+[QIPCALL:ImsMediaProfileConfig]
+# --- 국내 VoLTE: EVS 금지, AMR-WB만 ---
+AudioProfileVolte  = "AMR_WB_23_85;AMR_WB_12_65;AMR_4_75"
+# --- VoNR(5G IMS): EVS 우선, AMR-WB 백업 ---
+AudioProfileVoNR   = "EVS_SWB_24_4;EVS_NB_7_2;AMR_WB_23_85;AMR_WB_12_65"
+
+[QIPCALL:ImsRtcpConfig]                 ; (채용) 안정성에 도움, 배터리 영향 미미
+*rtcpLinkAlivenessTimer = 0
+*rtcpReportingIntervalInVideo = 1
+
+[QIPCALL:ImsVideoConfig]                ; (채용) 통화 변경 응답 일관성
+*vtImpactedByMobileData = 0
+*modifyRejectMethod = 603
+
+[QIPCALL:ImsVoiceConfig]                ; (채용) 표준 호환/프라이버시 기본값
+*Support199 = 0
+*earlyMediaDynamicSwitch = 0
+*earlyMediaDefaultAuthState = 3
+*emergCallCSOnly = 0
+*privacyType = 2
+*uriType = 1                             ; KT는 SIP URI 운용과 정합
+
+[QIPCALL:ImsVoiceQoSConfig]             ; (채용) QoS 선결조건 비활성(망 주도)
+*localQosResReqAudio = 0
+*qosPreconditionsEnabled = 0
+
+[QIPCALL:ImsVoiceSessionTimerConfig]    ; (채용) 세션 타이머 ON
+*sessionTimerEnabled = 1
+
+[QIPCALL:ImsVoiceSrvccConfig]           ; KT: 국내 3G 보유 → SRVCC 필요
+*aSrvccEnabled = 1
+*bSrvccEnabled = 1
+*midcallSrvccEnabled = 1
+
+[QIPCALL:ImsVoiceConfigExt]             ; (채용) 업그레이드 만료 응답 정합
+*send603repsonseForMTUpgradeExpiry = 1
+
+[Registration:CoreServiceGenericConfig]
+*reRegNeededforCIWLANToIWLANTransition = 0
+
+[Registration:RegistrationSettings]     ; (채용) 로밍 대비 2G/3G 측정 유지
+*enableRegistrationInLPM = 0
+*2G3GMeasurementsFeatureEnabled = 1
+
+[Registration:RegistrationTimers]       ; (채용) 재시도/가드 타이머
+*pdnRetryLongTimer = 5
+*wlanGaurdTimer = 30
+*wwanGaurdTimer = 30
+
+[SIPConfig:FeatureFlags]
+*IsRouteHeaderEnabled = 1               ; KT는 Route/Path 요구 망 많아 ON 권장
+
+[SIPConfig:IPSec]                       ; (채용) 보안 프로파일 기본
+*EncAlgo = 2                            ; AES-CBC
+*IntScheme = 1                          ; HMAC-SHA1-96
+
+[SIPConfig:Transport]
+*PreferredTransport = "UDP"
+*EnableTransportFallback = 1
+*TCPThresholdValue = 0
+
+[SIPConfig:Timers]
+*T1ms = 500
+*T2ms = 4000
+*Tfms = 32000
+*RegisterExpirySec = 3600
+*MinRegisterExpirySec = 600
+*NATKeepAliveIntervalSec = 20
+*NATKeepAliveMethod = "CRLF"
+
+[Ut:UtConfiguration]                    ; (채용) UT 안정성
+*BlockRequestIfNullRule = 0
+*maxResponseTimerValue = 10
+*pdnHysTimerValue = 5
+*UtOverTls = 1
+*UtPreferIPv6 = 1
+*UseHttpDigestAKA = 1
+*UtApn = "ims"
+*UtAuthRealmFromImsDomain = 1
+
+[IMS:EmergencyPolicy]
+*AllowE911OverWifi = 0                  ; 비상호는 셀룰러 고정
+
+# --------- 기본 HO(셀룰러 간) 안정성 ---------
+RanOut_S_Idle_CellPref_L_SNR = 24
+IMS_Handover_Enable             = 1
+IMS_Network_Preference_Mode     = 0       ; 국내: 셀룰러 우선
+IMS_HO_Evaluation_Timer_ms      = 3000
+IMS_HO_Hysteresis_Timer_ms      = 5000
+IMS_HO_RSRP_Hysteresis_dB       = 3
+IMS_HO_RSRQ_Hysteresis_dB       = 2
+IMS_HO_Min_Stay_Time_ms         = 8000
+IMS_HO_Backoff_Time_ms          = 10000
+IMS_HO_Suppress_After_Switch_ms = 6000
+IMS_ReReg_On_HO                 = 1
+IMS_Bearer_Check_Interval_ms    = 2000
+
+# --------- 국내 정책 반영 ---------
+*IsVoWifiEnabled = 0                    ; KT: 국내 VoWiFi 미제공
+*AllowVowifiWhenRoaming = 0             ; 로밍도 기본 불허(필요 시 로밍 전용 프로파일에서만 ON)
+*ImsInterRATHandoverPolicy = 1          ; LTE/NR 간 HO 허용
+
+# ----------------------------------------------------------------------
+# 3G CS Voice (WCDMA) HD Voice Enable (KT)
+# - Safe addition: unknown keys are ignored by vendor parser
+# - No impact on VoLTE/VoNR profiles
+AudioProfileCS_WCDMA      = "AMR_WB_23_85;AMR_WB_12_65;AMR_12_2"
+CS_WCDMA_AMR_WB_Enabled   = 1
+CS_WCDMA_AMR_NB_Enabled   = 1
+CS_WCDMA_Codec_Preference = "AMR_WB;AMR"
+CS_WCDMA_AMR_WB_DefaultMode_kbps = 23.85
+
+# Fallback when IMS not attached
+CS_Fallback_Policy        = 1        ; 0=OFF, 1=ON
+CS_VideoTelephony_Disable = 1        ; 3G CS domain = voice-only
+
+# Guard timers (ms)
+CS_CodecSwitch_EvalMs     = 1500
+CS_CodecSwitch_HysMs      = 2000
+# ----------------------------------------------------------------------
+

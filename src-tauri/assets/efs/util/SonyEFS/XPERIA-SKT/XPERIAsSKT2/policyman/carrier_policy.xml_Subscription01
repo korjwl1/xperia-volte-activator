@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+carrier_policySK.xml 최종 배포본 (Final Recommended)
+carrier_policySK.xml Final Release (Recommended)
+
+[소니코리아 사용자모임 / Sony Korea User Group]
+2025-08-27 10:21:54
+
+설정 목적: 한국 내 SKT 환경에 최적화된 LTE/5G NSA + 로밍 SA/VoNR 허용
+Purpose: Optimize for SKT in Korea (LTE/5G NSA) + allow SA/VoNR on roaming
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-->
+
+<!--
+  SKT 최종 권장본 (생성: 2025-08-27 10:16:03)
+  - 국내: 한국(450)에서 설정
+  - 로밍: 비-450에서 설정
+  - 국내 SA/VoNR 비활성, 로밍 SA/VoNR 허용
+  - NR-DC 밴드 선언(특히 로밍)
+-->
+<policy name="SKT" changelist="$Change: SKT-2025-07 $" policy_ver="125.2.2">
+  <initial>
+    <mcc_list name="home_mccs">450</mcc_list>
+    <mcc_list name="5g_roaming_partners">
+      262,208,228,232,234,235,272,274,278,280,282,283,284,286,288,289,294,295,297,
+302,308,310,311,312,313,314,315,316,330,332,334,338,340,342,344,346,350,352,
+354,356,358,360,362,363,364,365,366,368,370,372,374,376,400,401,402,404,405,
+406,410,412,413,414,415,416,417,418,419,420,421,422,424,425,426,427,428,429,
+430,431,432,434,436,437,438,440,441,450,452,454,455,456,457,466,467,470,472,
+502,505,510,514,515,520,525,528,530,534,535,536,537,539,540,541,542,543,544,
+545,546,547,548,549,550,551,552,553,554,555,556,557,558,559,560,561,562,563,
+564,565,566,567,568,569,570,571,572,573,574,575,576,577,578,579,580,581,582,
+583,584,585,586,587,588,589,590,591,592,593,594,595,596,597,598,599
+    </mcc_list>
+
+    <define_fullrat_config>
+      <!-- 국내는 NSA만 기본 허용 -->
+      <rat_capability base="current">
+        <include>5G-NSA</include>
+      </rat_capability>
+    </define_fullrat_config>
+
+    <feature single_sim="normal">dualmmode</feature>
+    <!-- 국내 VoNR 비활성 -->
+    <disable_reason which="VoNR" set="HOME_NETWORK"/>
+<!-- 홈 밴드셋: 한국 -->
+<rf_band_list name="rf_bands_home">
+  <gw_bands base="hardware"/>
+  <lte_bands base="hardware"/>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"/>
+  <nr5g_nsa_bands base="hardware"/>
+  <!-- NSA(=EN-DC): LTE+NR 결합, 국내 상시 서비스 중 -->
+  <!-- NR-DC는 국내 NSA만 운용 시 생략 가능 -->
+
+  <nr5g_nrdc_bands base="none"/></rf_band_list>
+  <!-- 로밍 밴드셋: 전부 허용 (NR-DC 포함) -->
+  <rf_band_list name="rf_bands_roaming">
+    <gw_bands base="hardware"/>
+    <lte_bands base="hardware"/>
+    <tds_bands base="hardware"/>
+    <nr5g_sa_bands base="hardware"/>
+    <nr5g_nsa_bands base="hardware"/>
+    <nr5g_nrdc_bands base="hardware"/>
+  </rf_band_list>
+<!-- SA 활성 화이트리스트(국내): 필요 시 아래 PLMN을 추가하면 SA/VoNR 자동 허용됨 -->
+    <!-- 예: 450/05 -->
+    <mccmnc_list name="sa_home_plmns">
+      
+    </mccmnc_list>
+</initial>
+<if>
+  <any_of>
+    <not><phone_operating_mode>ONLINE</phone_operating_mode></not>
+    <not><have_location/></not>
+  </any_of>
+  <then><stop/></then>
+</if>
+
+<svc_mode>FULL</svc_mode>
+
+<!-- 국내(450): SKT/KT - 3G/LTE/5G-NSA, SA/VoNR 비활성 -->
+<if>
+  <cond><location_mcc_in list="home_mccs"/></cond>
+  <then>
+    <rat_capability base="none">
+      <include>WCDMA LTE 5G-NSA</include>
+      <exclude>GSM</exclude>
+    </rat_capability>
+    <rf_bands list="rf_bands_home"/>
+    <disable_reason which="SA" set="HOME_NETWORK"/>
+    <disable_reason which="VoNR" set="HOME_NETWORK"/>
+  
+    <network_selection_priority>5G-NSA,LTE,WCDMA,GSM</network_selection_priority>
+    <voice_solution_priority>VoLTE,CSVOICE</voice_solution_priority>
+    <volte_fallback enabled="true"/></then>
+  <else>
+    <!-- 로밍: 모든 기술 허용 -->
+    <rat_capability base="none">
+      <include>GSM WCDMA LTE 5G-NSA 5G-SA</include>
+    </rat_capability>
+    <rf_bands list="rf_bands_roaming"/>
+    <network_selection_priority>5G-SA,5G-NSA,LTE,WCDMA,GSM</network_selection_priority>
+    <voice_solution_priority>VoNR,VoLTE,CSVOICE</voice_solution_priority>
+    <fallback_to_lte enabled="true" timeout="30000"/>
+    <vonr_fallback enabled="true"/>
+    <csfb_enabled roaming="true"/>
+  </else>
+</if>
+<!-- 5G 로밍 파트너: MCC 기준 (serving_plmn_in → location_mcc_in 교정) -->
+<if>
+  <cond>
+    <and>
+      <not><location_mcc_in list="home_mccs"/></not>
+      <location_mcc_in list="5g_roaming_partners"/>
+    </and>
+  </cond>
+  <then>
+    <rat_capability base="none">
+      <include>LTE 5G-NSA 5G-SA</include>
+    </rat_capability>
+    <enable_reason which="VoNR" set="ROAMING_PARTNER"/>
+    <network_selection_priority>5G-SA,5G-NSA,LTE</network_selection_priority>
+    <fallback_to_lte enabled="true" timeout="30000"/>
+    <vonr_fallback enabled="true"/>
+    <volte_fallback enabled="true"/>
+  </then>
+</if>
+
+<volte_roaming_support enabled="true"/>
+<vonr_roaming_support enabled="true"/>
+<csfb_roaming_support enabled="true"/>
+<data_roaming_continuity enabled="true"/>
+<emergency_call_fallback enabled="true"/>
+<network_scan_interval roaming="300000"/>
+<roaming_data_persistence enabled="true" timeout="120000"/>
+<!-- 국내 SA 준비 완료 시(화이트리스트 매칭) SA/VoNR 허용 규칙 -->
+<if>
+  <cond>
+    <and>
+      <location_mcc_in list="home_mccs"/>
+      <serving_plmn_in list="sa_home_plmns"/>
+    </and>
+  </cond>
+  <then>
+    <!-- RAT: SA 추가 허용 -->
+    <rat_capability base="none">
+      <include>WCDMA LTE 5G-NSA 5G-SA</include>
+      <exclude>GSM</exclude>
+    </rat_capability>
+
+    <!-- 밴드셋: 필요 시 SA 포함 밴드셋 지정 (현재는 로밍 밴드셋을 재사용) -->
+    <rf_bands list="rf_bands_roaming"/>
+
+    <!-- SA/VoNR 활성화 (이전 disable_reason 덮어쓰기) -->
+    <enable_reason which="SA" set="HOME_NETWORK_SA_READY"/>
+    <enable_reason which="VoNR" set="HOME_NETWORK_SA_READY"/>
+
+    <!-- 우선순위 조정 -->
+    <network_selection_priority>5G-SA,5G-NSA,LTE,WCDMA,GSM</network_selection_priority>
+    <voice_solution_priority>VoNR,VoLTE,CSVOICE</voice_solution_priority>
+
+    <!-- 폴백/안정성 옵션 -->
+    <fallback_to_lte enabled="true" timeout="30000"/>
+    <vonr_fallback enabled="true"/>
+    <volte_fallback enabled="true"/>
+  </then>
+</if>
+</policy>

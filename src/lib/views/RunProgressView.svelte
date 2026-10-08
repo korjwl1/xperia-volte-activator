@@ -183,7 +183,7 @@
           <li class="break-all">{app.package}</li>
         {/each}
       </ul>
-      <p>불완전한 데이터를 복구하지 않도록 해당 앱의 PC 앱 데이터 사본을 모두 삭제했습니다. APK 백업은 삭제하지 않았으므로, APK도 백업했다면 앱 재설치는 가능합니다.</p>
+      <p>불완전한 데이터를 복원하지 않도록 해당 앱의 PC 앱 데이터 사본을 모두 삭제했습니다. APK 백업은 삭제하지 않았으므로, APK도 백업했다면 앱 재설치는 가능합니다.</p>
       <p class="text-muted-foreground">필요한 데이터는 해당 앱에서 별도로 내보내거나 동기화해 주세요. 이 안내를 닫아도 다음 작업은 시작되지 않습니다.</p>
       <div class="flex justify-end"><Button onclick={() => wizard.acknowledgeBackupOmissions()}>확인</Button></div>
     </div>
@@ -216,10 +216,10 @@
         </details>
       {/if}
       {#if continueAsk}
-        <p class="text-destructive">백업되지 않은 항목이 있는 채로 초기화 단계로 넘어갑니다. 위에 표시된 항목은 초기화 후 복구할 수 없습니다.</p>
+        <p class="text-destructive">백업되지 않은 항목이 있는 채로 초기화 단계로 넘어갑니다. 위에 표시된 항목은 초기화 후 복원할 수 없습니다.</p>
         <div class="flex justify-end gap-2">
           <Button variant="outline" onclick={() => { continueAsk = false; }}>취소</Button>
-          <Button variant="destructive" onclick={() => { continueAsk = false; wizard.continueAfterFailure(); }}>복구 불가를 이해하고 계속</Button>
+          <Button variant="destructive" onclick={() => { continueAsk = false; wizard.continueAfterFailure(); }}>복원 불가를 이해하고 계속</Button>
         </div>
       {:else}
         <div class="flex flex-wrap justify-end gap-2">
@@ -242,7 +242,7 @@
   <BackupNotice />
 {:else if wizard.manualCurrent}
   {@const guide = GUIDES[wizard.manualCurrent.id]}
-  <Modal title={wizard.manualCurrent.title} onClose={() => { if (wizard.manualCanDismiss && wizard.manualCurrent?.id !== "smsie-export") wizard.abort(); }} class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+  <Modal title={wizard.manualCurrent.title} onClose={() => { if (wizard.manualCanDismiss) abortAsk = true; }} class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
     <Card class="w-full max-w-lg elev-3 max-h-[calc(100vh-2rem)] flex flex-col">
       <CardHeader class="shrink-0">
         <CardTitle class="text-base">{wizard.manualCurrent.title}</CardTitle>
@@ -404,6 +404,9 @@
         {/if}
         {#if wizard.manualCurrent.id === "ims-precheck" || wizard.manualCurrent.id === "ims-check"}
           <CommunicationPanel snapshot={wizard.communicationLatest} loading={wizard.communicationLoading} error={wizard.communicationError} slots={wizard.communicationSlots} calls={wizard.callChecks} showCalls onCallChange={(slot, item, checked) => wizard.setCallCheck(slot, item, checked)} />
+        {/if}
+        {#if wizard.manualCurrent.id === "resukisu-patch" && wizard.resukisuHint}
+          <div class="rounded-lg bg-muted px-3 py-2 text-[12px] font-medium text-foreground">{wizard.resukisuHint}</div>
         {/if}
         {#if wizard.manualCurrent.id === "su-grant" && wizard.suGrantHint}
           <div class="rounded-lg bg-muted px-3 py-2 text-[12px] font-medium text-foreground">{wizard.suGrantHint}</div>

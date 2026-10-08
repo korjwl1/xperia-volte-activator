@@ -9,7 +9,7 @@ import { firmwareUpdateProblems } from "$lib/domain/verify";
 import { SIMULATED_RUN, REAL_STEPS } from "$lib/data/runMode";
 import { buildFeatureProblem, executionPlanProblem, hasLiveActions, liveStepEnabled } from "$lib/domain/execution";
 import { EFS_PRESET_MODE, EFS_PRESET_VERSION, efsPreset } from "$lib/data/efsPresets";
-import type { BackupProgress, BackupSummary, EfsConfiguration } from "$lib/types";
+import type { BackupProgress, BackupSummary, EfsConfiguration, DeviceRecord, VoltePatchRecord } from "$lib/types";
 import { AsyncQueue } from "$lib/domain/asyncQueue";
 import { decodeJournal } from "$lib/domain/journal";
 import { waitUntil } from "$lib/domain/waitUntil";
@@ -21,10 +21,10 @@ import { requireResult } from "$lib/domain/rootTools";
 /** 목 모드 언락 코드 예시값 — 16자리 16진수 형식만 맞춘 가짜 값(실전 fastboot에서는 채우지 않음) */
 const MOCK_UNLOCK_CODE = "0x1234567890ABCDEF";
 
-export type WizardView = "device" | "mode-select" | "manual-tasks" | "communication" | "root-tools" | "warning" | "step1" | "step2" | "step3" | "step4";
+export type WizardView = "device" | "settings" | "mode-select" | "manual-tasks" | "communication" | "root-tools" | "warning" | "step1" | "step2" | "step3" | "step4";
 
 export const MACRO_STEPS = [
-  { id: 1, view: "step1" as const, label: "사전 옵션 선택" },
+  { id: 1, view: "step1" as const, label: "VoLTE 통신사 선택" },
   { id: 2, view: "step2" as const, label: "작업 옵션 선택" },
   { id: 3, view: "step3" as const, label: "VoLTE 패치 진행" },
   { id: 4, view: "step4" as const, label: "점검 및 마무리" },
@@ -59,6 +59,15 @@ const MANUAL_TEXT: Record<ManualId, Omit<ManualPrompt, "id">> = {
       "폰 화면은 자동으로 켜집니다 — 잠겨 있으면 잠금을 풀어 주세요. 잠금이 풀리면 루트 권한을 요청합니다",
       "Magisk 슈퍼유저 요청 창(Shell)이 뜨면 10초 안에 '허용'을 누릅니다",
       "시간이 지나거나 거부하면 Magisk가 거부를 기억해 창이 다시 뜨지 않습니다 — Magisk 앱 → 슈퍼유저 탭에서 Shell을 켜면 자동으로 진행합니다",
+    ],
+  },
+  "resukisu-patch": {
+    title: "ReSukiSU로 부트 이미지 패치 (폰 조작)",
+    steps: [
+      "ReSukiSU 매니저 설치와 순정 init_boot 이미지 전송은 자동으로 끝났습니다 — 폰 잠금을 풀어 주세요",
+      "폰에서 ReSukiSU 앱을 열고 홈 화면의 [설치] → [파일 선택 후 패치]를 고릅니다",
+      "Download 폴더의 xvolte_stock_init_boot_….img 파일을 선택하고 패치를 시작합니다(파티션·KMI는 앱이 고른 기본값 유지)",
+      "패치가 끝나 Download에 kernelsu_patched_….img가 생기면 자동으로 받아 검사하고 다음으로 진행합니다",
     ],
   },
   "oem-toggle": {
@@ -171,9 +180,9 @@ async function sha256Hex(text: string, bytes?: number): Promise<string> {
   return [...digest.slice(0, bytes ?? digest.length)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** 백업·복구 진행 이벤트 → 단계 진행률 (항목 순서 기준, 끝나기 전에는 99%까지).
+/** 백업·복원 진행 이벤트 → 단계 진행률 (항목 순서 기준, 끝나기 전에는 99%까지).
  *  한 항목 안의 단계(목록 확인 → 원본 속성 → 복사)와 재개 전 PC 검사에 구간을 따로 줘서 뒤로 가지 않게 한다.
- *  mode: "run" 새 백업·복구 / "resume" 재개(앞 10%는 PC 검사) / "verify" PC 검사만. 계산할 수 없는 이벤트는 NaN(현재 값 유지) */
+ *  mode: "run" 새 백업·복원 / "resume" 재개(앞 10%는 PC 검사) / "verify" PC 검사만. 계산할 수 없는 이벤트는 NaN(현재 값 유지) */
 export function itemProgress(p: BackupProgress, itemOrder: string[], mode: "run" | "resume" | "verify" = "run"): number {
   const ratio = p.bytesTotal > 0 ? p.bytesDone / p.bytesTotal : p.filesTotal > 0 ? p.filesDone / p.filesTotal : 0;
   const idx = itemOrder.indexOf(p.itemId);
@@ -305,7 +314,11 @@ export class Wizard {
   get taskTitle(): string {
     return this.mode === "manual" ? MANUAL_TASKS.find(t => t.id === this.manualTask)?.title ?? "수동 진행" : this.mode === "update" ? "업데이트" : "자동 진행";
   }
-  get optionsPrevious(): WizardView { return this.mode === "manual" ? (this.manualTask === "volte" ? "step1" : "manual-tasks") : "step1"; }
+  get optionsPrevious(): WizardView { return this.mode === "manual" ? (this.manualTask === "volte" ? "step1" : this.backupFromDevice ? "device" : "warning") : "step1"; }
+  /** 앱 시작 후 첫 기기 조회가 끝났는지(성공·실패 무관) — 시작 스플래시를 닫는 실제 준비 신호 */
+  startupReady = $state(false);
+  /** 장치 화면의 [백업만]으로 바로 백업 선택에 들어왔는지 — [이전]의 목적지 */
+  backupFromDevice = $state(false);
 
   chooseMode(mode: WorkflowMode) {
     if (!this.device || this.device.state !== "device") return;
@@ -322,14 +335,15 @@ export class Wizard {
 
   async chooseManualTask(task: ManualTask) {
     if (this.busy > 0 || this.runInDanger || this.runUnfinished || manualTaskProblem(task, this.device)) return;
-    this.resetExecution(); this.runSteps = []; this.steps = [];
+    this.resetExecution(); this.runSteps = []; this.steps = []; this.backupFromDevice = false;
     this.opts = { mode: "manual", manualTask: task, backupOnly: task === "backup", unroot: false, relock: false, restore: false };
     this.volteConfig = defaultVolteConfig();
     if (task === "unlock" || task === "relock") this.volteConfig.bootloaderAction = task;
     this.optionsFor = null; this.omdAck = false; this.riskAck = false;
     this.backupDir = ""; this.backupSummary = null;
-    this.view = task === "root-manager" || task === "root-modules" ? "root-tools" : task === "verify" ? "communication" : task === "backup" ? "step2" : "warning";
-    if (task === "backup") await this.checkJournal();
+    // 백업도 작업 전 확인(백업 전용 안내)을 거친다 — 이어서 할 기록 확인은 확인 화면의 [다음]에서 한다
+    // 루팅 매니저 변경은 "기존 루팅 해제(모듈 전부 삭제) → 다른 엔진으로 루팅"인 일반 계획이다(2026-10-08 사용자 결정)
+    this.view = task === "root-modules" ? "root-tools" : task === "verify" ? "communication" : "warning";
   }
 
   /** Finished single task returns to the grid without carrying the last task's inputs. */
@@ -348,16 +362,12 @@ export class Wizard {
     this.opts = { mode: "manual", manualTask: "backup", unroot: false, relock: false, restore: false, backupOnly: true };
     this.volteConfig = defaultVolteConfig();
     this.optionsFor = null;
-    this.journalReadBlocked = true;
+    this.backupFromDevice = true;
     this.pendingJournal = null;
     this.view = "step2";
-    const gen=this.runGen;
-    const pending=await this.checkJournal();
-    if (gen!==this.runGen) return;
-    if (!pending) {
-      this.backupDir = "";
-      this.backupSummary = null;
-    }
+    // 끝나지 않은 작업은 앱 시작 직후 한 번만 묻는다(2026-10-08 사용자 결정) — 작업을 고를 때는 묻지 않는다
+    this.backupDir = "";
+    this.backupSummary = null;
   }
 
   /** 실행 진행 상태 초기화 — 새 실행·재개·세션 변경·처음으로 공통 (실행 결과물·입력값은 유지) */
@@ -404,7 +414,7 @@ export class Wizard {
   /** 기기 세션 초기화 — 실행 상태·결과물·실행 중 입력값 전부 (2단계 선택값은 ensureOptions가 기기별로 관리) */
   private resetSession() {
     this.resetExecution();
-    this.restoreSourceRequest++; this.restoreSourceState = "idle"; this.restoreSourceError = "";
+    this.restoreSourceRequest++; this.restoreSourceState = "idle"; this.restoreSourceError = ""; this.restoreItems = [];
     // 기기 쓰기가 아직 끝나지 않았으면 PC 보호는 그 작업이 끝날 때 해제된다(dispatchEngine)
     this.communicationBefore = null;
     if (this.dangerBusy === 0) this.setGuard(false);
@@ -463,7 +473,7 @@ export class Wizard {
     this.moduleInstructionResolve = null; this.moduleInstruction = ""; resolve?.(completed);
   }
   get backupLive(): boolean { return REAL_STEPS.backup || this.opts.backupOnly === true; }
-  get executionFlags() { return this.opts.backupOnly ? { backup: true, restore: false, fastboot: false, relock: false, root: false, rootTools: false, verify: false, efs: false } : REAL_STEPS; }
+  get executionFlags() { return this.opts.backupOnly ? { backup: true, restore: false, fastboot: false, relock: false, root: false, rootTools: false, volteRollback: false, verify: false, efs: false } : REAL_STEPS; }
   backupPath = $state("");
   sizes: Record<string, number> | null = $state(null); // storage_sizes 실측
   sizesState = $state<LoadState>("idle");
@@ -497,8 +507,11 @@ export class Wizard {
       ...g,
       items: g.items.map((i) => ({ ...i, checked: defaultOn })),
     }));
-    this.opts = { mode: this.opts.mode, manualTask: this.opts.manualTask, unroot: false, relock: false, restore: this.mode !== "manual" && this.mode !== "update" && defaultOn && !backupOnly, backupOnly };
-    if (measure) void this.loadMeasurements(key, d.serial);
+    const switching = this.opts.manualTask === "root-manager";
+    const rootEngine = switching ? (d.rootEngine === "magisk" ? "resukisu" : "magisk") : this.opts.rootEngine;
+    this.opts = { mode: this.opts.mode, manualTask: this.opts.manualTask, unroot: false, relock: false, restore: this.mode !== "manual" && this.mode !== "update" && defaultOn && !backupOnly, backupOnly, rootEngine, resukisuTag: this.opts.resukisuTag };
+    // 폰 용량은 백업 목록에만 쓴다 — 수동 모드는 백업 작업일 때만 잰다(복원은 백업 폴더 기록, 나머지는 백업 없음)
+    if (measure && (this.mode !== "manual" || this.manualTask === "backup")) void this.loadMeasurements(key, d.serial);
   }
 
   private async loadMeasurements(key: string, serial?: string) {
@@ -543,33 +556,40 @@ export class Wizard {
   finished = $state(false);
   awaitingNext = $state<string | null>(null);
   private autoAdvance: { gen: number; cursor: number } | null = null;
-  /** 백업·복구 중 현재 작업 표시(예: "APK 파일 [12 / 92]") — 작업이 끝나면 비운다 */
+  /** 백업·복원 중 현재 작업 표시(예: "APK 파일 [12 / 92]") — 작업이 끝나면 비운다 */
   transferStatus = $state("");
   backupOmissionNotice = $state(false);
   backupOmittedApps = $state<NonNullable<BackupSummary["omittedApps"]>>([]);
   get nextStepTitle(): string { return this.runSteps[this.cursor]?.title ?? "완료"; }
   manualCurrent: ManualPrompt | null = $state(null);
-  /** 실전 백업 결과(완결 게이트·복구에 사용) — this.backupLive 전환 시에만 채워짐 */
+  /** 실전 백업 결과(완결 게이트·복원에 사용) — this.backupLive 전환 시에만 채워짐 */
   backupSummary: BackupSummary | null = $state(null);
-  /** 실전 백업이 만든 폴더(manifest 위치) — 재시도 이어받기·복구·journal에 저장 */
+  /** 실전 백업이 만든 폴더(manifest 위치) — 재시도 이어받기·복원·journal에 저장 */
   backupDir = $state("");
   restoreSourceState = $state<LoadState>("idle");
   restoreSourceError = $state("");
+  /** 고른 백업 폴더에서 인식한 복원 가능 항목(매니페스트 기록) — 복원 화면 목록의 원천 */
+  restoreItems = $state<BackupSummary["items"]>([]);
   private restoreSourceRequest = 0;
 
+  /** 복원 폴더 선택 — 매니페스트만 빠르게 읽어 원본 기기·항목을 확인한다(전수 해시 검사는 실행 직전) */
   async loadRestoreSource(path: string) {
-    this.backupDir = ""; this.backupSummary = null;
+    this.backupDir = ""; this.backupSummary = null; this.restoreItems = [];
     this.restoreSourceState = "loading"; this.restoreSourceError = "";
     const request = ++this.restoreSourceRequest;
     const gen = this.runGen;
     const sourceDevice = this.device?.serial;
     try {
-      const summary = await api.backupManifestCheck(path);
+      const summary = await api.backupManifestRead(path);
       const key = await this.deviceKeyHex();
       if (request !== this.restoreSourceRequest || gen !== this.runGen || sourceDevice !== this.device?.serial) return;
-      if (!summary?.complete || !key || summary.deviceKey?.toLowerCase() !== key) throw new Error("백업 파일·해시가 완전하고 원본 기기가 현재 기기와 같아야 합니다");
-      this.backupSummary = summary; this.backupDir = path;
-      for (const group of this.groups) for (const item of group.items) item.checked = summary.items.some(entry => entry.id === item.id && entry.status === "done");
+      if (!summary) throw new Error("이 앱이 만든 백업 폴더가 아닙니다(manifest.json 없음) — xva-<모델>-backup 폴더를 선택해 주세요");
+      if (!key || summary.deviceKey?.toLowerCase() !== key) throw new Error("다른 기기에서 만든 백업입니다 — 같은 폰의 백업만 복원할 수 있습니다");
+      if (!summary.complete) throw new Error("끝까지 완료되지 않은 백업입니다 — 백업을 이어서 완료한 뒤 복원해 주세요");
+      const done = summary.items.filter(entry => entry.status === "done");
+      if (done.length === 0) throw new Error("복원할 수 있는 항목이 없는 백업입니다");
+      this.backupSummary = summary; this.backupDir = path; this.restoreItems = summary.items;
+      for (const group of this.groups) for (const item of group.items) item.checked = done.some(entry => entry.id === item.id);
       this.restoreSourceState = "done";
     } catch (error) {
       if (request !== this.restoreSourceRequest || gen !== this.runGen) return;
@@ -578,19 +598,35 @@ export class Wizard {
     }
   }
 
-  private async validateRestoreSource(path: string): Promise<boolean> {
+  /** 복원 직전 전수 검사 — 백업 파일 크기·해시를 모두 대조한다(용량에 따라 수십 분). 진행률을 단계에 표시한다 */
+  private async validateRestoreSource(path: string, cur?: RunStep): Promise<boolean> {
     const gen = this.runGen;
+    const runId = crypto.randomUUID();
+    const order = this.checkedBackupItems();
+    if (cur) this.log(cur, "[PC 검사] 복원 전에 백업 파일 전체의 크기·해시를 확인합니다 — 용량에 따라 오래 걸릴 수 있습니다");
+    const un = cur ? await api.onBackupProgress(p => {
+      if (gen !== this.runGen) return;
+      this.transferStatus = transferStatusText(p);
+      if (p.file && p.filesDone === p.filesTotal) this.log(cur, `[PC 검사] ${p.file}`);
+    }) : () => {};
     try {
-      const summary = await api.backupManifestCheck(path);
+      const summary = await api.backupManifestCheck(path, runId);
       const key = await this.deviceKeyHex();
       if (gen !== this.runGen) return false;
-      if (!summary?.complete || !key || summary.deviceKey?.toLowerCase() !== key) throw new Error("복구 백업과 현재 기기의 파일·해시·원본 기기 검증 실패");
-      if (this.checkedBackupItems().some(id => !summary.items.some(item => item.id === id && item.status === "done"))) throw new Error("선택한 복구 항목이 검증된 백업에 없습니다");
+      if (!summary?.complete || !key || summary.deviceKey?.toLowerCase() !== key) throw new Error("복원 백업과 현재 기기의 파일·해시·원본 기기 검증 실패");
+      // 나중 백업에서 선택을 뺀 문자·통화 기록은 완결 검사 대상이 아니다 — 이전에 받은 파일은 복원 단계가 따로 검사한다
+      const verified = (id: string) => summary.items.some(item => item.id === id && item.status === "done")
+        || ((id === "sms" || id === "calllog") && this.restoreItems.some(item => item.id === id && item.status === "done"));
+      if (order.some(id => !verified(id))) throw new Error("선택한 복원 항목이 검증된 백업에 없습니다");
+      if (cur) this.log(cur, `[PC 검사] 완료 — 파일 ${summary.files.toLocaleString()}개 확인`);
       this.backupSummary = summary;
       return true;
     } catch (error) {
       if (gen === this.runGen) this.failStep(error instanceof Error ? error.message : String(error));
       return false;
+    } finally {
+      un();
+      if (cur) this.transferStatus = "";
     }
   }
   /** 완료 화면 [백업 파일 삭제] 상태 */
@@ -637,7 +673,6 @@ export class Wizard {
 
   launch() {
     if (this.mode === "automatic" && this.moduleSetProblem) this.clearModuleSets();
-    if (selectedModuleSets(this.opts.modules).length && !this.moduleSelection.settingsAck) return;
     if (this.mode === "update" || this.plan.some(step => step.enabled && step.id === "fw-flash")) return;
     if (this.mode === "manual" && this.manualTask === "restore" && (!this.backupDir || this.restoreSourceState !== "done")) return;
     if (this.journalReadBlocked || this.pendingJournal || this.plan.length === 0) return;
@@ -688,7 +723,18 @@ export class Wizard {
     return key;
   }
 
-  /** 경고 페이지 [다음] — 같은 폰의 끝나지 않은 작업이 있으면 pendingJournal에 두고 true */
+  /** 앱 시작 직후(스플래시 뒤) 연결된 폰의 끝나지 않은 작업을 한 번만 확인한다(2026-10-08 사용자 결정).
+   *  작업을 고르는 중간에는 묻지 않는다 — 새 작업을 시작하면 그 작업의 기록이 이전 기록을 대신한다 */
+  private startupJournalChecked = false;
+  /** 시작 팝업에서 [이어서 진행]을 골랐지만 위험 안내 동의가 먼저 필요할 때 — 안내의 [다음]에서 바로 이어 간다 */
+  resumeAfterWarning = $state<RunJournal | null>(null);
+  async checkStartupJournal() {
+    if (this.startupJournalChecked || !this.device?.serial || this.device.state !== "device") return;
+    this.startupJournalChecked = true;
+    await this.checkJournal();
+  }
+
+  /** 같은 폰의 끝나지 않은 작업이 있으면 pendingJournal에 두고 true */
   async checkJournal(): Promise<boolean> {
     const gen = this.runGen;
     const key = await this.journalKeyReady();
@@ -705,7 +751,7 @@ export class Wizard {
     if (raw === null) return false;
     const journal = decodeJournal(raw);
     if (!journal) {
-      // 읽을 수 없는 기록(손상·이전 형식)은 새 실행이 덮어쓰기 전에 보관해 둔다 (백업 폴더 경로 등 복구 단서 보존)
+      // 읽을 수 없는 기록(손상·이전 형식)은 새 실행이 덮어쓰기 전에 보관해 둔다 (백업 폴더 경로 등 복원 단서 보존)
       const archived = await this.archiveJournal(key, "discarded");
       return gen !== this.runGen || !archived;
     }
@@ -719,8 +765,8 @@ export class Wizard {
     return true;
   }
 
-  /** 백업을 지우면 되돌릴 수 없는 데이터가 남는지 — 초기화 단계가 끝났는데 복구가 실제로 끝나지 않은 경우.
-   *  초기화가 없었으면 폰 데이터가 그대로라 해당 없음. 백업은 실전·복구는 시뮬레이션이면 실제로 복원된 것이 아니다 */
+  /** 백업을 지우면 되돌릴 수 없는 데이터가 남는지 — 초기화 단계가 끝났는데 복원이 실제로 끝나지 않은 경우.
+   *  초기화가 없었으면 폰 데이터가 그대로라 해당 없음. 백업은 실전·복원은 시뮬레이션이면 실제로 복원된 것이 아니다 */
   get backupStillNeeded(): boolean {
     const wiped = this.runSteps.some((r) => r.status === "done" && this.steps.find((s) => s.id === r.id)?.wipe);
     if (!wiped) return false;
@@ -763,19 +809,25 @@ export class Wizard {
     this.backupDir = "";
     this.patchedImage = "";
     this.backupSummary = null;
-    this.view = this.opts.backupOnly || (this.mode === "manual" && this.manualTask !== "volte") ? "step2" : "step1";
+    if (this.view !== "device") this.view = this.opts.backupOnly || (this.mode === "manual" && this.manualTask !== "volte") ? "step2" : "step1";
   }
 
   /** [이어서 진행] — 선택했던 옵션·진행 상황을 되살리고 실행 화면으로 (자동 시작하지 않음) */
   resumeJournal() {
     const j = this.pendingJournal;
     if (!j) return;
+    // 시작 화면에서 고른 경우 이 폰으로 세션을 연다(새 앱이라 지울 상태가 없으므로 초기화하지 않는다)
+    if (this.view === "device" && this.device) this.sessionFor = `${this.device.model}|${this.device.serial ?? this.device.serialMasked}`;
     if (!j.opts.backupOnly && (!this.omdAck || !this.riskAck)) {
+      // 안내 문구가 이어 갈 작업에 맞게 보이도록 작업 종류를 먼저 맞춘다
+      this.opts = { ...this.opts, mode: j.opts.mode ?? "automatic", manualTask: j.opts.manualTask };
+      this.resumeAfterWarning = j;
       this.view = "warning";
-      this.journalError = "이전 작업을 이어서 진행하려면 위험 안내의 두 항목을 먼저 확인해 주세요";
+      this.journalError = "이전 작업을 이어서 하려면 아래 안내를 확인하고 [다음]을 눌러 주세요";
       this.pendingJournal = null;
       return;
     }
+    this.resumeAfterWarning = null;
     this.resetExecution();
     this.volteConfig = { ...defaultVolteConfig(), ...j.config };
     this.opts = { ...j.opts, mode: j.opts.mode ?? (j.opts.backupOnly || j.config.bootloaderAction ? "manual" : "automatic"), manualTask: j.opts.manualTask ?? (j.opts.backupOnly ? "backup" : j.config.bootloaderAction ?? undefined) };
@@ -1060,7 +1112,7 @@ export class Wizard {
       const caps = await this.track(api.rootToolsCapabilities());
       if (gen !== this.runGen) return;
       if (!caps.ok || !caps.value.writeEnabled) return this.failStep(caps.ok ? "이 빌드에는 root-tools-write 기능이 없습니다" : caps.error);
-      if (!this.moduleSelection.settingsAck || this.moduleSetProblem) return this.failStep(this.moduleSetProblem ?? "모듈 세트의 매니저 설정을 확인하세요");
+      if (this.moduleSetProblem) return this.failStep(this.moduleSetProblem);
     }
     const planProblem = executionPlanProblem(this.runSteps.map(s => s.id), this.executionFlags);
     if (planProblem) return this.failStep(planProblem);
@@ -1146,14 +1198,15 @@ export class Wizard {
       case "unlock":
         return REAL_STEPS.fastboot ? { start: () => this.runRealUnlock(cur), danger: true } : null;
       case "relock":
-        return REAL_STEPS.fastboot ? { start: () => this.runRealRelock(cur), danger: true } : null;
+        return REAL_STEPS.fastboot && REAL_STEPS.relock ? { start: () => this.runRealRelock(cur), danger: true } : null;
       case "unroot":
         // 순정 재기록(root_reboot + fastboot_flash 조합) — 두 엔진 모두 켜져야 실행
         return REAL_STEPS.root && REAL_STEPS.fastboot ? { start: () => this.runRealUnroot(cur), danger: true } : null;
       case "root":
         // 패치·기록·설치 → su 승인(수동) 후 재진입하면 최종 확인
-        return REAL_STEPS.root
-          ? { start: () => this.runRealRoot(cur), resume: () => this.dispatchEngine(() => this.finishRealRoot(cur)), danger: true }
+        // ReSukiSU는 폰 패치(수동) 뒤 기록을 이어 하고, 그 뒤 su 승인(수동) 후 최종 확인한다
+        return REAL_STEPS.root && (this.opts.rootEngine !== "resukisu" || REAL_STEPS.rootTools)
+          ? { start: () => this.runRealRoot(cur), resume: () => this.dispatchEngine(() => this.resumeRealRoot(cur)), danger: true }
           : null;
       case "root-modules":
         return { start: () => this.runRealModuleSets(cur), danger: true };
@@ -1163,6 +1216,8 @@ export class Wizard {
         return REAL_STEPS.efs ? { start: () => this.runRealCommCheck(cur), danger: false } : null;
       case "efs-input":
         return REAL_STEPS.efs ? { start: () => this.runRealEfsInputs(cur), danger: false } : null;
+      case "efs-rollback":
+        return REAL_STEPS.efs && REAL_STEPS.volteRollback ? { start: () => this.runRealVolteRollback(cur), danger: true } : null;
       case "efs-preflight":
       case "efs":
       case "verify":
@@ -1253,7 +1308,9 @@ export class Wizard {
     switch (id) {
       case "backup": return items.map((l) => `${l} 백업`);
       case "restore": return items.map((l) => `${l} 복원`);
-      case "root": return ["Magisk 받기", "부트 이미지·패치 도구 전송", "Magisk 패치", "패치 결과 확인", "패치 이미지 기록", "Magisk 앱 설치"];
+      case "root": return this.opts.rootEngine === "resukisu"
+        ? ["ReSukiSU 매니저 받기·설치", "순정 이미지 전송", "폰에서 패치", "패치 결과 확인", "패치 이미지 기록"]
+        : ["Magisk 받기", "부트 이미지·패치 도구 전송", "Magisk 패치", "패치 결과 확인", "패치 이미지 기록", "Magisk 앱 설치"];
       case "efs-preflight": return ["DIAG 포트 전환", "EFS 프로토콜 초기화", "응답 확인"];
       case "efs":
         return this.volteConfig.sims
@@ -1316,10 +1373,12 @@ export class Wizard {
       this.suGrantHint = "폰 잠금을 풀어 주세요 — 잠금이 풀리면 루트 권한을 요청합니다";
       return false;
     }
-    if (!this.suDenied) this.suGrantHint = "폰 화면의 Magisk 슈퍼유저 요청 창에서 10초 안에 [허용]을 눌러 주세요";
+    const ksu = this.opts.rootEngine === "resukisu";
+    if (ksu) this.suGrantHint = "ReSukiSU 앱 → 슈퍼유저 탭에서 [Shell]의 루트 권한을 켜 주세요 — 켜면 자동으로 진행합니다";
+    else if (!this.suDenied) this.suGrantHint = "폰 화면의 Magisk 슈퍼유저 요청 창에서 10초 안에 [허용]을 눌러 주세요";
     const ok = await api.rootCheck(serial);
     if (ok === true) return true;
-    if (ok === false) {
+    if (ok === false && !ksu) {
       this.suDenied = true;
       this.suGrantHint = "루트 권한이 거부됐습니다(시간 초과 포함) — Magisk가 거부를 기억해 요청 창이 다시 뜨지 않습니다. Magisk 앱 → 슈퍼유저 탭에서 [Shell]을 켜 주세요. 켜면 자동으로 진행합니다";
     }
@@ -1566,6 +1625,8 @@ export class Wizard {
     this.oemUnknownAck = false;
     if (id === "ims-check" || id === "ims-precheck") this.callChecks = [];
     this.manualCurrent = { id, ...MANUAL_TEXT[id] };
+    // 폰 조작·확인이 필요한 안내가 열릴 때만 사용자 주의를 끈다
+    void api.attention("폰 조작이 필요합니다", this.manualCurrent.title);
     if (id === "smsie-export") {
       const selected = this.checkedBackupItems();
       this.manualCurrent.steps = [
@@ -1575,6 +1636,11 @@ export class Wizard {
         MANUAL_TEXT[id].steps[3], MANUAL_TEXT[id].steps[4],
       ];
     }
+    if (id === "su-grant" && this.opts.rootEngine === "resukisu") this.manualCurrent.steps = [
+      MANUAL_TEXT[id].steps[0],
+      "ReSukiSU는 승인 창이 뜨지 않습니다 — ReSukiSU 앱 → 슈퍼유저 탭에서 [Shell]의 루트 권한을 켜 주세요",
+      "켜면 자동으로 확인하고 진행합니다",
+    ];
     if (id === "smsie-export") this.smsieExportAck = false;
     this.smsieFilesReady = false;
     this.smsieRestoreDetails = "";
@@ -1598,6 +1664,7 @@ export class Wizard {
       this.suGrantHint = "";
       this.watchManual(cur, id, "루트 권한(uid=0) 확인", () => this.suGrantReady(), 2000);
     }
+    if (id === "resukisu-patch") this.watchManual(cur, id, "ReSukiSU 패치 결과 감지", () => this.resukisuPatchReady(), 3000);
     if (id === "smsie-export") {
       // 선택한 파일이 두 번 연속(5초 간격) 보이면 수집·검사하고 자동으로 넘어간다.
       // 앱이 아직 쓰는 중이면 ZIP CRC·JSON 검사에서 걸러져 계속 기다린다
@@ -1873,7 +1940,7 @@ export class Wizard {
   /** 실제 확인이 필요한 수동 단계인지 (동의·입력형 제외) */
   get manualVerifiable(): boolean {
     const id = this.manualCurrent?.id;
-    return !!id && ["oem-toggle", "usb-debug", "mode-wait", "flash-mode", "su-grant", "ims-check", "ims-precheck", "smsie-export", "contacts-import"].includes(id);
+    return !!id && ["oem-toggle", "usb-debug", "mode-wait", "flash-mode", "su-grant", "ims-check", "ims-precheck", "smsie-export", "contacts-import", "resukisu-patch"].includes(id);
   }
 
   /** 목업 실행에서만 — 폰이 실제로 재부팅되지 않아 확인할 수 없는 단계 건너뛰기 */
@@ -1933,6 +2000,8 @@ export class Wizard {
           ? "부트로더(fastboot) 모드가 감지되지 않았습니다 — USB 연결을 확인해 주세요"
           : "플래시 모드가 감지되지 않았습니다 — 전원을 끈 뒤 볼륨 아래 버튼을 누른 채 USB를 연결해 주세요";
       }
+      case "resukisu-patch":
+        return (await this.resukisuPatchReady()) ? null : this.resukisuHint || "Download 폴더에서 패치 결과(kernelsu_patched_….img)를 아직 찾지 못했습니다";
       case "su-grant":
         // 자동 감지와 같은 흐름 — 화면이 꺼졌거나 잠겨 있으면 요청하지 않는다(보이지 않는 창이 시간 초과로 영구 거부되는 것을 막는다)
         return (await this.suGrantReady()) ? null : this.suGrantHint || "루트 권한이 확인되지 않았습니다";
@@ -2085,7 +2154,7 @@ export class Wizard {
     void this.persist(true);
   }
 
-  // ── 실전 백업·복구 (REAL_STEPS 전환 시) ───────────────────
+  // ── 실전 백업·복원 (REAL_STEPS 전환 시) ───────────────────
   // 계약: .plans/02-contracts/tauri-commands.md backup 절. 백엔드 이벤트로 progress·로그·체크포인트를 올린다.
 
   /** 이번 실행에서 선택한 백업 항목 id (mock 그룹에서 checked만) */
@@ -2209,6 +2278,7 @@ export class Wizard {
     }
     if (s.complete) {
       cur.progress = 1;
+      void this.rememberBackup(this.backupDir);
       this.log(cur, s.omittedApps?.length
         ? `[완결] 보관할 백업 완료 — 앱 데이터 제외 ${s.omittedApps.length}개. 안내를 확인한 뒤 [다음]을 눌러 진행하세요`
         : "[완결] 전수 열거 완료 · 오류 0 — [다음]을 눌러 진행하세요");
@@ -2293,6 +2363,62 @@ export class Wizard {
     this.openEngineManual(cur, "ims-check");
   }
 
+  /** 폰별 기록(앱 데이터 폴더) — 실패해도 작업은 계속한다(기록은 편의 기능) */
+  deviceRecord = $state<DeviceRecord | null>(null);
+  async loadDeviceRecord(): Promise<DeviceRecord | null> {
+    const key = await this.deviceKeyHex();
+    if (!key) return (this.deviceRecord = null);
+    const r = await api.deviceRecordGet(key);
+    return (this.deviceRecord = r.ok ? r.value : null);
+  }
+  private async rememberBackup(dir: string) {
+    const key = await this.deviceKeyHex();
+    if (key && dir) { const r = await api.deviceRecordSetBackup(key, dir); if (r.ok) this.deviceRecord = r.value; }
+  }
+  private async rememberPatch(patch: VoltePatchRecord) {
+    const key = await this.deviceKeyHex();
+    if (key) { const r = await api.deviceRecordAddPatch(key, patch); if (r.ok) this.deviceRecord = r.value; }
+  }
+  /** 되돌릴 사본 — 슬롯별 가장 최근 패치 전 사본, 최신 것부터(여러 슬롯이면 패치의 역순으로 복원) */
+  rollbackTargets(record: DeviceRecord | null = this.deviceRecord): VoltePatchRecord[] {
+    const latest = new Map<number, VoltePatchRecord>();
+    for (const p of record?.voltePatches ?? []) { const prev = latest.get(p.slot); if (!prev || prev.at < p.at) latest.set(p.slot, p); }
+    // 이미 되돌린 패치는 대상이 아니다(슬롯의 가장 최근 패치가 되돌려졌으면 그 슬롯은 되돌릴 것이 없다)
+    return [...latest.values()].filter(p => !p.rolledBackAt).sort((a, b) => (a.at < b.at ? 1 : -1));
+  }
+
+  /** VoLTE 되돌리기 — DIAG 연결(루트 필요) → 사본 복원(슬롯별, 최신 패치부터) → 재부팅 */
+  private async runRealVolteRollback(cur: RunStep) {
+    const gen = this.runGen;
+    const record = await this.loadDeviceRecord();
+    if (gen !== this.runGen) return;
+    const targets = this.rollbackTargets(record);
+    if (!targets.length) return this.failStep("되돌릴 VoLTE 패치 기록이 없습니다 — 이 앱으로 패치한 기록이 있어야 합니다");
+    this.log(cur, "[DIAG] 모뎀 연결 모드로 전환합니다(루트 권한 필요)");
+    const diag = await api.efsDiagOpen(this.device?.serial);
+    if (gen !== this.runGen) return;
+    if (!diag.ok) return this.failStep(`DIAG 전환 실패: ${diag.error}`);
+    for (const [i, t] of targets.entries()) {
+      this.log(cur, `[되돌리기] SIM${t.slot} (${t.carrier} 패치 전, ${t.at}) — ${t.snapshot}`);
+      const r = await api.efsRollback(t.snapshot);
+      if (gen !== this.runGen) return;
+      if (!r.ok) return this.failStep(`SIM${t.slot} 되돌리기 실패: ${r.error}`);
+      for (const w of r.value.warnings) this.log(cur, `[경고/${w.code}] ${w.target}: ${w.message}`);
+      if (r.value.errors.length) return this.failStep(r.value.errors.join(" / "));
+      cur.progress = (i + 1) / (targets.length + 1);
+    }
+    const key = await this.deviceKeyHex();
+    if (key) { const marked = await api.deviceRecordMarkRolledBack(key, targets.map(t => t.snapshot), new Date().toISOString()); if (marked.ok) this.deviceRecord = marked.value; }
+    if (gen !== this.runGen) return;
+    this.log(cur, "[재부팅] 되돌린 모뎀 설정을 반영하기 위해 폰을 다시 시작합니다");
+    const error = await this.rebootOsAndReconnect(gen);
+    if (gen !== this.runGen) return;
+    if (error) return this.failStep(error);
+    this.log(cur, "[완료] 패치 전 모뎀 설정으로 되돌렸습니다 — VoLTE가 꺼졌는지 통화로 확인해 주세요");
+    cur.progress = 1;
+    this.stepDone(cur);
+  }
+
   /** 최종 확인 마무리 — VoLTE 등록 확인(또는 확인 없이 마무리) 뒤 재진입 */
   private finishRealFinalVerify(cur: RunStep) {
     if (this.imsUnverified) {
@@ -2357,7 +2483,7 @@ export class Wizard {
     const cfg = this.efsRunConfiguration ? { ok: true as const, value: this.efsRunConfiguration } : await api.efsConfiguration();
     if (gen !== this.runGen) return null;
     if (!cfg.ok) { this.failStep(cfg.error); return null; }
-    if (!cfg.value) { this.failStep("EFS COM·프리셋·스냅샷 위치를 작업 옵션에서 먼저 설정해 주세요"); return null; }
+    if (!cfg.value) { this.failStep("VoLTE 적용 설정을 불러오지 못했습니다 — 앱을 다시 실행해 주세요"); return null; }
     const selected = this.volteConfig.sims.filter(s => s.carrier !== null).map(s => efsPreset(s.carrier!, s.slot)?.folder);
     if (!selected.length || selected.some(folder => !folder)) { this.failStep("선택한 SIM 프리셋을 찾을 수 없습니다"); return null; }
     const validation = await api.efsValidatePresets(selected as string[], cfg.value);
@@ -2410,7 +2536,7 @@ export class Wizard {
         if (!diag.ok) return this.failStep(diag.error);
         const r = await api.efsPreflight(cfg);
         if (gen !== this.runGen) return;
-        if (!r.ok) return this.failStep(`${r.error} — DIAG 드라이버와 지정한 COM을 확인하세요. 포트가 나타나지 않으면 폰의 USB 모드를 MTP로 바꾼 뒤 충전 모드로 되돌리고 다시 시도하세요`);
+        if (!r.ok) return this.failStep(`${r.error} — DIAG 드라이버(qcser) 설치를 확인하세요. 포트가 나타나지 않으면 폰의 USB 모드를 MTP로 바꾼 뒤 충전 모드로 되돌리고 다시 시도하세요`);
         for (const line of r.value.log) this.log(cur, line);
         for (const w of r.value.warnings) this.log(cur, `[경고/setup] ${w}`);
         if (r.value.errors.length) return this.failStep(r.value.errors.join(" / "));
@@ -2429,6 +2555,7 @@ export class Wizard {
             if (gen !== this.runGen) return;
             if (!snap.ok) return this.failStep(snap.error);
             this.log(cur, `[before-image] SIM${target.slot}: ${snap.value.path}`);
+            void this.rememberPatch({ at: new Date().toISOString(), slot: target.slot, carrier: target.carrier!, snapshot: snap.value.path });
             showWarnings(snap.value.warnings);
             for (let round = 1; round <= 2; round++) {
               progressBase = (index + round / 3) / targets.length;
@@ -2518,19 +2645,19 @@ export class Wizard {
     check(); this.stepDone(cur);
   }
 
-  /** 실전 복구 러너 — APK 재설치 → tar 스트리밍 → 설정 → 연락처 전송 후, 문자·통화(smsie)는 수동 개입 */
+  /** 실전 복원 러너 — APK 재설치 → tar 스트리밍 → 설정 → 연락처 전송 후, 문자·통화(smsie)는 수동 개입 */
   private async runRealRestore(cur: RunStep) {
     const gen = this.runGen;
     if (!this.backupDir) {
-      this.failStep("복구할 백업 폴더가 없습니다");
+      this.failStep("복원할 백업 폴더가 없습니다");
       return;
     }
     if (this.mode === "manual" && this.manualTask === "restore") {
       const path = this.backupDir;
-      if (!(await this.validateRestoreSource(path)) || gen !== this.runGen) return;
+      if (!(await this.validateRestoreSource(path, cur)) || gen !== this.runGen) return;
     }
     const items = this.checkedBackupItems();
-    this.log(cur, `[실전] 복구 시작 — ${this.backupDir}`);
+    this.log(cur, `[실전] 복원 시작 — ${this.backupDir}`);
     const itemOrder = items.slice();
     const un = await api.onRestoreProgress((p) => {
       if (gen !== this.runGen) return;
@@ -2543,6 +2670,7 @@ export class Wizard {
     if (items.includes("apk")) {
       void api.screenWake(this.device?.serial);
       this.runHint = "앱을 설치하는 동안 폰에 Play 프로텍트 확인 창이 뜰 수 있습니다 — 끝날 때까지 폰 화면을 켜 두고, 창이 뜨면 설치를 허용해 주세요";
+      void api.attention("폰 화면을 지켜봐 주세요", "앱 설치 중 Play 프로텍트 확인 창이 뜨면 허용해 주세요");
       this.log(cur, `[안내] ${this.runHint}`);
     }
     const r = await api.restoreRun(this.device?.serial, this.backupDir, items).finally(() => {
@@ -2552,12 +2680,12 @@ export class Wizard {
     });
     if (gen !== this.runGen) return; // 중단·처음으로
     if (!r.ok) {
-      this.failStep(`복구 실패: ${r.error}`);
+      this.failStep(`복원 실패: ${r.error}`);
       return;
     }
-    for (const line of r.value.logs) this.log(cur, `[복구] ${line}`);
+    for (const line of r.value.logs) this.log(cur, `[복원] ${line}`);
     for (const fail of r.value.failures) this.log(cur, `[실패] ${fail}`);
-    if (r.value.failures.length > 0) return this.failStep(`복구 미완료 — ${r.value.failures.join(" / ")}`);
+    if (r.value.failures.length > 0) return this.failStep(`복원 미완료 — ${r.value.failures.join(" / ")}`);
     cur.progress = 0.99;
     void this.persist(true);
     // 폰에서 직접 해야 하는 복원 — 연락처 가져오기, 문자·통화 기록 순서
@@ -2741,6 +2869,18 @@ export class Wizard {
     const source = await api.bootImageCheck(this.device?.serial ?? "", stock.path, stock.fingerprint);
     if (gen !== this.runGen) return;
     if (!source.ok) return this.failStep(`부트 이미지 확인 실패: ${source.error}`);
+    // 루팅 모듈·매니저 설정은 이전하지 않고 전부 지운다(2026-10-08 사용자 결정) — 루트가 있는 지금 지워야 한다
+    const rootedNow = await api.rootCheck(this.device?.serial);
+    if (gen !== this.runGen) return;
+    if (rootedNow === true) {
+      this.log(cur, "[언루팅] 루팅 모듈·매니저 데이터(/data/adb)를 모두 지웁니다");
+      const wiped = await api.rootWipe(this.device?.serial);
+      if (gen !== this.runGen) return;
+      if (!wiped.ok) return this.failStep(`루팅 데이터 삭제 실패: ${wiped.error}`);
+      this.log(cur, wiped.value.length ? `[언루팅] 모듈 ${wiped.value.length}개 삭제: ${wiped.value.join(", ")}` : "[언루팅] 설치된 모듈 없음 — 매니저 데이터만 지웠습니다");
+    } else {
+      this.log(cur, "[언루팅] 루트 권한을 확인하지 못해 모듈 데이터는 지우지 못했습니다 — 순정 복원 뒤에는 동작하지 않습니다");
+    }
     this.log(cur, `[언루팅] 순정 ${partition} 이미지로 복원합니다`);
     // fastbootd 진입 → 감지 대기
     cur.progress = 0.2;
@@ -2773,7 +2913,7 @@ export class Wizard {
       const removed = await api.magiskUninstall(this.device?.serial);
       if (gen !== this.runGen) return;
       if (!removed.ok) this.log(cur, `[실패] ${removed.error} — 설정 → 앱에서 Magisk를 직접 삭제해 주세요`);
-      else this.log(cur, removed.value ? "[언루팅] Magisk 앱을 삭제했습니다" : "[언루팅] Magisk 앱이 없습니다(앱 숨기기로 이름을 바꿨다면 직접 삭제해 주세요)");
+      else this.log(cur, removed.value ? "[언루팅] 루팅 매니저 앱을 삭제했습니다" : "[언루팅] 루팅 매니저 앱이 없습니다(앱 숨기기로 이름을 바꿨다면 직접 삭제해 주세요)");
     }
     cur.progress = 1;
     this.log(cur, "[완료] 순정 이미지 기록·재연결·루트 해제 확인");
@@ -2842,6 +2982,7 @@ export class Wizard {
     const source = await api.bootImageCheck(this.device?.serial ?? "", imagePath, fingerprint);
     if (gen !== this.runGen) return;
     if (!source.ok) return this.failStep(`부트 이미지 확인 실패: ${source.error}`);
+    if (this.opts.rootEngine === "resukisu") return this.startResukisuRoot(cur, gen, partition, imagePath);
     // 1) Magisk APK 확보(캐시 재사용)
     cur.progress = 0.05;
     const prep = await api.magiskPrepare();
@@ -2899,6 +3040,102 @@ export class Wizard {
     this.openEngineManual(cur, "su-grant");
   }
 
+  // ── ReSukiSU 처음 루팅(2026-10-08 사용자 결정) — 매니저 설치 → 순정 이미지 전송 → 폰에서 패치(수동·자동 감지)
+  //    → PC 검증(root_external_patch_import) → fastbootd 양 슬롯 기록 → 재부팅 → Shell 루트 승인(수동) → uid=0 확인
+  private resukisuStage: { since: number } | null = null;
+  private resukisuPatched = "";
+  resukisuHint = $state("");
+
+  private async startResukisuRoot(cur: RunStep, gen: number, partition: string, imagePath: string) {
+    const serial = this.device?.serial ?? "";
+    if (partition !== "init_boot") return this.failStep("ReSukiSU 루팅은 init_boot 기종만 준비됐습니다 — Magisk로 진행해 주세요");
+    const tag = this.opts.resukisuTag;
+    if (!tag) return this.failStep("ReSukiSU 버전을 선택하지 않았습니다");
+    cur.progress = 0.05;
+    const prepared = await api.rootPackagePrepare("resukisu", tag);
+    if (gen !== this.runGen) return;
+    if (!prepared.ok) return this.failStep(`ReSukiSU 다운로드 실패: ${prepared.error}`);
+    const installed = await api.resukisuInstall(serial, prepared.value.sha256, true);
+    if (gen !== this.runGen) return;
+    if (!installed.ok) return this.failStep(`ReSukiSU 매니저 설치 실패: ${installed.error}`);
+    this.log(cur, `[루팅] ReSukiSU ${tag} 매니저 설치 (sha256 ${prepared.value.sha256.slice(0, 12)}…)`);
+    this.markSub(cur, 1);
+    cur.progress = 0.15;
+    const staged = await api.resukisuStageStock(serial, imagePath);
+    if (gen !== this.runGen) return;
+    if (!staged.ok) return this.failStep(`순정 이미지 전송 실패: ${staged.error}`);
+    this.resukisuStage = { since: staged.value.since };
+    this.resukisuPatched = "";
+    this.log(cur, `[루팅] 순정 init_boot를 폰에 전송했습니다: ${staged.value.devicePath}`);
+    this.markSub(cur, 2);
+    void this.persist(true);
+    this.openEngineManual(cur, "resukisu-patch");
+  }
+
+  /** 폰 Download에 새 패치 결과가 생겼는지 — 생겼으면 PC로 받아 둔다 */
+  private async resukisuPatchReady(): Promise<boolean> {
+    if (this.resukisuPatched) return true;
+    if (!this.resukisuStage) {
+      this.resukisuHint = "순정 이미지 전송 기록이 없습니다 — [다시 시도]로 루팅 단계를 처음부터 진행해 주세요";
+      return false;
+    }
+    const got = await api.resukisuFetchPatched(this.device?.serial ?? "", this.resukisuStage.since);
+    if (!got.ok) { this.resukisuHint = `패치 결과 확인 실패: ${got.error}`; return false; }
+    if (!got.value) { this.resukisuHint = "ReSukiSU 앱에서 패치를 끝내면 자동으로 진행합니다"; return false; }
+    this.resukisuPatched = got.value;
+    return true;
+  }
+
+  /** 루팅 단계의 수동 안내가 끝난 뒤 — ReSukiSU 패치 직후면 기록을 이어 하고, 아니면 최종 확인 */
+  private async resumeRealRoot(cur: RunStep) {
+    if (this.opts.rootEngine === "resukisu" && (cur.sub?.done ?? 0) < 5) return this.continueResukisuRoot(cur);
+    return this.finishRealRoot(cur);
+  }
+
+  private async continueResukisuRoot(cur: RunStep) {
+    const gen = this.runGen;
+    const serial = this.device?.serial ?? "";
+    const partition = this.partition;
+    const stock = this.stockSource();
+    if (!partition || !stock) return this.failStep("순정 부트 이미지가 준비되지 않았습니다 — [다시 시도]로 루팅 단계를 처음부터 진행해 주세요");
+    if (!this.resukisuPatched && !(await this.resukisuPatchReady())) {
+      if (gen !== this.runGen) return;
+      return this.failStep("ReSukiSU 패치 결과를 받지 못했습니다 — [다시 시도]로 루팅 단계를 처음부터 진행해 주세요");
+    }
+    if (gen !== this.runGen) return;
+    this.markSub(cur, 3);
+    // 받은 파일은 순정 부모·같은 기기·init_boot 헤더·크기·해시를 검사한 뒤에만 기록한다
+    cur.progress = 0.5;
+    const imported = await api.rootExternalPatchImport(serial, stock.path, this.resukisuPatched, true);
+    if (gen !== this.runGen) return;
+    if (!imported.ok) return this.failStep(`패치 결과 검사 실패: ${imported.error}`);
+    this.log(cur, `[루팅] 패치 결과 확인 — sha256 ${imported.value.sha256.slice(0, 12)}…`);
+    this.markSub(cur, 4);
+    void this.persist(true);
+    this.log(cur, "[루팅] 부트 이미지 기록을 위해 fastbootd 모드로 재부팅합니다");
+    const fbError = await this.enterFastboot(gen, "fastboot");
+    if (gen !== this.runGen) return;
+    if (fbError) return this.failStep(fbError);
+    cur.progress = 0.7;
+    const flash = await this.withLog(gen, cur, "fastboot", (cb) => api.onFastbootLog(cb), () =>
+      api.fastbootFlash(imported.value.partition, imported.value.path, true, serial, imported.value.sha256),
+    );
+    if (!flash || gen !== this.runGen) return;
+    if (!flash.ok) return this.failStep(`부트 이미지 기록 실패: ${flash.error}`);
+    this.log(cur, `[루팅] ${imported.value.partition}_a/_b 기록 완료`);
+    this.markSub(cur, 5);
+    void this.persist(true);
+    const backError = await this.returnToAdb(
+      gen,
+      "패치 기록 후 OS 재부팅을 확인하지 못했습니다 — 기기 상태를 확인해 주세요",
+      "기기가 다시 연결되지 않습니다 — 재부팅 후 USB 디버깅 승인을 확인해 주세요",
+    );
+    if (gen !== this.runGen) return;
+    if (backError) return this.failStep(backError);
+    cur.progress = 0.9;
+    this.openEngineManual(cur, "su-grant");
+  }
+
   /** su 승인 후 최종 확인 — root_check로 uid=0 검증 */
   private async finishRealRoot(cur: RunStep) {
     const gen = this.runGen;
@@ -2909,7 +3146,9 @@ export class Wizard {
       cur.progress = 1;
       this.stepDone(cur);
     } else {
-      this.failStep("루트 권한이 확인되지 않습니다 — 폰의 Magisk 권한 요청을 '허용'한 뒤 다시 확인해 주세요");
+      this.failStep(this.opts.rootEngine === "resukisu"
+        ? "루트 권한이 확인되지 않습니다 — ReSukiSU 앱 → 슈퍼유저 탭에서 Shell을 켠 뒤 다시 확인해 주세요"
+        : "루트 권한이 확인되지 않습니다 — 폰의 Magisk 권한 요청을 '허용'한 뒤 다시 확인해 주세요");
     }
   }
 
@@ -3102,11 +3341,11 @@ export class Wizard {
   /** 엔진이 추가한 안내는 재시도 시 엔진 준비가 끝난 뒤 다시 표시한다. */
   private clearRuntimeManuals(id: string) {
     const runtime: Partial<Record<string, ManualId[]>> = {
-      root: ["su-grant"], backup: ["smsie-export"], restore: ["contacts-import", "smsie-import"],
+      root: ["resukisu-patch", "su-grant"], backup: ["smsie-export"], restore: ["contacts-import", "smsie-import"],
     };
     const step = this.steps.find(step => step.id === id);
     if (step?.manual && runtime[id]) step.manual = step.manual.filter(item => !runtime[id]!.includes(item));
-    if (id === "root") this.patchedImage = "";
+    if (id === "root") { this.patchedImage = ""; this.resukisuStage = null; this.resukisuPatched = ""; }
   }
 
   abort() {

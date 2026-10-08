@@ -47,3 +47,9 @@ FakeADBDevice 테스트는 권한/버전/마커, 모듈 선행·상호배타, �
 ## 2026-10-08 main GUI 통합·세트 선택
 
 수동 그리드에 루팅 매니저 변경/루팅 모듈 설치를 분리했다. 모듈은 A/B 세트와 B→A 의존 선택, Zygisk/Integrity 택일·추가 항목을 사용한다. 자동 루팅 탭은 루팅 유지 시 세트를 제공하고 언루팅/리락/언락 초기화 상태에서 선택 해제·비활성화한다. 공유 installModuleSets는 설치별 재부팅/활성 확인, 폰 설정 안내, native installed 영수증 기반 재개를 처리한다. 개별 ZIP의 검증·native 의존성 검사는 유지한다. WebUI/MMRL은 앱 설치 안내, HMA는 원본 카페 JSON을 그대로 내보내고 가져오기 안내한다. 상세 검증은 [GUI 리뷰](workflow-gui-review-20261008.md).
+
+## 2026-10-08 모듈 프리셋 고정·최신성 조사 (사용자 결정)
+
+세트 안 구성은 엔진별로 고정한다(`MODULE_PRESET`): Set A = (KernelSU 계열만 OverlayFS) → NeoZygisk → AshReXcue, Set B = PlayIntegrityFork → TrickyStore → TrickyAddon → HMA-OSS(Zygisk판, LSPosed 불필요). Zygisk/Integrity 선택·Zygisk Next·Shamiko·Integrity Box·Zygisk Assistant·PlayStoreFix 선택지는 화면에서 뺐다(예전 기록의 선택값은 무시). 계획 단계의 "매니저 설정 확인" 체크를 없애고 설치 직전 실행 중 안내로 바꿨다.
+
+2026-10-08 GitHub 릴리스 조사 기준 모두 유지 중: NeoZygisk v2.4(2026-08-08), PIFork v18(2026-08-29, ReSukiSU Action 지원), TrickyAddon v4.4(2026-06-21), HMA-OSS oss-173(2026-09-30), Meta-Overlayfsx v1.3.4, AshLooper 9.9. TrickyStore 1.4.1(2025-11-02)이 가장 오래됐고 교체 후보는 TEESimulator(v4.0, 아직 버그·수동 설정 필요로 보류). Magisk에서 NeoZygisk는 DenyList에 등록한 앱만 숨기므로 안내에 은행 앱 등록을 추가했다. Android 13+ DEVICE 판정에는 폐기되지 않은 keybox가 필요하며 공개 keybox로 STRONG은 기대하지 않는다. 모두 실기기 미검증.

@@ -1,44 +1,45 @@
 <script lang="ts">
-  import OptionCard from "$lib/components/OptionCard.svelte";
-  import { MODULE_SETS, selectedModuleSets, toggleModuleSet } from "$lib/domain/moduleSets";
+  import { Checkbox } from "$lib/components/ui/checkbox";
+  import { CornerDownRight } from "@lucide/svelte/icons";
+  import { MODULE_SETS, MODULE_PRESET, selectedModuleSets, toggleModuleSet } from "$lib/domain/moduleSets";
   import type { RootModuleSelection, RootState } from "$lib/types";
   let { selection, onChange, disabled = false, reason = null, engine = "unknown" }: {
     selection: RootModuleSelection; onChange: (selection: RootModuleSelection) => void;
-    disabled?: boolean; reason?: string | null; engine?: RootState["engine"];
+    disabled?: boolean; reason?: string | null; engine?: RootState["engine"] | "resukisu" | "magisk";
   } = $props();
   const sets = $derived(selectedModuleSets(selection));
-  $effect(() => {
-    if (engine === "kernelsu-family" && selection.extras.includes("shamiko")) onChange({ ...selection, extras: selection.extras.filter(id => id !== "shamiko"), settingsAck: false });
-  });
-  function extra(id: RootModuleSelection["extras"][number], checked: boolean) {
-    onChange({ ...selection, extras: checked ? [...selection.extras.filter(value => value !== id), id] : selection.extras.filter(value => value !== id), settingsAck: false });
-  }
+  // KernelSU 계열(ReSukiSU)만 OverlayFS를 먼저 설치한다 — 엔진을 모르면 조건부로 표시
+  const kernelsu = $derived(engine === "kernelsu-family" || engine === "resukisu");
+  const knownEngine = $derived(engine !== "unknown");
 </script>
 
-<div class="space-y-3">
+<div class="space-y-2">
   {#if reason}<p class="text-xs text-muted-foreground">{reason}</p>{/if}
-  {#each MODULE_SETS as set}
+  {#each MODULE_SETS as set (set.id)}
+    {@const checked = sets.includes(set.id)}
     {@const required = MODULE_SETS.some(other => sets.includes(other.id) && other.depends.some(dependency => dependency === set.id))}
-    <OptionCard checked={sets.includes(set.id)} label={set.name} desc={set.detail} disabled={disabled || required} badge={required ? "의존 세트 · 자동 선택" : undefined} onToggle={checked => onChange(toggleModuleSet(selection, set.id, checked))} />
+    <div class="rounded-xl border transition-colors {checked ? 'border-primary/30 bg-primary/5' : 'border-border bg-card'}">
+      <label class="flex items-center gap-3 px-4 py-3 {disabled || required ? 'cursor-not-allowed' : 'cursor-pointer'}">
+        <Checkbox {checked} disabled={disabled || required} onCheckedChange={(v: boolean | "indeterminate") => onChange(toggleModuleSet(selection, set.id, v === true))} />
+        <span class="min-w-0 flex-1">
+          <span class="block text-[13px] font-medium">{set.name}</span>
+          <span class="block text-[11px] text-muted-foreground">{set.detail}</span>
+        </span>
+        {#if required}<span class="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">Set B에 포함</span>{/if}
+      </label>
+      {#if checked}
+        <!-- 하위 구성 — 엔진별로 고정, 위에서부터 설치 순서 -->
+        <ul class="mx-4 mb-3 space-y-1 border-l-2 border-primary/20 pl-3">
+          {#each MODULE_PRESET[set.id].filter(m => !m.kernelsuOnly || kernelsu || !knownEngine) as module (module.id)}
+            <li class="flex items-center gap-2 text-[12px]">
+              <CornerDownRight size={12} class="shrink-0 text-muted-foreground" />
+              <span class="font-medium">{module.name}</span>
+              <span class="text-muted-foreground">· {module.role}{module.kernelsuOnly && !knownEngine ? " (ReSukiSU일 때만)" : ""}</span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
   {/each}
-  <p class="text-[11px] text-muted-foreground">Set B는 Set A가 필요합니다. B를 선택하면 A도 함께 선택됩니다.</p>
-  <div class="grid grid-cols-2 gap-3 text-xs">
-    <label>Zygisk 구현체
-      <select aria-label="Zygisk 구현체" class="mt-1 block w-full rounded-lg border bg-background p-2" value={selection.zygisk} disabled={disabled || !sets.includes("foundation")} onchange={event => onChange({ ...selection, zygisk: event.currentTarget.value as RootModuleSelection["zygisk"], extras: selection.extras.filter(id => id !== "shamiko"), settingsAck: false })}>
-        <option value="neozygisk">NeoZygisk · 기본</option><option value="rezygisk">ReZygisk</option><option value="zygisk-next">Zygisk Next</option>
-      </select>
-    </label>
-    <label>Integrity 모듈
-      <select aria-label="Integrity 모듈" class="mt-1 block w-full rounded-lg border bg-background p-2" value={selection.integrity} disabled={disabled || !sets.includes("evasion")} onchange={event => onChange({ ...selection, integrity: event.currentTarget.value as RootModuleSelection["integrity"], settingsAck: false })}>
-        <option value="play-integrity-fork">PlayIntegrityFork · 기본</option><option value="integrity-box">Integrity Box · 대안</option>
-      </select>
-    </label>
-  </div>
-  <div class="space-y-1.5">
-    <OptionCard checked={selection.extras.includes("play-store-fix")} label="PlayStoreFix 추가" desc="Set A 선택 항목 · 카페 배포본" disabled={disabled || !sets.includes("foundation")} onToggle={checked => extra("play-store-fix", checked)} />
-    <OptionCard checked={selection.extras.includes("zygisk-assistant")} label="Zygisk Assistant 추가" desc="Set B 선택 항목" disabled={disabled || !sets.includes("evasion")} onToggle={checked => extra("zygisk-assistant", checked)} />
-    <OptionCard checked={selection.extras.includes("shamiko")} label="Shamiko 추가" desc="Magisk + Zygisk Next에서만 사용" disabled={disabled || !sets.includes("evasion") || selection.zygisk !== "zygisk-next" || engine === "kernelsu-family"} onToggle={checked => extra("shamiko", checked)} />
-  </div>
-  <p class="text-[11px] leading-relaxed text-muted-foreground">기초 세트에는 부트루프 보호를 포함합니다. KernelSU 계열은 OverlayFS를 먼저 설치합니다. 감지 회피 세트는 TrickyStore·TrickyAddon·HMA를 포함하며, 금융앱 동작이나 Integrity 통과는 보장하지 않습니다. WebUI·MMRL은 별도 앱 설치 안내를 제공합니다.</p>
-  <label class="flex gap-2 items-start text-xs"><input type="checkbox" checked={selection.settingsAck} disabled={disabled || sets.length === 0} onchange={event => onChange({ ...selection, settingsAck: event.currentTarget.checked })} />매니저 설정을 확인했습니다 — Magisk는 내장 Zygisk·DenyList 강제 적용 OFF, ReSukiSU는 모듈 마운트 해제 기본값·Hide SELinux Modification ON</label>
+  <p class="text-[11px] leading-relaxed text-muted-foreground">모듈은 하나씩 설치하고 재부팅해 적용을 확인합니다. 설치 전에 매니저 설정, 중간에 PlayIntegrityFork·TrickyAddon·HMA 설정을 폰에서 안내합니다. 금융 앱 동작이나 Integrity 통과를 보장하지는 않습니다.</p>
 </div>

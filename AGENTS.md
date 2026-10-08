@@ -16,7 +16,7 @@ GitHub에서 읽는 현재 시스템 설명은 `docs/structure/overview.md`, 기
 ## 현재 단계 (매우 중요)
 
 - **공유 Rust 엔진·개발 CLI·화면 구현 및 오프라인 검증 단계**. 아래 사용자 승인에 따라 백엔드 수정·빌드·병합을 진행한다. 이번 작업에서 실제 폰의 ADB·USB·COM·DIAG 질의나 쓰기를 실행하지 않는다.
-- 쓰기 Cargo feature의 기본값 `[]` 및 모든 `REAL_STEPS=false`를 유지한다. 실기기 검증은 별도 사용자 세션에서 진행한다.
+- 2026-10-08 사용자 결정: 실기기(XQ-DQ44) 검증을 마친 단계만 기본 실전이다 — `REAL_STEPS` backup·restore·fastboot·root·efs와 Cargo 기본 `fastboot-write`·`root-write`·`efs-write`. 리락(`REAL_STEPS.relock`)·루팅 도구/ReSukiSU 루팅(`REAL_STEPS.rootTools`, `root-tools-write`)·업데이트 확인(`verify`)은 체크리스트 항목이 모두 확인되기 전까지 끈다. 실기기 검증은 사용자 세션에서 진행한다.
 - mock은 브라우저 개발에만 사용한다. 데스크톱 연결/기록 오류는 실패로 표시하고 mock 성공이나 기록 없음으로 바꾸지 않는다.
 - Rust 설치 완료 — `pnpm.cmd tauri dev`로 데스크톱 윈도우 테스트 가능하다.
 - 예외(사용자 승인 2026-10-02): USB 직접 연결용 ADB 인증 키를 앱 데이터 폴더에 1회 생성·저장한다 (표준 ~/.android/adbkey가 있으면 그것을 사용).

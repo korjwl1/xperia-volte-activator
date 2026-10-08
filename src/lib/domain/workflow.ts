@@ -4,16 +4,24 @@ import { cellularReady } from "$lib/domain/communication";
 
 export const MANUAL_TASKS: { id: ManualTask; title: string; detail: string }[] = [
   { id: "backup", title: "백업", detail: "선택한 데이터를 PC에 저장" },
-  { id: "restore", title: "복구", detail: "기존 백업에서 선택한 데이터 복원" },
+  { id: "restore", title: "복원", detail: "기존 백업에서 선택한 데이터 복원" },
   { id: "unlock", title: "언락", detail: "부트로더 잠금 해제 · 데이터 초기화" },
   { id: "relock", title: "리락", detail: "순정 부트 복원 후 잠금 · 데이터 초기화" },
   { id: "root", title: "루팅", detail: "현재 펌웨어 부트 이미지 패치·적용" },
   { id: "unroot", title: "언루팅", detail: "현재 펌웨어 순정 부트 이미지 복원" },
   { id: "volte", title: "VoLTE 패치", detail: "선택한 SIM의 통신사 설정 적용" },
-  { id: "verify", title: "통신 확인", detail: "SIM별 IMS 등록 상태·실제 통화 확인" },
+  { id: "volte-rollback", title: "VoLTE 되돌리기", detail: "패치 전 모뎀 설정으로 복원" },
   { id: "root-manager", title: "루팅 매니저 변경", detail: "Magisk ↔ ReSukiSU · 모듈·엔진 설정 정리" },
   { id: "root-modules", title: "루팅 모듈 설치", detail: "모듈 세트 선택 · 의존 세트 자동 포함" },
 ];
+// 수동 진행 화면의 분류(2026-10-08 사용자 요청) — 통신 확인은 수동 작업 목록에서 뺐다
+export const MANUAL_TASK_GROUPS: { title: string; detail: string; tasks: ManualTask[] }[] = [
+  { title: "백업 · 복원", detail: "폰 데이터를 PC에 저장하거나 되돌립니다", tasks: ["backup", "restore"] },
+  { title: "부트로더", detail: "잠금 해제·재잠금 — 폰 데이터가 초기화됩니다", tasks: ["unlock", "relock"] },
+  { title: "루팅", detail: "부트 이미지 패치·복원과 루팅 매니저·모듈 관리", tasks: ["root", "unroot", "root-manager", "root-modules"] },
+  { title: "VoLTE", detail: "선택한 SIM에 통신사 VoLTE 설정을 적용하거나 패치 전으로 되돌립니다", tasks: ["volte", "volte-rollback"] },
+];
+
 export function updateProblem(device: DeviceStatus | null): string | null {
   if (!device || device.state !== "device") return "Android에서 연결되고 USB 디버깅이 승인된 기기가 필요합니다";
   return device.sims.some(cellularReady) ? null : "셀룰러 VoLTE가 인식되는 SIM이 있어야 합니다";

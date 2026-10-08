@@ -1,6 +1,6 @@
 <script lang="ts">
   import Modal from "$lib/components/Modal.svelte";
-  // 백업 직전 안내 — 복구되지 않는 항목(기본 포커스) / 백업될 설정 / 백업될 앱을 보여주고 동의를 받는다.
+  // 백업 직전 안내 — 복원되지 않는 항목(기본 포커스) / 백업될 설정 / 백업될 앱을 보여주고 동의를 받는다.
   import { Button } from "$lib/components/ui/button";
   import { Checkbox } from "$lib/components/ui/checkbox";
   import { CircleCheck, OctagonX, LoaderCircle, ShieldAlert, KeyRound } from "@lucide/svelte/icons";
@@ -9,7 +9,7 @@
 
   let tab = $state<"none" | "settings" | "apps">("none");
 
-  // 앱 데이터 외에 이 프로그램으로 백업·복구할 수 없는 항목 (recovery.md 1-1 ③, 1-4)
+  // 앱 데이터 외에 이 프로그램으로 백업·복원할 수 없는 항목 (recovery.md 1-1 ③, 1-4)
   const NON_RECOVERABLE = [
     { title: "공동인증서 · 금융인증서 · OTP", desc: "각 앱의 내보내기/이전 기능으로 미리 옮겨 두지 않으면 재발급해야 합니다" },
     { title: "간편결제 · 교통카드 · 은행 앱 기기 등록", desc: "초기화 후 기기 재등록과 본인 인증이 필요합니다" },
@@ -55,13 +55,15 @@
   }
 
   const tabs = [
-    { id: "none", label: "백업 및 복구 불가능" },
+    { id: "none", label: "백업 및 복원 불가능" },
     { id: "settings", label: "설정" },
     { id: "apps", label: "앱" },
   ] as const;
+  // 이 실행에 초기화(언락·리락)가 있는지 — 없으면 초기화 문구를 쓰지 않는다
+  const wipes = $derived(wizard.runSteps.some((step) => step.id === "unlock" || step.id === "relock"));
 </script>
 
-<Modal title="백업 전 확인" onClose={() => wizard.abort()} class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+<Modal title="백업 전 확인" onClose={() => {}} class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
   <div class="w-full max-w-3xl h-[85vh] rounded-2xl border bg-background elev-3 flex flex-col overflow-hidden">
     <!-- 헤더 -->
     <div class="shrink-0 px-6 pt-5 pb-3 flex items-start gap-3">
@@ -71,7 +73,7 @@
       <div class="space-y-0.5">
         <h2 class="text-base font-semibold">백업을 시작하기 전에 확인해 주세요</h2>
         <p class="text-xs text-muted-foreground">
-          이후 단계에서 휴대폰이 초기화됩니다. 아래 항목은 이 프로그램으로 복구되지 않거나 일부만 복구됩니다.
+          {wipes ? "이후 단계에서 휴대폰이 초기화됩니다. " : ""}아래 항목은 이 프로그램으로 복원되지 않거나 일부만 복원됩니다.
         </p>
       </div>
     </div>
@@ -136,7 +138,7 @@
           </section>
         {/if}
         <section class="space-y-2">
-          <div class="text-xs font-semibold text-muted-foreground">그 외 복구되지 않는 항목</div>
+          <div class="text-xs font-semibold text-muted-foreground">그 외 복원되지 않는 항목</div>
           <div class="rounded-lg border divide-y">
             {#each NON_RECOVERABLE as item (item.title)}
               <div class="px-3 py-2">
@@ -158,7 +160,7 @@
         {:else}
           {@const s = wizard.settingsInfo}
           <section class="space-y-2">
-            <div class="text-xs font-semibold text-muted-foreground">초기화 후 자동으로 되돌리는 설정</div>
+            <div class="text-xs font-semibold text-muted-foreground">{wipes ? "초기화 후 자동으로 되돌리는 설정" : "복원할 때 자동으로 되돌리는 설정"}</div>
             <div class="rounded-lg border divide-y">
               {#each s.restoreItems as it (it.key)}
                 <div class="flex items-center gap-3 px-3 py-2">
@@ -188,7 +190,7 @@
       {:else}
         <section class="space-y-2">
           <div class="text-xs font-semibold text-muted-foreground">
-            백업·복구되는 앱 {wizard.appClasses && appDataChecked ? `(${restoredApps.length})` : ""}
+            백업·복원되는 앱 {wizard.appClasses && appDataChecked ? `(${restoredApps.length})` : ""}
           </div>
           {#if wizard.appClassesState === "loading"}
             <div class="flex items-center gap-2 text-xs text-muted-foreground"><LoaderCircle size={13} class="animate-spin text-primary" />앱 목록 확인 중…</div>

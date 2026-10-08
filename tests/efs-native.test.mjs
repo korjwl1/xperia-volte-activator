@@ -4,9 +4,9 @@ import { createServer } from "vite";
 
 let server, Wizard, api, flags, transport, originalApi, originalFlags, originalInvoke, buildPlan, bootPartition, deviceWorkflow, decodeJournal, executionPlanProblem;
 const configured = { port: "COM9", presetRoot: "C:/bundle", snapshotRoot: "C:/snapshots" };
-const liveFlags = { backup: true, restore: true, fastboot: true, relock: true, root: true, rootTools: true, verify: true, efs: true };
+const liveFlags = { backup: true, restore: true, fastboot: true, relock: true, root: true, rootTools: true, volteRollback: true, verify: true, efs: true };
 // 기본값이 일부 실전으로 바뀌었으므로(2026-10-08) 시뮬레이션 기준선은 명시적으로 모두 끈다
-const offFlags = { backup: false, restore: false, fastboot: false, relock: false, root: false, rootTools: false, verify: false, efs: false };
+const offFlags = { backup: false, restore: false, fastboot: false, relock: false, root: false, rootTools: false, volteRollback: false, verify: false, efs: false };
 const ok = value => ({ ok: true, value });
 const warning = { code: "nvPrefixVerification", target: "NV 71", message: "Only explicit bytes verified" };
 before(async () => {

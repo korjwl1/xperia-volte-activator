@@ -1,11 +1,12 @@
 <script lang="ts">
   import Modal from "$lib/components/Modal.svelte";
   import { onMount } from "svelte";
-  import { CircleCheck, TriangleAlert, Usb, Smartphone, ArrowRight, Lock, LockOpen } from "@lucide/svelte/icons";
+  import { Button } from "$lib/components/ui/button";
+  import { CircleCheck, TriangleAlert, Usb, Smartphone, ArrowRight, Lock, LockOpen, Settings } from "@lucide/svelte/icons";
   import { api } from "$lib/api";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { simStateLabel, type DeviceStatus } from "$lib/types";
-  import { cellularReady, simTypeLabel } from "$lib/domain/communication";
+  import { cellularReady, simTypeLabel, simVolteLabel } from "$lib/domain/communication";
 
   const CAFE_URL = "https://cafe.naver.com/x1smart";
   const GITHUB_URL = "https://github.com/korjwl1";
@@ -60,6 +61,8 @@
     void wizard.loadEnv();
     void refresh().finally(() => {
       if (alive) loading = false;
+      // 첫 조회가 끝나면(오류여도) 시작 스플래시를 닫는다 — 오류는 이 화면이 안내한다
+      wizard.startupReady = true;
     });
     // 폴링은 첫 조회 결과와 무관하게 바로 건다 — 첫 조회가 오래 걸려도 이후 조회가 막히지 않는다(겹침은 inFlight가 막음)
     pollTimer = setInterval(refresh, 3000);
@@ -74,7 +77,10 @@
   }
 </script>
 
-<div class="flex-1 flex flex-col overflow-hidden">
+<div class="relative flex-1 flex flex-col overflow-hidden">
+  <!-- 설정(기록 관리) — 처음 화면 구석 -->
+  <!-- 보라색 기기 화면·밝은 안내 화면 어디서나 보이게 불투명 배경 + 테두리 -->
+  <Button variant="outline" size="sm" class="absolute right-4 top-3 z-10 bg-background/90 text-foreground elev-1 backdrop-blur hover:bg-background" onclick={() => (wizard.view = "settings")}><Settings size={14} />설정</Button>
   {#if loading}
     <div class="flex-1 flex items-center justify-center text-muted-foreground">확인 중…</div>
 
@@ -120,10 +126,10 @@
               <p class="text-sm opacity-80">{device.firmware} · Android {device.android}</p>
               <div class="flex flex-wrap gap-2 pt-1">
                 <div class="rounded-lg bg-white/15 px-3 py-1.5 text-xs font-medium">
-                  {#if device.bootloader === "locked"}<Lock size={12} class="inline mr-1" />부트로더 잠김{:else if device.bootloader === "unlocked"}<LockOpen size={12} class="inline mr-1" />언락{:else}부트로더 확인 불가{/if}
+                  {#if device.bootloader === "locked"}<Lock size={12} class="inline mr-1" />잠김{:else if device.bootloader === "unlocked"}<LockOpen size={12} class="inline mr-1" />언락{:else}부트로더 확인 불가{/if}
                 </div>
                 <div class="rounded-lg bg-white/15 px-3 py-1.5 text-xs font-medium">
-                  {#if device.rooted === true}루팅됨{:else if device.rooted === false}루팅 미감지{:else}루팅 확인 불가{/if}
+                  {#if device.rooted === true}루팅됨{:else if device.rooted === false}루팅 안 됨{:else}루팅 확인 불가{/if}
                 </div>
               </div>
             </div>
@@ -164,7 +170,7 @@
                   <div class="text-base font-semibold">{sim.carrier}</div>
                   <!-- VoLTE는 켜짐/꺼짐만 — 셀룰러 IMS 음성 등록이 확인되지 않으면 지금 VoLTE는 안 되는 상태다 -->
                   <div class="flex items-center gap-1.5 text-sm">
-                    {#if cellularReady(sim)}<CircleCheck size={14} />VoLTE 활성{:else}<TriangleAlert size={14} />VoLTE 비활성{/if}
+                    {#if cellularReady(sim)}<CircleCheck size={14} />{:else}<TriangleAlert size={14} />{/if}{simVolteLabel(sim)}
                   </div>
                 {:else}
                   <div class="text-base font-semibold opacity-50">{simStateLabel(sim.state)}</div>

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge";
-  import { CircleCheck, LoaderCircle, ChevronUp, ChevronDown, OctagonX, Lock, LockOpen, CircleHelp } from "@lucide/svelte/icons";
+  import { CircleCheck, LoaderCircle, ChevronUp, ChevronDown, OctagonX, Lock, LockOpen, CircleHelp, ShieldCheck, ShieldOff } from "@lucide/svelte/icons";
   import { wizard, MACRO_STEPS } from "$lib/stores/wizard.svelte";
-  import { cellularReady } from "$lib/domain/communication";
+  import { volteSummary } from "$lib/domain/communication";
   const visibleSteps = $derived(wizard.mode === "manual" && wizard.manualTask !== "volte" ? MACRO_STEPS.filter(step => step.id !== 1) : MACRO_STEPS);
 
   // 서브스텝 가시 창: 실행 중 기준 3개
@@ -84,11 +84,14 @@
       <div class="text-muted-foreground">{wizard.device.firmware} · Android {wizard.device.android}</div>
       <div class="pt-1 flex flex-wrap gap-1">
         <Badge variant="outline" class="text-[10px] px-1.5 py-0">
-          {#if wizard.device.bootloader === "locked"}<Lock size={10} />잠김{:else if wizard.device.bootloader === "unlocked"}<LockOpen size={10} />언락{:else}<CircleHelp size={10} />확인 불가{/if}
+          {#if wizard.device.bootloader === "locked"}<Lock size={10} />잠김{:else if wizard.device.bootloader === "unlocked"}<LockOpen size={10} />언락{:else}<CircleHelp size={10} />부트로더 확인 불가{/if}
         </Badge>
         <Badge variant="outline" class="text-[10px] px-1.5 py-0">
           <!-- 켜짐/꺼짐만: 셀룰러 IMS 음성 등록이 확인되면 ✓, 아니면 ✗ -->
-          {wizard.device.sims.some(cellularReady) ? "VoLTE 활성" : "VoLTE 미확인"}
+          {volteSummary(wizard.device.sims).label}
+        </Badge>
+        <Badge variant="outline" class="text-[10px] px-1.5 py-0">
+          {#if wizard.device.rooted === true}<ShieldCheck size={10} />루팅됨{:else if wizard.device.rooted === false}<ShieldOff size={10} />루팅 안 됨{:else}<CircleHelp size={10} />루팅 확인 불가{/if}
         </Badge>
       </div>
     </div>

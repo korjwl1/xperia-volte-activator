@@ -5,6 +5,8 @@ mod app_paths;
 mod backup;
 mod boot_image;
 mod device_io;
+mod device_record;
+mod records;
 mod efs;
 mod env;
 mod events;
@@ -74,6 +76,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // USB 직접 연결용 ADB 인증 키 보관 위치
             // 실패하면 진행 기록·키·펌웨어 캐시가 모두 "앱 데이터 폴더 없음"으로 실패하므로 원인을 남긴다
@@ -128,6 +131,8 @@ pub fn run() {
             root_tools::switch::root_switch_status,
             root_tools::switch::root_external_patch_import,
             root_tools::switch::resukisu_install,
+            root_tools::switch::resukisu_stage_stock,
+            root_tools::switch::resukisu_fetch_patched,
             root_tools::switch::root_switch_finish,
             boot_image::boot_image_check,
             adb::root_check,
@@ -149,6 +154,7 @@ pub fn run() {
             magisk::magisk_patch,
             magisk::magisk_install,
             magisk::magisk_uninstall,
+            magisk::root_wipe,
             magisk::root_reboot,
             backup::backup_prepare,
             backup::contacts_restore_check,
@@ -156,6 +162,13 @@ pub fn run() {
             backup::backup_run,
             backup::backup_cancel,
             backup::backup_manifest_check,
+            backup::backup_manifest_read,
+            device_record::device_record_get,
+            device_record::device_record_set_backup,
+            device_record::device_record_add_patch,
+            device_record::device_record_mark_rolled_back,
+            records::records_list,
+            records::records_delete,
             backup::smsie_probe,
             backup::backup_delete,
             backup::smsie_prepare,

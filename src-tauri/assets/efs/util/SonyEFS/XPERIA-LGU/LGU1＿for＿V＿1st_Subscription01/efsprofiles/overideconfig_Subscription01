@@ -1,0 +1,123 @@
+#-----------------------------------------------------------------------
+# 네트워크 핵심 설정 (2025년 한국 환경) - LGU+
+# overrideconfig (균형형 Balanced)
+# 작성: [소니코리아 사용자모임]
+# 일자: 2025년 8월 29일
+#
+# 설정 목적:
+#   - 원본 사업자 설정 유지
+#   - 핸드오버 안정성/배터리 소모 최소화
+#   - 국내: VoLTE 기본 / VoWiFi 미제공
+#   - 국내 3G 없음 → SRVCC 국내 OFF(원본값 유지), 로밍 시 ON 가능
+#-----------------------------------------------------------------------
+#=======================================================================
+# IMS 통화 설정 프로파일
+#
+# 작성: [소니코리아 사용자모임]
+# 일자: 2025년 8월 27일
+#
+# 목적:
+#   - 이종망(VoLTE ↔ VoNR ↔ 로밍망) 통화 연결 안정화
+#   - 음성 및 영상 통화 품질 최적화
+#   - 국내 운영 현실(VoLTE만, EVS=VoNR 전용) 반영
+#   - 불필요한 기능 차단으로 배터리/자원 소모 최소화
+#=======================================================================
+
+[QIPCALL:ImsMediaProfileConfig]
+# --- 국내 VoLTE: AMR-WB만 ---
+AudioProfileVolte  = "AMR_WB_23_85;AMR_WB_12_65;AMR_4_75"
+# --- VoNR: EVS 허용 (5G IMS 전용) ---
+AudioProfileVoNR   = "EVS_SWB_24_4;EVS_NB_7_2;AMR_WB_23_85;AMR_WB_12_65"
+
+[QIPCALL:ImsRtcpConfig]
+*rtcpLinkAlivenessTimer = 0
+*rtcpReportingIntervalInVideo = 1
+
+[QIPCALL:ImsVideoConfig]
+*vtImpactedByMobileData = 0
+*modifyRejectMethod = 603
+
+[QIPCALL:ImsVoiceConfig]
+*Support199 = 0
+*earlyMediaDynamicSwitch = 0
+*earlyMediaDefaultAuthState = 3
+*emergCallCSOnly = 0
+*privacyType = 2
+*uriType = 1
+
+[QIPCALL:ImsVoiceQoSConfig]
+*localQosResReqAudio = 0
+*qosPreconditionsEnabled = 0
+
+[QIPCALL:ImsVoiceSessionTimerConfig]
+*sessionTimerEnabled = 1
+
+[QIPCALL:ImsVoiceSrvccConfig]
+*aSrvccEnabled = 0
+*bSrvccEnabled = 0
+*midcallSrvccEnabled = 0
+; 국내 LGU+: 3G 없음 → SRVCC 비활성
+; 로밍 시 SRVCC는 imshandoverconfig에서 MCC 조건으로 ON 처리
+
+[QIPCALL:ImsVoiceConfigExt]
+*send603repsonseForMTUpgradeExpiry = 1
+
+[Registration:CoreServiceGenericConfig]
+*reRegNeededforCIWLANToIWLANTransition = 0
+
+[Registration:RegistrationSettings]
+*enableRegistrationInLPM = 0
+*2G3GMeasurementsFeatureEnabled = 1   ; 로밍 대비, 국내에선 무효
+
+[Registration:RegistrationTimers]
+*pdnRetryLongTimer = 5
+*wlanGaurdTimer = 30
+*wwanGaurdTimer = 30
+
+[SIPConfig:FeatureFlags]
+*IsRouteHeaderEnabled = 0
+
+[SIPConfig:IPSec]
+*EncAlgo = 2
+*IntScheme = 1
+
+[SIPConfig:Transport]
+*TCPThresholdValue = 0
+
+[Ut:UtConfiguration]
+*BlockRequestIfNullRule = 0
+*maxResponseTimerValue = 10
+*pdnHysTimerValue = 5
+
+[MEDIA:MediaCommon]
+*DLDtmfMode = 1
+*is_RetainVTConfig = 0
+
+# ----------------------------------------------------------------------
+# LG U+ Roaming-only 3G CS HD Voice (AMR-WB) Enable
+# Effective scope: MCC != 450  (i.e., OUTSIDE Korea only)
+# Rationale: LG U+ has no domestic 3G; keep CS-HDVoice for roaming scenarios.
+# Notes:
+#  - Vendor parsers usually ignore unknown keys; safe additive block.
+#  - No impact on IMS(VoLTE/VoNR) profiles.
+
+# [Condition] Apply when MCC != 450
+Roaming_Condition_Enable           = 1
+Roaming_Condition_MCC_NotEqual     = "450"
+
+# --- 3G CS Voice (WCDMA) HD Voice ---
+Roam_CS_AudioProfileCS_WCDMA       = "AMR_WB_23_85;AMR_WB_12_65;AMR_12_2"
+Roam_CS_WCDMA_AMR_WB_Enabled       = 1
+Roam_CS_WCDMA_AMR_NB_Enabled       = 1
+Roam_CS_WCDMA_Codec_Preference     = "AMR_WB;AMR"
+Roam_CS_WCDMA_AMR_WB_DefaultMode_kbps = 23.85
+
+# Fallback when IMS not attached (roaming)
+Roam_CS_Fallback_Policy            = 1        ; 0=OFF, 1=ON
+Roam_CS_VideoTelephony_Disable     = 1        ; CS domain = voice-only
+
+# Guard timers (ms)
+Roam_CS_CodecSwitch_EvalMs         = 1500
+Roam_CS_CodecSwitch_HysMs          = 2000
+# ----------------------------------------------------------------------
+

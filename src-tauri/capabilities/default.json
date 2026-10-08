@@ -10,6 +10,8 @@
       "allow": [{ "url": "https://*" }]
     },
     "dialog:allow-open",
+    "notification:default",
+    "core:window:allow-request-user-attention",
     "core:window:allow-destroy"
   ]
 }

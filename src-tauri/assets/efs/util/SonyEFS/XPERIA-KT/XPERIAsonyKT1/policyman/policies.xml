@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Execution Ordering Configuration file
+$Header: //commercial/MPSS.DE.7.0.c3/Main/modem_proc/mmcp/policyman/configurations/Master/Default/policies.xml#1 $
+-->
+<policy_list name        = "XML Ordering"
+             changelist  = "$Change: 57693037 $"
+             policy_ver  = "8000.0.26"
+>
+  <policy file="/policyman/global_defines.xml" execute_for="device" load_for="device" refresh_on_sim_change="false" />
+  <policy file="/policyman/device_config.xml" execute_for="device" load_for="device" refresh_on_sim_change="false" />  
+  <policy file="/policyman/pre.xml" execute_for="subs" load_for="subs" refresh_on_sim_change="true" />
+  <!-- SONY BEGIN -->
+  <policy file="/policyman/plmn_mcc_supported_01.xml" execute_for="subs" load_for="device" refresh_on_sim_change="true" />
+  <policy file="/policyman/band_set_01.xml" execute_for="subs" load_for="device" refresh_on_sim_change="true" />
+  <!-- SONY END -->
+  <policy file="/policyman/carrier_policy.xml" execute_for="subs" load_for="subs" refresh_on_sim_change="true" />
+  <policy file="/policyman/post.xml" execute_for="subs" load_for="device" refresh_on_sim_change="false" />
+  <policy file="/policyman/generic_band_restrictions.xml" execute_for="subs" load_for="device" refresh_on_sim_change="false" />
+  <policy file="/policyman/global_1x_restrictions.xml" execute_for="subs" load_for="device" refresh_on_sim_change="false" />  
+  <policy file="/policyman/nrdc_msim_concurrency.xml" execute_for="subs" load_for="device" refresh_on_sim_change="false" />
+  <policy file="/policyman/restrictions.xml" execute_for="subs" load_for="subs" refresh_on_sim_change="false" />
+  <policy file="/policyman/segment_loading.xml" execute_for="subs" load_for="subs" refresh_on_sim_change="false" />
+</policy_list>

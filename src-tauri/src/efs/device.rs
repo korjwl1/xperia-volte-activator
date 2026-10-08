@@ -112,9 +112,13 @@ impl<T: Transport> Session<T> {
                 "Unsupported entry type or size",
             ));
         }
+        // PUT은 권한 비트만 받는다. 스냅샷의 stat 모드에는 아이템 종류 비트(0o160000)가 붙어 있어
+        // 그대로 보내면 폰이 돌려주는 모드와 달라 "Incorrect PUT mode"로 멈춘다(XQ-DQ44 되돌리기, 2026-10-08).
+        // 프리셋 업로드 값(10진 777 등)은 이 마스크에 영향받지 않는다.
+        let put_mode = mode & 0o7777;
         // Validate PUT before unlinking an existing target.
         let put = if entry_type == 15 {
-            Some(wire::put(path, mode, data)?)
+            Some(wire::put(path, put_mode, data)?)
         } else {
             None
         };
@@ -136,11 +140,18 @@ impl<T: Transport> Session<T> {
             if status != 0 {
                 return Err(Error::status("PUT", status as u32));
             }
-            if wire::u16_at(&r, 8)? as usize != data.len() || wire::u16_at(&r, 4)? != mode as u16 {
+            // 원본 EfsTools는 쓴 바이트 수를 검사하지 않는다. XQ-DQ44는 아이템 PUT에 0을 돌려준다(2026-10-08 실측) —
+            // 0이면 바로 뒤의 내용 리드백 대조(되돌리기·업로드 검증)에 맡기고, 0이 아닌데 길이와 다를 때만 오류로 본다
+            let written = wire::u16_at(&r, 8)? as usize;
+            if (written != 0 && written != data.len()) || wire::u16_at(&r, 4)? != put_mode as u16 {
                 return Err(Error::new(
                     "malformed",
                     "PUT",
-                    "Incorrect PUT mode or byte count",
+                    format!(
+                        "Incorrect PUT mode or byte count ({path}: sent mode {put_mode:o} len {}; response {})",
+                        data.len(),
+                        r.iter().take(16).map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
+                    ),
                 ));
             }
             return self.sync(path);

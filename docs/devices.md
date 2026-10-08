@@ -49,7 +49,8 @@
 | 통신사/SIM | SIM1 SKT(물리), SIM2 없음. 이전 감지 세션의 slot2 NOT_READY는 유형 unknown |
 | 루팅 | Magisk 30.7, init_boot |
 | 프리셋 | balance 20250901 SKT SIM1, 82개 대상, manifest SHA-256 `35e67f181a95f0126577304405575169321d6366db1d098dd320d8c59cb9d0a6` |
-| 경로 | 언락 GUI, 루팅/EFS는 공유 개발 CLI 단계별. 전체 GUI 연속 실행 완료 아님 |
+| 경로 | 언락 GUI, 루팅/EFS는 공유 개발 CLI 단계별, 복원·언루팅은 GUI(2026-10-08). 전체 GUI 연속 실행 완료 아님 |
+| 커널 | `5.15.189-android13-8` (KMI `android13-5.15`) — ReSukiSU LKM 빌드 목록에 포함, 앱 실측 전 |
 
 Android 버전·세부 PC/드라이버 버전은 해당 세션 원본에서 확인 후 추가합니다. 확인되지 않은 필드는 추측해 채우지 않습니다.
 
@@ -65,6 +66,7 @@ Android 버전·세부 PC/드라이버 버전은 해당 세션 원본에서 확�
 | 스냅샷 | 82개 중 66개 저장·16개 기존 없음, NV 6862는 NOTACTIVE | 새 NOTACTIVE 처리의 다른 기기 검증 별도 |
 | SKT EFS | 2회 업로드 오류 없음, 리드백 80/82 | 아래 차이의 원인/장기 영향은 미확정 |
 | VoLTE | 4종 속성 설정·재부팅, 셀룰러 IMS registered·voice=true, LTE B7 관찰, 사용자 발신/수신 성공 확인 | 재부팅/대기 뒤 장기 유지·로밍/MMS 등 별도 |
+| 언루팅 (2026-10-08, GUI 수동) | 순정 init_boot(sha `e75e093e…`) 양 슬롯 기록, 재부팅 후 su·magiskd 없음 | Magisk 앱 자동 삭제는 테스트 뒤 추가돼 미검증 |
 
 부트로더의 init_boot 기록은 `Flashing is not allowed for partition`으로 거부돼 fastbootd를 사용했습니다. fastbootd USB ID는 `18D1:4EE0`이며 드라이버 지정이 필요했습니다. getvar:all 347개 출력으로 기존 INFO 상한을 넘은 문제, has-slot 미제공, `/debug_ramdisk/su` 경로도 이 세션에서 관찰됐습니다.
 
@@ -80,7 +82,7 @@ DIAG log ranges 응답과 메시지 SetMask가 기대 형식/지원과 달랐습
 
 ### 남은 검증
 
-언루팅, 리락, 초기화 뒤 전체 복구, 펌웨어 업데이트, 새 자동/수동/업데이트 화면, 전체 GUI 연속 실행, KT/LGU·SIM2·다른 지역판은 미완료입니다. 세부 항목의 완료 상태는 [실기기 체크리스트](../.plans/04-engine/device-test-checklist.md)에서 관리합니다.
+리락, 펌웨어 업데이트, ReSukiSU 처음 루팅, 루팅 도구, 새 자동/수동/업데이트 화면의 전체 GUI 연속 실행, KT/LGU·SIM2·다른 지역판은 미완료입니다. 2026-10-08 백업 → 언락 → 루팅 → VoLTE → 복원 → 언루팅 정상 경로를 이 기기에서 확인했고(DCIM 복원 제외), 이 단계들만 기본 실전으로 켰습니다. 세부 항목의 완료 상태는 [실기기 체크리스트](../.plans/04-engine/device-test-checklist.md)에서 관리합니다.
 
 ## 업데이트·판올림의 외부 근거 — 앱 실측과 구분
 

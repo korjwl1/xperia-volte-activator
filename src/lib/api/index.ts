@@ -5,7 +5,7 @@
 
 import type { MagiskPatchRequest, FirmwareDirInfo, AdbStatus, AppItem, BackupProgress, BackupSummary, PreparedBackup, DeviceStatus, EnvCheckItem, FastbootVars, FirmwareResult, FirmwareVersions, MagiskPrepared, PatchResult, RestoreOutcome, RelockGate, SettingsOverview, SmsIeOutcome, UnlockResult } from "$lib/types";
 import { mockDeviceStatus, mockEnvChecks } from "$lib/mock/device";
-import type { ApiResult, FirmwarePackageReport } from "$lib/types";
+import type { ApiResult, FirmwarePackageReport, DeviceRecord, VoltePatchRecord, RecordItem } from "$lib/types";
 import { REAL_STEPS } from "$lib/data/runMode";
 import { canReboot, type EngineCapabilities } from "$lib/domain/execution";
 import { classifyApp, SAMPLE_FLAGS, type AppFlag } from "$lib/data/appRules";
@@ -26,7 +26,7 @@ export interface Api extends EfsApi, RootToolsApi {
   deviceStatus(serial: string): Promise<DeviceStatus | null>;
   /** 백업 경로별 실측 용량(바이트), 측정 실패 시 null */
   storageSizes(serial?: string): Promise<Record<string, number> | null>;
-  /** 설치된 3자 앱별 복구 가능성 (완전/불완전/불가), 조회 실패 시 null */
+  /** 설치된 3자 앱별 복원 가능성 (완전/불완전/불가), 조회 실패 시 null */
   appClasses(serial?: string): Promise<AppItem[] | null>;
   /** IMEI 1 (전체 값 — UI에는 마스킹, 복사 버튼에만 사용), 실패 시 null */
   readImei1(serial?: string): Promise<string | null>;
@@ -36,6 +36,8 @@ export interface Api extends EfsApi, RootToolsApi {
   firmwareVersions(serial?: string): Promise<FirmwareVersions | null>;
   /** 연결된 Sony 기기의 USB 모드 (android / fastboot / flashmode / other), 실패 시 null */
   usbModes(): Promise<{ mode: string; vendorId: number; productId: number }[] | null>;
+  /** 사용자가 폰·화면 안내를 따라야 할 때만 — 작업표시줄 반짝임 + (창이 비활성일 때) OS 알림. 실패해도 무시 */
+  attention(title: string, body: string): Promise<void>;
   /** 부트로더 모드 폰에 Windows fastboot 드라이버가 없으면 Sony 공식 드라이버를 받아 연결(UAC 한 번) — fastboot 실전에서만 */
   fastbootDriverEnsure(productName: string): Promise<ApiResult<string>>;
   /** 폰에 설정 화면 띄우기 — developer: 개발자 옵션 / about: 휴대전화 정보 */
@@ -85,12 +87,19 @@ export interface Api extends EfsApi, RootToolsApi {
   backupDelete(dir: string, backupOnly?: boolean): Promise<ApiResult<null>>;
   /** 기존 백업 폴더 완결 검사(파괴 단계 게이트용) — 폴더가 없으면 null */
   backupManifestCheck(dir: string, runId?: string): Promise<BackupSummary | null>;
+  /** 복원 폴더 선택용 빠른 읽기 — 매니페스트만(해시 검사 없음). 백업 폴더가 아니면 null */
+  backupManifestRead(dir: string): Promise<BackupSummary | null>;
+  /** 폰별 장기 기록(앱 데이터 폴더 devices/) — 없으면 null */
+  deviceRecordGet(key: string): Promise<ApiResult<DeviceRecord | null>>;
+  deviceRecordSetBackup(key: string, dir: string): Promise<ApiResult<DeviceRecord>>;
+  deviceRecordAddPatch(key: string, patch: VoltePatchRecord): Promise<ApiResult<DeviceRecord>>;
+  deviceRecordMarkRolledBack(key: string, snapshots: string[], at: string): Promise<ApiResult<DeviceRecord>>;
   /** SMS Import/Export 설치·권한·임시 폴더 준비 — 로그 문구 목록 반환 */
   smsiePrepare(serial: string | undefined, download: boolean, backupOnly?: boolean): Promise<ApiResult<string[]>>;
   /** SMS Import/Export 산출물 수집 — ready=false면 앱에서 아직 내보내지 않음 */
   smsieCollect(serial: string | undefined, backupDir: string, confirmComplete?: boolean, backupOnly?: boolean): Promise<ApiResult<SmsIeOutcome>>;
   smsieProbe(serial: string | undefined, backupDir: string, backupOnly?: boolean): Promise<ApiResult<boolean>>;
-  /** 복구 실행(APK·파일 tar 스트리밍·설정·연락처 전송) — 진행은 onRestoreProgress */
+  /** 복원 실행(APK·파일 tar 스트리밍·설정·연락처 전송) — 진행은 onRestoreProgress */
   restoreRun(serial: string | undefined, dir: string, items: string[]): Promise<ApiResult<RestoreOutcome>>;
   /** 문자·통화 기록 수동 복원 준비 — 파일 전송 + 기본 문자 앱 역할 (안내 문구 반환) */
   smsieRestoreStage(serial: string | undefined, dir: string, items: string[]): Promise<ApiResult<string>>;
@@ -123,6 +132,11 @@ export interface Api extends EfsApi, RootToolsApi {
   magiskInstall(serial: string | undefined, apkPath: string, apkSha256: string): Promise<ApiResult<null>>;
   /** Magisk 앱 삭제(언루팅 뒤) — 지웠으면 true, 설치돼 있지 않으면 false */
   magiskUninstall(serial: string | undefined): Promise<ApiResult<boolean>>;
+  /** 루팅 모듈·엔진 데이터(/data/adb) 전부 삭제 — 언루팅·매니저 변경 직전. 지운 모듈 id 목록 */
+  rootWipe(serial: string | undefined): Promise<ApiResult<string[]>>;
+  /** 설정 → 기록 관리 */
+  recordsList(): Promise<ApiResult<RecordItem[]>>;
+  recordsDelete(ids: string[]): Promise<ApiResult<number>>;
   /** adb 재부팅 — os | bootloader (root-write 또는 fastboot-write 게이트) */
   rootReboot(serial: string | undefined, target: "os" | "bootloader" | "fastboot"): Promise<ApiResult<null>>;
   /** Magisk 패치 로그 이벤트 구독 */
@@ -156,7 +170,9 @@ const hybridApi: Api = {
         const { open } = await import("@tauri-apps/plugin-dialog");
         const picked = await open({ directory: true, multiple: false, title: "백업 위치 선택" });
         return typeof picked === "string" ? picked : null;
-      } catch {
+      } catch (error) {
+        // 창이 뜨지 않은 원인을 남긴다(조용히 null로 바꾸면 버튼이 아무 반응 없는 것처럼 보인다)
+        console.warn("[pickFolder] 폴더 선택 창 실패", error);
         return null;
       }
     }
@@ -199,6 +215,22 @@ const hybridApi: Api = {
   async fastbootDriverEnsure(productName) {
     if (!REAL_STEPS.fastboot) return { ok: false, error: "fastboot 실전이 비활성화되어 있습니다" };
     return await invokeResult<string>("fastboot_driver_ensure", { productName });
+  },
+
+  async attention(title, body) {
+    if (!inTauri()) return;
+    try {
+      const { getCurrentWindow, UserAttentionType } = await import("@tauri-apps/api/window");
+      // Critical: 창을 다시 볼 때까지 작업표시줄 버튼이 반짝인다(Windows FlashWindowEx)
+      await getCurrentWindow().requestUserAttention(UserAttentionType.Critical);
+      // 앱 창을 보고 있으면 알림은 소음이다 — 다른 창을 보고 있을 때만 OS 알림
+      if (typeof document !== "undefined" && document.hasFocus()) return;
+      const n = await import("@tauri-apps/plugin-notification");
+      if (!(await n.isPermissionGranted()) && (await n.requestPermission()) !== "granted") return;
+      n.sendNotification({ title, body });
+    } catch (error) {
+      console.warn("[attention] 알림 실패", error);
+    }
   },
 
   async usbModes() {
@@ -292,6 +324,18 @@ const hybridApi: Api = {
     return await invokeResult<null>("backup_delete", { dir });
   },
 
+  async deviceRecordGet(key) { return inTauri() ? invokeResult<DeviceRecord | null>("device_record_get", { key }) : { ok: true, value: null }; },
+  async deviceRecordSetBackup(key, dir) { return inTauri() ? invokeResult<DeviceRecord>("device_record_set_backup", { key, dir }) : { ok: true, value: { lastBackupDir: dir, voltePatches: [] } }; },
+  async deviceRecordAddPatch(key, patch) { return inTauri() ? invokeResult<DeviceRecord>("device_record_add_patch", { key, patch }) : { ok: true, value: { lastBackupDir: null, voltePatches: [patch] } }; },
+
+  async deviceRecordMarkRolledBack(key, snapshots, at) { return inTauri() ? invokeResult<DeviceRecord>("device_record_mark_rolled_back", { key, snapshots, at }) : { ok: true, value: { lastBackupDir: null, voltePatches: [] } }; },
+
+  async backupManifestRead(dir) {
+    const result = await invokeResult<BackupSummary | null>("backup_manifest_read", { dir });
+    if (!result.ok) throw new Error(result.error);
+    return result.value;
+  },
+
   async backupManifestCheck(dir,runId) {
     const result=await invokeResult<BackupSummary>("backup_manifest_check", { dir, runId: runId ?? null });
     if(!result.ok) throw new Error(result.error);
@@ -318,17 +362,17 @@ const hybridApi: Api = {
   },
 
   async restoreRun(serial, dir, items) {
-    if (!REAL_STEPS.restore) return { ok: false, error: "실전 복구가 비활성화되어 있습니다" };
+    if (!REAL_STEPS.restore) return { ok: false, error: "실전 복원이 비활성화되어 있습니다" };
     return await invokeResult<RestoreOutcome>("restore_run", { serial: serial ?? null, dir, items });
   },
 
   async smsieRestoreStage(serial, dir, items) {
-    if (!REAL_STEPS.restore) return { ok: false, error: "실전 복구가 비활성화되어 있습니다" };
+    if (!REAL_STEPS.restore) return { ok: false, error: "실전 복원이 비활성화되어 있습니다" };
     return await invokeResult<string>("smsie_restore_stage", { serial: serial ?? null, dir, items });
   },
 
   async smsieRestoreFinish(serial) {
-    if (!REAL_STEPS.restore) return { ok: false, error: "실전 복구가 비활성화되어 있습니다" };
+    if (!REAL_STEPS.restore) return { ok: false, error: "실전 복원이 비활성화되어 있습니다" };
     return await invokeResult<string[]>("smsie_restore_finish", { serial: serial ?? null });
   },
 
@@ -380,6 +424,13 @@ const hybridApi: Api = {
     if (!REAL_STEPS.root) return { ok: false, error: "루팅 실전 실행이 비활성화되어 있습니다" };
     return await invokeResult<PatchResult>("magisk_patch", { request });
   },
+
+  async rootWipe(serial) {
+    if (!REAL_STEPS.root) return { ok: false, error: "루팅 실전 실행이 비활성화되어 있습니다" };
+    return await invokeResult<string[]>("root_wipe", { serial: serial ?? null });
+  },
+  async recordsList() { return inTauri() ? invokeResult<RecordItem[]>("records_list", {}) : { ok: true, value: [] }; },
+  async recordsDelete(ids) { return inTauri() ? invokeResult<number>("records_delete", { ids }) : { ok: true, value: ids.length }; },
 
   async magiskUninstall(serial) {
     if (!REAL_STEPS.root) return { ok: false, error: "루팅 실전 실행이 비활성화되어 있습니다" };

@@ -25,6 +25,9 @@ fn validate(cfg: &Configuration) -> Result<()> {
     Ok(())
 }
 pub fn validate_port(name: &str) -> Result<()> {
+    if name == super::AUTO_PORT {
+        return Ok(());
+    }
     let digits = name.strip_prefix("COM").ok_or_else(|| {
         Error::new(
             "invalidPort",
@@ -55,7 +58,28 @@ fn file(app: &tauri::AppHandle) -> Result<PathBuf> {
 #[tauri::command]
 pub async fn efs_config_get(app: tauri::AppHandle) -> Result<Option<Configuration>> {
     let path = file(&app)?;
-    super::offline(move || read_configuration(&path)).await
+    // 저장한 설정이 없으면(일반 사용) 앱이 정한다 — 포트 자동, 동봉 프리셋, 앱 데이터 폴더의 복원본(2026-10-08 사용자 결정)
+    let defaults = defaults(&app)?;
+    super::offline(move || Ok(Some(read_configuration(&path)?.unwrap_or(defaults)))).await
+}
+fn defaults(app: &tauri::AppHandle) -> Result<Configuration> {
+    let presets = app
+        .path()
+        .resource_dir()
+        .map_err(|e| Error::io("configuration", e))?
+        .join("assets")
+        .join("efs");
+    let snapshots = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| Error::io("configuration", e))?
+        .join("efs-snapshots");
+    std::fs::create_dir_all(&snapshots).map_err(|e| Error::io("configuration", e))?;
+    Ok(Configuration {
+        port: super::AUTO_PORT.into(),
+        preset_root: presets.to_string_lossy().into(),
+        snapshot_root: snapshots.to_string_lossy().into(),
+    })
 }
 fn read_configuration(path: &Path) -> Result<Option<Configuration>> {
     let Some(bytes) = crate::storage::read_bounded(path, MAX_CONFIGURATION)

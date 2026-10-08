@@ -44,9 +44,27 @@ APK는 릴리스 자산 digest·크기와 인증서 핀을 확인하고 캐시�
 
 XQ-DQ44의 `init_boot` 기록은 fastbootd에서 수행합니다. bootloader의 기록 거부를 무시해 같은 명령을 반복하지 않습니다. 모드·드라이버·슬롯 검사는 [부트로더](bootloader.md)를 참조하세요.
 
+## ReSukiSU로 처음 루팅 (실기기 미검증)
+
+2026-10-08 사용자 결정으로 루팅 단계에서 Magisk 대신 ReSukiSU(KernelSU 계열, `Baka-SU/BakaSU` 릴리스)를 고를 수 있습니다. 계획 확인 화면의 **루팅 엔진**에서 고르고 버전 태그를 지정합니다. `init_boot` 기종만 허용하며, `REAL_STEPS.rootTools`와 Cargo `root-tools-write`가 켜진 빌드에서만 선택할 수 있습니다(기본 꺼짐).
+
+ReSukiSU는 LKM 방식이라 루트가 없는 폰에서도 매니저 앱이 순정 init_boot를 패치합니다. 패치에 쓰는 커널 모듈은 폰의 현재 커널 KMI(예: XQ-DQ44 67.2.A.3.178은 `android13-5.15`)를 따릅니다. PC가 패치를 대신하지 않으므로 한 번은 사용자가 폰에서 직접 누릅니다.
+
+1. 현재 설치 버전 순정 이미지 대조(`boot_image_check`)
+2. 선택한 태그의 매니저 APK 준비(digest·인증서 핀)·설치(`resukisu_install`)
+3. 순정 init_boot를 `/sdcard/Download/xvolte_stock_init_boot_<해시>.img`로 전송(`resukisu_stage_stock`)하고 기기 시각을 기록
+4. 수동: ReSukiSU 앱 → 설치 → 파일 선택 후 패치. 매니저가 `Download/kernelsu_patched_<시각>.img`를 만든다
+5. 전송 시각 이후의 가장 새 결과를 크기가 멈춘 뒤 PC로 받고(`resukisu_fetch_patched`), `root_external_patch_import`로 순정 부모·같은 기기·헤더·크기·해시를 검사
+6. fastbootd 양 슬롯 기록 → OS 복귀
+7. 수동: ReSukiSU 앱 → 슈퍼유저에서 Shell 루트 허용(승인 창이 없음) → `su -c id` uid=0 확인
+
+받은 파일은 검사 전 상태이며 검사를 통과한 이미지만 기록합니다. 앱 재시작 등으로 전송 기록이 사라지면 루팅 단계를 처음부터 다시 진행합니다.
+
 ## 루트 권한 확인
 
 공통 su 경로는 PATH → 실행 가능한 `/debug_ramdisk/su` → `/system/xbin/su` → `/system/bin/su`입니다. KernelSU 계열의 ksud는 일반 su 폴백으로 쓰지 않습니다. 새 `root_inspect`는 권한·버전·마커를 대조하고, 버전/마커 충돌과 세부 포크 미확정을 반환합니다. 기존 boolean `root_check`는 엔진 식별 계약이 아닙니다.
+
+기기 상태 카드의 루팅 표시는 su 위치, 루트 데몬(magiskd·ksud·apd), `/proc/modules`의 `kernelsu`(ReSukiSU LKM은 `/sys/module`에서는 숨지만 이 목록에는 남음)를 봅니다. 하나라도 있으면 루팅, 부트로더가 잠겨 있으면 비루팅입니다. 언락 상태에서 프로세스 목록을 읽었는데 근거가 없으면 비루팅으로 표시합니다. 단, KernelSU 계열 매니저 앱만 있고 근거가 없으면(커널 내장형 등) 판별 불가입니다.
 
 `su -c id`의 uid=0이 근거입니다. 현재 Magisk 환경에서는 PATH에 su가 없고 `/debug_ramdisk/su`만 있을 수 있으므로 공통 `device_io::su!` 경로를 사용합니다.
 
@@ -54,11 +72,11 @@ XQ-DQ44의 `init_boot` 기록은 fastbootd에서 수행합니다. bootloader의 
 
 ## 언루팅
 
-현재 설치 버전의 순정 이미지를 대조한 뒤 양 슬롯에 재기록하고 OS 복귀·루트 상태를 확인합니다. Magisk 앱 삭제 등의 수동 안내가 남을 수 있습니다. 다른 버전 IMG를 임의로 덮어쓰지 않습니다.
+현재 설치 버전의 순정 이미지를 대조한 뒤 양 슬롯에 재기록하고 OS 복귀·루트 상태를 확인합니다. 루트 해제가 확인되면 Magisk 앱(`com.topjohnwu.magisk`)을 삭제합니다(`magisk_uninstall`). 확인하지 못했거나 앱 숨기기로 이름이 바뀐 경우는 직접 삭제하도록 안내합니다. 다른 버전 IMG를 임의로 덮어쓰지 않습니다. 수동 언루팅은 초기화가 없으므로 백업 단계를 넣지 않습니다.
 
 리락 요청이면 순정 복원이 필수 선행 조건입니다. 언루팅만으로 리락이 자동 실행되는 것은 아닙니다. 새 버전 업데이트 뒤 루팅 재적용에는 새 버전의 이미지가 필요합니다. 전체 업데이트 기록 엔진은 아직 미구현입니다.
 
-XQ-DQ44/Magisk 30.7 CLI 단계별 루팅은 확인됐으나 다른 모델·Magisk 버전과 전체 GUI·언루팅 검증은 분리해서 기록합니다. [기기별 기록](../devices.md)과 [실기기 체크리스트](../../.plans/04-engine/device-test-checklist.md)를 확인하세요.
+XQ-DQ44/Magisk 30.7 CLI 단계별 루팅과 GUI 수동 언루팅(순정 양 슬롯 기록·루트 해제)은 확인했습니다. Magisk 앱 자동 삭제·ReSukiSU 처음 루팅·다른 모델·Magisk 버전은 분리해서 기록합니다. [기기별 기록](../devices.md)과 [실기기 체크리스트](../../.plans/04-engine/device-test-checklist.md)를 확인하세요.
 
 ## 예정: 업데이트 전 이미지 패치
 
@@ -73,3 +91,9 @@ Newflasher의 순정 SIN 기록과 Magisk raw IMG 기록은 별도 단계입니�
 기존 Magisk 유지 또는 이미 unlocked인 기기의 명시적 신규 루팅 선택에만 이 단계를 넣고, locked 기기에 재언락·리락을 추가하지 않습니다. 지원하지 않는 루팅 방식·판별 불가 상태는 유지 가능으로 표시하지 않습니다. vbmeta 검증 해제·암호화 옵션 변경을 기본 추가하지 않고 목표 Android의 Magisk/모듈 호환을 따로 확인합니다.
 
 순정 업데이트 뒤 패치 기록이 실패하면 업데이트 성공과 루팅 유지 실패를 따로 표시하고 검증된 이미지/진행 기록을 보존합니다. 해당 경로는 구현/실기기 검증 전입니다. [분기 계획](../../.plans/04-engine/workflow-modes-20261007.md)의 상태·재개·검증 기준을 따릅니다.
+
+## 모듈·매니저 데이터 정리와 매니저 변경 (2026-10-08)
+
+언루팅(리락 앞의 언루팅 포함)은 순정 이미지를 기록하기 전, 루트가 있을 때 `root_wipe`로 `/data/adb/*`(설치된 모듈·Magisk/KernelSU 데이터·슈퍼유저 권한)를 비웁니다. 언루팅 뒤에도 이 데이터는 남아 있다가 같은 엔진으로 다시 루팅하면 되살아나므로, 엔진에 맞지 않는 모듈이 부트 루프를 일으키지 않게 지웁니다. 모듈·설정을 다른 엔진으로 옮기지는 않습니다(마운트·Zygisk·숨김 방식이 엔진마다 다름). 끝나면 Magisk·ReSukiSU 매니저 앱을 지웁니다.
+
+루팅 매니저 변경은 "순정 이미지 준비 → 기존 루팅 해제(위 정리 포함) → 다른 엔진으로 루팅" 계획입니다. 언락·초기화는 없습니다. 실기기 미검증입니다.

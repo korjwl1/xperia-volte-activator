@@ -1,4 +1,4 @@
-// 백업 항목 정의 — 앱별 복구 분류는 data/appRules.ts
+// 백업 항목 정의 — 앱별 복원 분류는 data/appRules.ts
 import type { BackupGroup } from "$lib/types";
 
 const MB = 1024 ** 2;

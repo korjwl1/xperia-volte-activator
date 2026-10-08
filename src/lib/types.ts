@@ -137,6 +137,8 @@ export interface DeviceStatus {
   mode: DeviceMode;
   bootloader: "locked" | "unlocked" | "unknown";
   rooted: TriState;
+  /** 보이는 근거로 고른 지금 루팅 엔진 */
+  rootEngine?: "magisk" | "kernelsu" | null;
   sims: SimInfo[];
   usb: UsbInfo;
   /** 언락 사전 조건 — null = 판별 불가 */
@@ -166,21 +168,26 @@ export interface AdbStatus {
 export type Profile = "clean-return" | "keep-root" | "unroot-only";
 
 export type WorkflowMode = "automatic" | "manual" | "update";
-export const MANUAL_TASK_IDS = ["backup", "restore", "unlock", "relock", "root", "unroot", "volte", "verify", "root-manager", "root-modules"] as const;
+export const MANUAL_TASK_IDS = ["backup", "restore", "unlock", "relock", "root", "unroot", "volte", "volte-rollback", "verify", "root-manager", "root-modules"] as const;
+/** 폰별 장기 기록 — 마지막 백업 폴더·VoLTE 패치 이력(패치 전 모뎀 설정 사본) */
+export interface VoltePatchRecord { at: string; slot: number; carrier: string; snapshot: string; /** 이 사본으로 되돌린 시각 */ rolledBackAt?: string }
+/** 설정 → 기록 관리의 한 줄 */
+export interface RecordItem { id: string; kind: "patch" | "backup-location" | "journal" | "firmware" | "snapshot"; title: string; detail: string; bytes: number; at: string }
+export interface DeviceRecord { lastBackupDir: string | null; voltePatches: VoltePatchRecord[] }
 export type ManualTask = (typeof MANUAL_TASK_IDS)[number];
 
 /** 진행 기록 검증(domain/journal.ts)도 이 목록을 쓴다 — 타입과 검증 목록이 어긋나지 않게 한 곳에서 정의 */
 export const STEP_KINDS = [
   "backup", "unlock", "setup", "root", "efs-preflight", "efs", "verify", "volte-props",
   "fw-download", "fw-flash", "fw-verify",
-  "unroot", "relock", "final-verify", "restore", "dexopt", "root-modules",
+  "unroot", "relock", "final-verify", "restore", "dexopt", "root-modules", "efs-rollback",
 ] as const;
 export type StepKind = (typeof STEP_KINDS)[number];
 
 export const MANUAL_IDS = [
   "usb-debug", "su-grant", "magisk-patch", "oem-toggle", "mode-wait", "ims-check",
   "unlock-code", "firmware-select", "backup-notice", "flash-mode", "ims-precheck",
-  "smsie-export", "smsie-import", "contacts-import",
+  "smsie-export", "smsie-import", "contacts-import", "resukisu-patch",
 ] as const;
 export type ManualId = (typeof MANUAL_IDS)[number];
 
@@ -275,7 +282,7 @@ export interface BackupGroup {
   items: BackupItem[];
 }
 
-/** 앱 복구 분류 — data/appRules.ts 규칙 (모든 폰 공통)
+/** 앱 복원 분류 — data/appRules.ts 규칙 (모든 폰 공통)
  *  restored = 이 프로그램이 데이터를 복원(외부 데이터 존재) / relogin = 앱만 재설치, 다시 로그인 / lost = 미리 직접 옮기지 않으면 데이터 소실 */
 export type AppRecovery = "restored" | "relogin" | "lost";
 
@@ -338,7 +345,7 @@ export interface BackupSummary {
   sourceMetadata?: { itemId: string; path: string; sha256: string; entries: number; directories: number; unavailableBirthTimes: number; payloadMismatches: number; complete: boolean; errors: string[]; captureContext: string }[];
 }
 
-/** 백업·복구 진행 이벤트 페이로드 — 'backup:progress' / 'restore:progress' */
+/** 백업·복원 진행 이벤트 페이로드 — 'backup:progress' / 'restore:progress' */
 export interface BackupProgress {
   itemId: string;
   phase: string;
@@ -356,7 +363,7 @@ export interface SmsIeOutcome {
   summary: BackupSummary | null;
 }
 
-/** 복구 실행 결과 — 자동 복구 로그·실패 목록(실패가 있어도 나머지는 진행) */
+/** 복원 실행 결과 — 자동 복원 로그·실패 목록(실패가 있어도 나머지는 진행) */
 export interface RestoreOutcome {
   logs: string[];
   failures: string[];
@@ -429,7 +436,7 @@ export interface RunJournal {
   config: VolteConfig;
   opts: { mode?: WorkflowMode; manualTask?: ManualTask; modules?: RootModuleSelection; unroot: boolean; relock: boolean; restore: boolean; backupOnly?: boolean };
   backupPath: string;
-  /** 실전 백업이 만든 백업 폴더(manifest.json 위치) — 복구·이어받기에 사용 */
+  /** 실전 백업이 만든 백업 폴더(manifest.json 위치) — 복원·이어받기에 사용 */
   backupDir?: string;
   /** 실전 루팅 산출물의 경로 — 언루팅 입력으로 사용하지 않는다. */
   patchedImage?: string;

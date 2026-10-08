@@ -180,7 +180,7 @@
         </div>
         {#if !supportedTarget}<p class="text-xs text-warning">ReSukiSU 경로는 init_boot 기종만 준비됐습니다. 이 기종의 boot 패치는 별도 검증이 필요합니다.</p>{/if}
         {#if stock}<p class="text-xs break-all text-muted-foreground">순정 IMG: {stock.path}</p>{/if}
-        {#if switched}<p class="text-xs bg-info-container text-info rounded-lg p-2">전환 단계: {switched.stage === "cleanup-intent" ? "정리 결과 불확정 · 수동 복구 필요" : switched.stage === "cleaned-awaiting-stock" ? "모듈 정리 완료 · 순정 복원 대기" : switched.stage === "stock-verified" ? "순정 부팅 검증 완료 · 새 엔진 설치 대기" : "완료"}</p>{/if}
+        {#if switched}<p class="text-xs bg-info-container text-info rounded-lg p-2">전환 단계: {switched.stage === "cleanup-intent" ? "정리 결과 불확정 · 수동 복원 필요" : switched.stage === "cleaned-awaiting-stock" ? "모듈 정리 완료 · 순정 복원 대기" : switched.stage === "stock-verified" ? "순정 부팅 검증 완료 · 새 엔진 설치 대기" : "완료"}</p>{/if}
         <p class="text-xs text-muted-foreground">기존 매니저 앱은 직접 제거하세요. 숨긴 Magisk 앱도 제거 대상입니다. 새 엔진에서 앱별 su 권한과 모듈 설정을 다시 구성해야 합니다.</p>
         <div class="grid grid-cols-3 gap-2">
           <Button size="sm" variant="destructive" disabled={busy || !canFlash || !stock || !supportedTarget || device.bootloader !== "unlocked" || !!openSwitch || root?.access !== "granted"} onclick={() => work("1. 모듈·엔진 정리", cleanup, true)}>1. 모듈·엔진 정리</Button>
@@ -204,9 +204,8 @@
           <Button size="sm" variant="outline" disabled={busy || switched?.stage !== "stock-verified"} onclick={() => work("6. 엔진 전환 최종 확인", async () => { switched = requireResult(await api.rootSwitchFinish(serial)); await inspect(); })}>6. OS 복귀 후 루트 재승인·검증</Button></div>
       </section>{:else}<section class="rounded-xl bg-card elev-1 p-4 space-y-3">
         <div class="flex gap-2 items-center"><Package size={16} class="text-primary" /><h2 class="text-sm font-semibold">모듈 · 한 번에 하나씩 설치 후 재부팅</h2></div>
-        <p class="text-xs text-muted-foreground">Magisk: 내장 Zygisk·DenyList 강제 적용 OFF. ReSukiSU: 모듈 마운트 해제 기본값·Hide SELinux Modification ON. 금융앱 동작이나 Play Integrity 통과는 보장하지 않습니다.</p>
         <ModuleSetSelector {selection} onChange={value => selection = value} disabled={busy || !!openSwitch} engine={root?.engine ?? "unknown"} />
-        <Button size="sm" disabled={busy || !canWrite || !!openSwitch || !inventory || inventory.rebootRequired || inventory.uncertain || !selection.settingsAck || selectedModuleSets(selection).length === 0} onclick={() => work("모듈 세트 설치", installSets, true)}>선택한 세트 설치</Button>
+        <Button size="sm" disabled={busy || !canWrite || !!openSwitch || !inventory || inventory.rebootRequired || inventory.uncertain || selectedModuleSets(selection).length === 0} onclick={() => work("모듈 세트 설치", installSets, true)}>선택한 세트 설치</Button>
         {#if moduleInstruction}<ModuleInstruction message={moduleInstruction} onComplete={() => finishInstruction(true)} onCancel={() => { cancelled = true; finishInstruction(false); }} />{:else if busy}<Button size="sm" variant="outline" onclick={() => cancelled = true}>현재 작업 종료 후 세트 설치 중단</Button>{/if}
         {#if inventory?.rebootRequired}<p class="text-xs text-warning">이전 모듈 설치·변경 이후 재부팅이 필요합니다. 재부팅 후 권한·엔진·모듈 조회로 확인하세요.</p>{/if}
         {#if inventory?.uncertain}<div class="space-y-2"><p class="text-xs text-destructive">설치 결과를 확인할 수 없습니다. 모듈을 점검하고 필요한 경우 비활성화·제거하세요. 자동 재시도하지 않습니다.</p><Button size="sm" variant="outline" disabled={busy || !riskAck} onclick={() => work("재부팅 후 모듈 기록 재확인", async () => { inventory = requireResult(await api.rootModuleReconcile(serial, true)); })}>재부팅 후 오류·모듈 목록을 검토했습니다</Button></div>{/if}

@@ -19,9 +19,25 @@
 
   import { onMount } from "svelte";
   import { observeDesktopWindow } from "$lib/api";
-  import { TriangleAlert } from "@lucide/svelte/icons";
+  import { TriangleAlert, ArrowLeft } from "@lucide/svelte/icons";
+  import SplashScreen from "$lib/components/SplashScreen.svelte";
+  import SettingsView from "$lib/views/SettingsView.svelte";
 
   let checkingJournal = $state(false);
+
+  // 시작 스플래시 — 첫 기기 조회가 끝나면 닫힌다. 조회가 멈춰도 갇히지 않게 15초 뒤에는 닫는다(첫 화면이 상태를 안내)
+  let splashDone = $state(false);
+  let splashTimedOut = $state(false);
+  $effect(() => {
+    if (splashDone) return;
+    const timer = setTimeout(() => (splashTimedOut = true), 15000);
+    return () => clearTimeout(timer);
+  });
+  const splashReady = $derived(wizard.startupReady || wizard.view !== "device" || splashTimedOut);
+  // 스플래시가 끝나고 폰이 연결돼 있으면(늦게 연결되면 그때) 끝나지 않은 작업을 한 번 확인한다
+  $effect(() => {
+    if (splashDone && wizard.view === "device" && wizard.device?.state === "device") void wizard.checkStartupJournal();
+  });
 
   // 작업 중 창 닫기 — 실수로 끄는 경우를 대비해 확인 후, 멈춘 사유와 함께 기록을 저장하고 종료
   let closeAsk = $state(false);
@@ -77,17 +93,23 @@
     : true
   );
 
+  const nextReason = $derived(
+    wizard.view === "warning" ? (!wizard.riskAck ? "책임 고지에 동의해 주세요" : "OMD 등록 확인에 동의해 주세요")
+    : wizard.view === "step1" ? (!wizard.hasAnyTask ? (wizard.mode === "update" ? "업데이트할 버전을 선택하세요" : "VoLTE를 적용할 통신사를 하나 이상 선택하세요") : "업데이트 안내에 동의해 주세요")
+    : ""
+  );
+
   async function onNext() {
     if (!canNext || checkingJournal) return;
     switch (wizard.view) {
       case "warning":
-        // 같은 폰의 끝나지 않은 작업이 있으면 불러올지 먼저 묻는다
-        checkingJournal = true;
-        try {
-          if (!(await wizard.checkJournal())) wizard.view = wizard.mode === "manual" && wizard.manualTask !== "volte" ? "step2" : "step1";
-        } finally {
-          checkingJournal = false;
+        // 시작 팝업에서 [이어서 진행]을 고른 경우 — 동의를 받았으니 바로 이어 간다
+        if (wizard.resumeAfterWarning) {
+          wizard.pendingJournal = wizard.resumeAfterWarning;
+          wizard.resumeJournal();
+          break;
         }
+        wizard.view = wizard.mode === "manual" && wizard.manualTask !== "volte" ? "step2" : "step1";
         break;
       case "step1":
         wizard.view = "step2"; // step2의 [실행]은 뷰 내부 버튼
@@ -102,11 +124,18 @@
   }
 </script>
 
+{#if !splashDone}<SplashScreen ready={splashReady} onDone={() => (splashDone = true)} />{/if}
+<!-- 끝나지 않은 작업은 스플래시가 끝난 뒤 한 번만 묻는다 -->
+{#if splashDone && wizard.pendingJournal}<ResumeJournal journal={wizard.pendingJournal} />{/if}
 <div class="h-screen flex flex-col bg-background text-foreground overflow-hidden">
   {#if wizard.view === "device"}
     <!-- 1페이지: 풀스크린 (헤더/사이드바/푸터 없음) -->
     <main class="flex-1 min-h-0 flex flex-col">
       <DeviceStatusView />
+    </main>
+  {:else if wizard.view === "settings"}
+    <main class="flex-1 min-h-0 flex flex-col">
+      <SettingsView />
     </main>
 
   {:else}
@@ -154,12 +183,13 @@
     <!-- 하단 액션 바 (warning·step1만, step2는 뷰 내부 버튼) -->
     {#if wizard.view === "warning" || wizard.view === "step1"}
       <footer class="h-14 shrink-0 border-t bg-muted/40 flex items-center justify-between px-6">
-        <Button variant="ghost" size="sm" onclick={onPrev}>← 이전</Button>
-        <Button size="sm" onclick={onNext} disabled={!canNext || checkingJournal}>다음</Button>
+        <Button variant="ghost" size="sm" onclick={onPrev}><ArrowLeft size={14} />이전</Button>
+        <div class="flex items-center gap-4">
+          <!-- [다음]이 왜 막혔는지 — 동의·선택을 하지 않은 경우 -->
+          {#if !canNext && !checkingJournal}<span role="status" class="text-[11px] text-warning">{nextReason}</span>{/if}
+          <Button size="sm" onclick={onNext} disabled={!canNext || checkingJournal}>다음</Button>
+        </div>
       </footer>
-    {/if}
-    {#if wizard.pendingJournal}
-      <ResumeJournal journal={wizard.pendingJournal} />
     {/if}
     {#if closeAsk}
       <Modal title="작업 종료 확인" onClose={() => { if (!closing) { closeAsk = false; saveFailed = false; closeError = ""; } }} class="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-6">

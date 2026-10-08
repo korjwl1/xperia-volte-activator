@@ -27,6 +27,58 @@ use std::{
     time::Duration,
 };
 static OWNER: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
+/// DIAG 포트 자동 선택(2026-10-08 사용자 결정) — 설정의 포트가 `AUTO`면 Qualcomm(05C6) 직렬 포트 중
+/// hello/query에 응답하는 첫 포트를 쓴다(XQ-DQ44: MSM·MDM·CNSS 중 MSM). 같은 실행 동안은 찾은 포트를 유지하고 DIAG 전환 때 비운다.
+static DETECTED_PORT: Mutex<Option<String>> = Mutex::new(None);
+pub const AUTO_PORT: &str = "AUTO";
+fn detected_port() -> Option<String> {
+    DETECTED_PORT.lock().ok().and_then(|p| p.clone())
+}
+fn diag_candidates() -> Vec<String> {
+    let mut ports: Vec<(u32, String)> = serialport::available_ports()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| matches!(&p.port_type, serialport::SerialPortType::UsbPort(u) if u.vid == 0x05C6))
+        .filter_map(|p| Some((p.port_name.strip_prefix("COM")?.parse().ok()?, p.port_name)))
+        .collect();
+    ports.sort();
+    ports.into_iter().map(|(_, name)| name).collect()
+}
+fn resolve_port(port: &str, cancel: &Arc<AtomicBool>) -> Result<String> {
+    if port != AUTO_PORT {
+        return Ok(port.to_string());
+    }
+    if let Some(found) = detected_port() {
+        return Ok(found);
+    }
+    // DIAG 전환 직후에는 포트가 늦게 나타난다 — 최대 60초 동안 다시 찾는다
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        for name in diag_candidates() {
+            if cancel.load(Ordering::Acquire) {
+                return Err(Error::new("cancelled", "DIAG port", "Cancelled while searching DIAG port"));
+            }
+            let Ok(io) = transport::Com::open(&name) else { continue };
+            let mut session = Session::new(io, cancel.clone(), Duration::from_millis(3000));
+            let ok = session.initialize().and_then(|_| session.query()).is_ok();
+            let _ = session.cleanup();
+            if ok {
+                if let Ok(mut slot) = DETECTED_PORT.lock() {
+                    *slot = Some(name.clone());
+                }
+                return Ok(name);
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(Error::new(
+                "portNotFound",
+                "DIAG port",
+                "응답하는 Qualcomm DIAG 포트를 찾지 못했습니다 — DIAG 드라이버(qcser) 설치와 폰의 DIAG 전환을 확인하세요",
+            ));
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+}
 
 fn gate() -> Result<()> {
     if cfg!(feature = "efs-write") {
@@ -89,6 +141,7 @@ async fn execute<R: Send + 'static>(
         if operation.cancel.load(Ordering::Acquire) {
             return Err(Error::new("cancelled", "EFS", "Cancelled before port open"));
         }
+        let port = resolve_port(&port, &operation.cancel)?;
         let io = transport::Com::open(&port)?;
         let mut session = Session::new(io, operation.cancel.clone(), Duration::from_millis(7000));
         let result = f(&mut session);
@@ -155,7 +208,10 @@ pub async fn efs_preflight(port: String) -> Result<PreflightOut> {
         let warnings = s.initialize()?;
         let parameters = s.query()?;
         Ok(PreflightOut {
-            log: vec!["Native EFS hello/query succeeded".into()],
+            log: vec!["Native EFS hello/query succeeded".into()]
+                .into_iter()
+                .chain(detected_port().map(|p| format!("DIAG 포트 {p} 자동 선택")))
+                .collect(),
             errors: vec![],
             warnings,
             parameters,
@@ -300,6 +356,10 @@ pub async fn efs_diag_open(serial: String) -> Result<()> {
             "DIAG switch",
             "Explicit ADB serial required",
         ));
+    }
+    // 새 DIAG 전환이면 포트를 다시 찾는다
+    if let Ok(mut slot) = DETECTED_PORT.lock() {
+        *slot = None;
     }
     tauri::async_runtime::spawn_blocking(move || {
         crate::adb::with_first_device(&Some(serial), |dev| diag::open(dev, &owner.cancel)).map_err(

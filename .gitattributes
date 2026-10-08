@@ -8,3 +8,6 @@
 *.toml text eol=lf
 *.css text eol=lf
 *.html text eol=lf
+
+# 해시가 고정된 VoLTE 프리셋 원본 — 줄바꿈 변환 금지(2026-10-08)
+src-tauri/assets/efs/** -text

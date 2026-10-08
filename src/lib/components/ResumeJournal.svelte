@@ -41,13 +41,13 @@
         ? `${journal.backupItems.map((id) => itemLabel.get(id) ?? id).join(", ")}${journal.backupPath ? ` → ${journal.backupPath}` : ""}`
         : "백업 안 함",
     ]);
-    const post = [journal.opts.unroot && "언루팅", journal.opts.relock && "리락", journal.opts.restore && journal.backupItems.length > 0 && "복구"].filter(Boolean);
+    const post = [journal.opts.unroot && "언루팅", journal.opts.relock && "리락", journal.opts.restore && journal.backupItems.length > 0 && "복원"].filter(Boolean);
     if (post.length > 0) rows.push(["마무리", post.join(" · ")]);
     return rows;
   });
 </script>
 
-<Modal title="이전 작업 이어서 진행" onClose={() => { wizard.pendingJournal = null; wizard.view = wizard.opts.backupOnly ? "device" : "warning"; }} class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6">
+<Modal title="이전 작업 이어서 진행" onClose={() => {}} class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6">
   <div class="w-full max-w-xl max-h-full flex flex-col rounded-2xl border bg-background elev-3">
     <div class="flex items-center gap-3 p-6 pb-4 shrink-0">
       <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">

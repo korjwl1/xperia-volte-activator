@@ -1,5 +1,12 @@
 # 실기기 검증 체크리스트
 
+## 2026-10-08 ReSukiSU 처음 루팅 — 실기기 미검증 (`REAL_STEPS.rootTools`, `root-tools-write`)
+
+- [ ] 비루팅 XQ-DQ44(KMI android13-5.15)에서 매니저 설치·순정 init_boot 전송·폰 패치(파일 선택 후 패치)·kernelsu_patched 결과 자동 감지·PC 검사·fastbootd 양 슬롯 기록·부팅
+- [ ] Shell 루트 허용 안내 후 uid=0 확인, 기기 상태 카드가 /proc/modules의 kernelsu로 "루팅됨" 표시
+- [ ] ReSukiSU 루팅 상태에서 VoLTE(DIAG 전환·EFS) 단계의 su 동작, 언루팅(순정 복원) 후 매니저 앱 처리
+- [ ] Magisk 언루팅 후 Magisk 앱 자동 삭제(`magisk_uninstall`) 확인
+
 ## 2026-10-08 수동 루트 도구 — 전부 실기기 미검증
 
 - [ ] Magisk PATH/ramdisk·KernelSU 표준 su 실행 경로, 승인·거부·시간 초과·충돌 마커 판정. 거부를 순정으로 간주하지 않고 기존 DIAG/VoLTE su 동작 회귀 확인
@@ -63,7 +70,7 @@ status: 진행 전 — 2026-10-05 기준 아래 항목은 모두 **실기기에�
   - 큰 앱 `pm install-commit`(dexopt), 저장 공간 측정 `du`, boot_patch.sh가 상한 안에 끝나는가
   - 폰을 응답 없게 만든 뒤(화면 잠금 상태 USB 디버깅 해제 등) 300초 안에 오류로 끝나고 다음 호출이 다시 연결되는가
 - [ ] **연결 선택**: adb 서버 공존·복수 기기·Sony 외 기기 혼입 시 Sony 1대만 고르는가, 미승인(unauthorized) 안내가 뜨는가
-- [ ] **루팅 여부 3단계** (`adb.rs` `root_state`): 루팅 기기 true, 잠긴 순정 false, 언락·su 숨김(Magisk 앱 전용 권한) "unknown"
+- [x] **루팅 여부 판정** (`adb.rs` `root_state`): 2026-10-08 XQ-DQ44 Magisk 루팅 상태 "루팅됨"(/debug_ramdisk/su), 언루팅 후 언락 상태에서 프로세스 목록 확인으로 "루팅 아님". KernelSU 계열은 /proc/modules·매니저 앱으로 판정(미검증)
 
 ## 2. 백업 (`REAL_STEPS.backup`)
 
@@ -245,3 +252,12 @@ status: 진행 전 — 2026-10-05 기준 아래 항목은 모두 **실기기에�
 - [ ] 실제 PIF Action/TrickyAddon/HMA 카페 JSON 가져오기 및 사용자 앱/IMS 확인
 
 이번 검증은 가짜 API/기기와 브라우저 DOM 검사입니다. 기본 feature/REAL_STEPS를 켜거나 실기기를 변경하지 않았습니다.
+
+## 2026-10-08 VoLTE 적용 설정 자동화 — 실기기 미검증
+- [x] DIAG 전환 뒤 Qualcomm(05C6) 포트 중 hello/query 응답 포트 자동 선택 — 2026-10-08 XQ-DQ44 GUI 되돌리기에서 포트 입력 없이 DIAG 연결·EFS 명령까지 진행. 60초 미검출 오류 경로는 미확인
+- [ ] 동봉 프리셋(`assets/efs/util/SonyEFS`, 원본 723개 파일과 동일)이 release 설치본의 리소스 폴더에서 해시 승인(load_approved) 통과
+- [ ] 변경 전 복원본이 앱 데이터 폴더 `efs-snapshots`에 저장
+
+## 2026-10-08 VoLTE 되돌리기 — 실기기 미검증 (`REAL_STEPS.volteRollback`)
+- [~] 루팅된 XQ-DQ44에서 기록된 SKT 패치 전 사본으로 복원 → 재부팅 → VoLTE 해제 확인 — 2026-10-08: GUI 실행은 PUT 응답 검사에서 두 번 멈춤(① stat 모드의 아이템 종류 비트를 PUT에 실음 ② 폰이 PUT 쓴 바이트 수를 0으로 돌려줌, 원본 EfsTools는 이 값을 검사하지 않음). 두 가지를 고친 엔진으로 CLI 실행 82/82 복원·리드백 일치, 재부팅 후 SIM1 IMS 미등록·Voice false 확인. GUI 되돌리기 재실행과 다시 VoLTE 패치 복귀는 남음
+- [ ] 백업 완결·VoLTE 패치 때 폰별 기록(`devices/<키>.json`) 갱신, 복원 화면이 마지막 백업 폴더를 먼저 고름

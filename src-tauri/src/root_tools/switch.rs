@@ -292,6 +292,7 @@ pub async fn resukisu_install(serial: String, sha256: String, confirm: bool) -> 
             return Err("ReSukiSU 매니저 APK가 필요합니다".into());
         }
         crate::adb::with_first_device(&Some(serial), |dev| {
+            crate::device_io::wait_boot_completed(dev, std::time::Duration::from_secs(180))?;
             if crate::device_io::shell(dev, "getprop ro.product.cpu.abi")?.trim() != "arm64-v8a" {
                 return Err("arm64-v8a 기기만 지원합니다".into());
             }
@@ -307,6 +308,107 @@ pub async fn resukisu_install(serial: String, sha256: String, confirm: bool) -> 
         })
     })
     .await
+}
+/// 처음부터 ReSukiSU로 루팅(2026-10-08 사용자 결정): 순정 init_boot를 폰 Download에 둔다.
+/// 사용자는 ReSukiSU 매니저 → 설치 → 파일 선택으로 이 파일을 패치하고, 매니저(ksud boot-patch -o Download)가
+/// `kernelsu_patched_<시각>.img`를 같은 폴더에 만든다. 반환한 기기 시각 이후의 결과만 받는다.
+const STAGE_DIR: &str = "/sdcard/Download";
+const PATCHED_MAX: u64 = 128 * 1024 * 1024;
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Staged {
+    pub device_path: String,
+    pub since: u64,
+}
+#[tauri::command]
+pub async fn resukisu_stage_stock(serial: String, stock_path: String) -> Result<Staged, String> {
+    super::write_gate(&serial, true)?;
+    let operation = device_io::WriteOperation::acquire()?;
+    crate::tasks::blocking("ReSukiSU stock staging", move || {
+        let _operation = operation;
+        crate::adb::with_first_device(&Some(serial), |dev| {
+            stage_work(dev, Path::new(&stock_path))
+        })
+    })
+    .await
+}
+pub fn stage_work(dev: &mut dyn ADBDeviceExt, stock: &Path) -> Result<Staged, String> {
+    let origin = check_stock(dev, stock)?;
+    if origin.partition != "init_boot" {
+        return Err(
+            "ReSukiSU 패치 경로는 init_boot 기종만 준비됐습니다 — boot 기종은 별도 검증 필요".into(),
+        );
+    }
+    let bytes = boot_image::read(stock)?;
+    let since = device_io::shell(dev, "date +%s")?
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| "기기 시각을 읽지 못했습니다".to_string())?;
+    let remote = format!("{STAGE_DIR}/xvolte_stock_init_boot_{}.img", &origin.sha256[..12]);
+    dev.push(&mut std::io::Cursor::new(&bytes), &remote)
+        .map_err(|e| format!("순정 이미지 전송 실패: {e}"))?;
+    let size = device_io::shell(dev, &format!("stat -c %s '{remote}'"))?;
+    if size.trim().parse::<usize>().ok() != Some(bytes.len()) {
+        return Err("폰에 전송한 순정 이미지 크기가 다릅니다".into());
+    }
+    Ok(Staged {
+        device_path: remote,
+        since,
+    })
+}
+/// ReSukiSU 매니저가 만든 패치 결과를 PC로 받는다. 아직 없거나 쓰는 중이면 None(자동 감지가 다시 묻는다).
+/// 받은 파일은 검증 전 상태이므로 반드시 root_external_patch_import로 순정 부모·기기·헤더를 검사한 뒤 기록한다.
+#[tauri::command]
+pub async fn resukisu_fetch_patched(serial: String, since: u64) -> Result<Option<String>, String> {
+    super::write_gate(&serial, true)?;
+    let dir = super::data_dir()?;
+    crate::tasks::guarded(std::time::Duration::from_secs(120), move || {
+        crate::adb::with_first_device(&Some(serial), |dev| fetch_work(dev, &dir, since))
+    })
+    .await
+}
+fn newest_patched(listing: &str, since: u64) -> Option<(u64, u64, String)> {
+    listing
+        .lines()
+        .filter_map(|line| {
+            let (mtime, rest) = line.trim().split_once(' ')?;
+            let (size, path) = rest.split_once(' ')?;
+            let name = path.rsplit('/').next()?;
+            if !name.starts_with("kernelsu_patched_") || !name.ends_with(".img") {
+                return None;
+            }
+            Some((mtime.parse().ok()?, size.parse().ok()?, path.to_string()))
+        })
+        .filter(|(mtime, _, _)| *mtime >= since)
+        .max_by_key(|(mtime, _, path)| (*mtime, path.clone()))
+}
+pub fn fetch_work(dev: &mut dyn ADBDeviceExt, dir: &Path, since: u64) -> Result<Option<String>, String> {
+    let list = format!(
+        "for f in {STAGE_DIR}/kernelsu_patched_*.img; do [ -f \"$f\" ] && stat -c '%Y %s %n' \"$f\"; done; true"
+    );
+    let Some((_, size, path)) = newest_patched(&device_io::shell(dev, &list)?, since) else {
+        return Ok(None);
+    };
+    if size == 0 || size > PATCHED_MAX {
+        return Ok(None);
+    }
+    // 매니저가 아직 쓰는 중일 수 있다 — 1초 뒤 크기가 같을 때만 받는다
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    let again = device_io::shell(dev, &format!("stat -c %s '{path}'"))?;
+    if again.trim().parse::<u64>().ok() != Some(size) {
+        return Ok(None);
+    }
+    let mut bytes = Vec::with_capacity(size as usize);
+    dev.pull(&path, &mut bytes)
+        .map_err(|e| format!("패치 결과 받기 실패: {e}"))?;
+    if bytes.len() as u64 != size {
+        return Ok(None);
+    }
+    let local = dir
+        .join("root-images")
+        .join(format!("incoming-resukisu-{}.img", boot_image::sha256(&bytes)));
+    crate::storage::atomic_write(&local, &bytes)?;
+    Ok(Some(local.to_string_lossy().into()))
 }
 #[tauri::command]
 pub async fn root_switch_finish(serial: String) -> Result<Switch, String> {
@@ -380,6 +482,20 @@ mod tests {
                 )
             })
             .collect()
+    }
+    #[test]
+    fn only_newest_manager_patch_after_staging_is_taken() {
+        let listing = "100 5 /sdcard/Download/kernelsu_patched_20261008_100000.img\n\
+                       300 7 /sdcard/Download/kernelsu_patched_20261008_120000.img\n\
+                       400 9 /sdcard/Download/xvolte_stock_init_boot_abc.img\n\
+                       250 6 /sdcard/Download/kernelsu_patched_20261008_110000.img\n";
+        assert_eq!(
+            newest_patched(listing, 200),
+            Some((300, 7, "/sdcard/Download/kernelsu_patched_20261008_120000.img".into()))
+        );
+        // 준비 이전에 만든 예전 결과는 받지 않는다
+        assert_eq!(newest_patched(listing, 301), None);
+        assert_eq!(newest_patched("", 0), None);
     }
     #[test]
     fn cleanup_saves_module_list_before_writes_and_old_history_cannot_prove_new_stock_restore() {

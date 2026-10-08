@@ -1,0 +1,84 @@
+#-----------------------------------------------------------------------
+# 네트워크 핵심 설정 (2025년 한국 환경) - SKT
+# imshandoverconfig (균형형 Balanced)
+# 작성: [소니코리아 사용자모임]
+# 일자: 2025년 8월 29일
+#
+# 설정 목적:
+#   - 원본 사업자 임계/타이머 유지
+#   - NSA(ENDC) 전제, 안정성·배터리 우선
+#   - 국내 3G 존재 → SRVCC ON 유지(원본값 보존)
+#-----------------------------------------------------------------------
+# ===== SKT 2025 (Capability-Scoped VoWiFi, SRVCC enabled) =====
+
+# --- VoLTE/VoNR 기본 ---
+ImsVoLTE_HO_Enabled               = 1
+ImsVoNR_HO_Enabled                = 1
+ImsVoNR_Fallback_To_VoLTE         = 1
+ImsNR_InterBand_HO_Enabled        = 1
+ImsNR_IntraBand_HO_Enabled        = 1
+ImsMidCall_HO_Enabled             = 1
+
+# --- 3G (SK: 존재) → SRVCC 필요 ---
+ImsVoiceSrvccConfig               = 1
+ImsMidCallSrvccEnabled            = 1
+ImsPS_HO_To_3G_Enabled            = 1
+
+# --- 국내 기본: VoWiFi 미제공(무력화) ---
+VoWiFi_HO_To_LTE_RSRP_Threshold   = -200
+VoWiFi_HO_To_LTE_RSRQ_Threshold   = -30
+VoWiFi_HO_To_LTE_SNR_Threshold    = -20
+VoLTE_HO_To_WiFi_RSRP_Threshold   = -200
+VoLTE_HO_To_WiFi_SNR_Threshold    = 99
+VoWiFi_Min_SNR_For_HO             = 99
+VoWiFi_Trigger_LTE_Min_RSRP       = -200
+
+# --- 안정성/배터리(보수) ---
+IMS_HO_Evaluation_Timer           = 4000    # 배터리 보호(평가 빈도 절감)
+IMS_HO_Hysteresis_Timer           = 5000
+IMS_HO_RSRP_Hysteresis_dB         = 3
+IMS_HO_RSRQ_Hysteresis_dB         = 2
+IMS_HO_Min_Stay_Time_ms           = 9000
+IMS_HO_Backoff_Time_ms            = 12000
+IMS_HO_Suppress_After_Switch_ms   = 7000
+IMS_HO_Max_Periodic_Evals_Per_Min = 6       # 분당 평가 상한(옵션)
+IMS_Handover_Enable               = 1
+IMS_ReReg_On_HO                   = 1
+IMS_Bearer_Check_Interval         = 3000    # 3s로 완만하게
+IMS_Network_Preference_Mode       = 0       # 셀룰러 우선
+
+# ====== [가능시에만] 조건부 VoWiFi (능력/프로비저닝 감지형) ======
+# 실제 패키지/토큰을 몰라도, 단말이 '가능 조건'을 스스로 판단해 세션 범위로 ON.
+# 조건:
+#  - IMS/CarrierConfig: VOWIFI_SUPPORTED=1 AND VOWIFI_PROVISIONED=1
+#  - EPDG/IMS 도메인 해상 성공
+#  - Wi-Fi 5GHz 이상 + RSSI/RTT/패킷로스 품질 충족
+#  - 국내망(MCC=450)이며, 캐리어 정책 키가 허용 상태일 때만
+CapVoWiFi_Enable_Control          = 1
+CapVoWiFi_Activation_Guard_ms     = 5000
+CapVoWiFi_Deactivation_Guard_ms   = 10000
+
+CapVoWiFi_RequireFlags            = "VOWIFI_SUPPORTED,VOWIFI_PROVISIONED"
+CapVoWiFi_RequireEpdgResolvable   = 1
+CapVoWiFi_Require5GHzOrWiFi6      = 1        # 2.4GHz 환경 회피로 품질/배터리 보호
+CapVoWiFi_RequireDomesticMCC      = "450"    # 해외는 이 파일에선 불가(로밍 전용에서 처리)
+CapVoWiFi_RequireCarrierKey       = "ALLOW_SKT_CAP_VOWIFI"   # 키명은 사업자 배포값과 매칭
+
+# 활성 시 런타임 오버레이(세션 범위)
+CapVoWiFi_OnActivate_Set_IsVoWiFi = 1
+CapVoWiFi_OnActivate_Set_NetPref  = 1        # 세션 중 Wi-Fi 우선 허용
+CapVoWiFi_OnDeactivate_RestoreWiFi= 0
+CapVoWiFi_OnDeactivate_RestoreNP  = 0
+
+# (가능 조건 성립 시에만 효력) Wi-Fi ↔ LTE 임계/품질
+VoWiFi_HO_To_LTE_RSRP_Threshold   = -111
+VoWiFi_HO_To_LTE_RSRQ_Threshold   = -12
+VoWiFi_HO_To_LTE_SNR_Threshold    = 2
+VoWiFi_HO_To_LTE_RSSI_Threshold   = -69
+VoWiFi_HO_Max_RTT_ms              = 250
+VoWiFi_HO_Max_PktLoss_Pct         = 3
+
+VoLTE_HO_To_WiFi_RSRP_Threshold   = -100
+VoLTE_HO_To_WiFi_SNR_Threshold    = 5
+VoLTE_HO_To_WiFi_RSSI_Threshold   = -65
+VoLTE_HO_Min_LTE_RSRQ_Threshold   = -14

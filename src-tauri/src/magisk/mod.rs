@@ -372,6 +372,7 @@ pub async fn magisk_install(
         // 앱 서명 자체는 설치 때 Android가 검증한다.
         load_verified_apk(&apk, &apk_sha256)?;
         adb::with_first_device(&serial, move |dev| {
+            crate::device_io::wait_boot_completed(dev, std::time::Duration::from_secs(180))?;
             dev.install(&apk, None)
                 .map_err(|e| format!("Magisk 앱 설치 실패: {e}"))
         })
@@ -389,18 +390,46 @@ pub async fn magisk_uninstall(serial: Option<String>) -> Result<bool, String> {
     let work = move || {
         let _operation = operation;
         adb::with_first_device(&serial, |dev| {
-            let listed = crate::device_io::shell(dev, "pm list packages com.topjohnwu.magisk")?;
-            if !listed.lines().any(|l| l.trim() == "package:com.topjohnwu.magisk") {
-                return Ok(false);
+            // 언루팅·매니저 변경 뒤 남는 루팅 매니저 앱 — Magisk와 ReSukiSU 둘 다 지운다
+            let listed = crate::device_io::shell(dev, "pm list packages")?;
+            let mut removed = false;
+            for package in MANAGER_PACKAGES {
+                if !listed.lines().any(|l| l.trim() == format!("package:{package}")) {
+                    continue;
+                }
+                let out = crate::device_io::shell(dev, &format!("pm uninstall {package}"))?;
+                if out.trim() != "Success" {
+                    return Err(format!("루팅 매니저 앱({package}) 삭제 실패: {}", out.trim()));
+                }
+                removed = true;
             }
-            let out = crate::device_io::shell(dev, "pm uninstall com.topjohnwu.magisk")?;
-            if out.trim() != "Success" {
-                return Err(format!("Magisk 앱 삭제 실패: {}", out.trim()));
-            }
-            Ok(true)
+            Ok(removed)
         })
     };
-    crate::tasks::blocking("Magisk 앱 삭제", work).await
+    crate::tasks::blocking("루팅 매니저 앱 삭제", work).await
+}
+
+const MANAGER_PACKAGES: [&str; 2] = ["com.topjohnwu.magisk", "com.resukisu.resukisu"];
+
+/// 루팅 모듈·엔진 데이터 전부 삭제(2026-10-08 사용자 결정) — 언루팅·매니저 변경 직전, 아직 루트가 있을 때.
+/// Magisk "완전 제거"처럼 /data/adb 아래를 비운다. 모듈 설정 이전은 하지 않는다(엔진마다 마운트·은닉 방식이 달라 안전하지 않다).
+/// 지운 모듈 id 목록을 돌려준다. 다음 단계에서 순정 부트 이미지를 기록하므로 남은 프로세스는 재부팅으로 정리된다.
+#[tauri::command]
+pub async fn root_wipe(serial: Option<String>) -> Result<Vec<String>, String> {
+    ensure_root_write()?;
+    require_serial(&serial)?;
+    let operation = crate::device_io::WriteOperation::acquire()?;
+    let work = move || {
+        let _operation = operation;
+        adb::with_first_device(&serial, |dev| {
+            let listed = crate::device_io::shell(dev, crate::device_io::su!("'ls -1 /data/adb/modules 2>/dev/null; true'"))?;
+            let modules: Vec<String> = listed.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+            crate::device_io::shell_write(dev, crate::device_io::su!("'rm -rf /data/adb/* && test -z \"$(ls -A /data/adb)\"'"))
+                .map_err(|e| format!("루팅 모듈·엔진 데이터 삭제 실패: {e}"))?;
+            Ok(modules)
+        })
+    };
+    crate::tasks::blocking("루팅 데이터 삭제", work).await
 }
 
 /// adb 재부팅 — fastboot_reboot의 adb 짝 (fastboot 진입/복귀)

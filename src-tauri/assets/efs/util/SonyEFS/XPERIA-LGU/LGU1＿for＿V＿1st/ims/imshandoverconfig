@@ -1,0 +1,74 @@
+#-----------------------------------------------------------------------
+# 네트워크 핵심 설정 (2025년 한국 환경) - LGU+
+# imshandoverconfig (균형형 Balanced)
+# 작성: [소니코리아 사용자모임]
+# 일자: 2025년 8월 29일
+#
+# 설정 목적:
+#   - 원본 사업자 임계/타이머 유지
+#   - NSA(ENDC) 전제, 안정성·배터리 우선
+#   - 국내 3G 없음 → SRVCC 국내 OFF, 로밍 시 ON
+#-----------------------------------------------------------------------
+
+# ---------- 5G 측정/진입·이탈 임계 (현실값으로 보정) ----------
+5GMeasurementsFeatureEnabled     = 1;
+
+# NR 진입/이탈 RSRP (dBm)
+NR_RSRP_Single_in                 = -105;   # NR 진입 권장 경계
+NR_RSRP_Single_out                = -120;   # NR 이탈(VoLTE로 폴백) 경계
+
+# NR 진입/이탈 RSRQ (dB)
+NR_RSRQ_Single_in                 = -15;    # 초안 -150 → 단위 보정
+NR_RSRQ_Single_out                = -18;    # 초안 -180 → 단위 보정
+
+# NR 진입/이탈 SINR (dB)
+NR_SINR_Single_in                 = 0;
+NR_SINR_Single_out                = -3;
+
+# ---------- LTE 측정/진입·이탈 임계 (VoLTE용) ----------
+LTE_RSRP_Single_in                = -115;   # 초안 -130 → 현실적 진입값으로 상향
+LTE_RSRP_Single_out               = -125;   # 초안 -140 → 과도하게 낮음 보정
+
+LTE_RSRQ_Single_in                = -12;    # 초안 -170 → 단위 보정
+LTE_RSRQ_Single_out               = -15;    # 초안 -200 → 단위 보정
+
+# ---------- 5G/LTE 상호 전환 (데이터/음성 연속성) ----------
+ENDC_Enabled                      = 1;      # EN-DC 활성(데이터 연속성 유리)
+NR5G_LTE_Handover_Threshold       = -120;   # NR→LTE RSRP 경계(초안 -125 보정)
+LTE_NR5G_Handover_Threshold       = -110;   # LTE→NR RSRP 경계(초안 -115 보정)
+SingleRatFeatureEnable            = 0;      # 초안 1 → ENDC와 충돌 소지, 0 권장
+
+# ---------- IMS 핸드오버 안정성(핑퐁 방지) ----------
+IMS_Handover_Enable               = 1
+IMS_HO_Evaluation_Timer           = 3000    # ms
+IMS_HO_Hysteresis_Timer           = 5000    # ms
+IMS_HO_RSRP_Hysteresis_dB         = 3
+IMS_HO_RSRQ_Hysteresis_dB         = 2
+IMS_HO_Min_Stay_Time_ms           = 8000
+IMS_HO_Backoff_Time_ms            = 10000
+IMS_HO_Suppress_After_Switch_ms   = 6000
+IMS_ReReg_On_HO                   = 1
+IMS_Bearer_Check_Interval         = 2000
+
+# ---------- 미디어 품질 기준(채택) ----------
+MediaDLJitterAcceptable           = 30      # ms
+MediaULJitterAcceptable           = 30      # ms
+MediaDLFrameLossAcceptable        = 2       # %
+MediaULFrameLossAcceptable        = 2       # %
+
+# ---------- SRVCC (국내 OFF / 로밍 시 ON) ----------
+# 국내(MCC=450): 3G 없음 → 아래 값 유지
+ImsVoiceSrvccConfig               = 0
+ImsMidCallSrvccEnabled            = 0
+ImsPS_HO_To_3G_Enabled            = 0
+
+# 로밍 진입 시(MCC ≠ 450)만 SRVCC 자동 활성
+Roaming_SRVCC_Control             = 1
+Roaming_SRVCC_Enable_When_MCC_NE  = "450"   # MCC != 450이면 SRVCC ON
+Roaming_SRVCC_Activation_Guard_ms = 5000
+Roaming_SRVCC_Deactivation_Guard_ms=8000
+Roaming_OnActivate_SRVCC          = "ImsVoiceSrvccConfig=1,ImsMidCallSrvccEnabled=1,ImsPS_HO_To_3G_Enabled=1"
+Roaming_OnDeactivate_SRVCC        = "ImsVoiceSrvccConfig=0,ImsMidCallSrvccEnabled=0,ImsPS_HO_To_3G_Enabled=0"
+
+# ---------- 국내 VoWiFi 정책 ----------
+# LG U+ 국내 VoWiFi 미제공 → Wi-Fi 관련 HO/임계는 별도 로밍 프로파일에서만 사용

@@ -37,6 +37,19 @@ export function imsDetail(sim: SimInfo): string {
 }
 
 /** An enriched diagnostic result takes precedence over the legacy summary flag. */
+/** 기기 전체 VoLTE 표시 — 확인해서 꺼진 것과 판별하지 못한 것을 구분한다(2026-10-08 사용자 지적) */
+export function volteSummary(sims: SimInfo[]): { label: string; state: "on" | "wifi" | "off" | "unknown" } {
+  const present = sims.filter(s => s.state !== "ABSENT");
+  if (present.some(cellularReady)) return { label: "VoLTE 활성", state: "on" };
+  if (present.some(s => s.volte === "wifi")) return { label: "Wi-Fi 통화만", state: "wifi" };
+  if (present.length > 0 && present.every(s => s.volte === "off")) return { label: "VoLTE 꺼짐", state: "off" };
+  return { label: "VoLTE 미확인", state: "unknown" };
+}
+/** SIM 하나의 VoLTE 표시 */
+export function simVolteLabel(sim: SimInfo): string {
+  return cellularReady(sim) ? "VoLTE 활성" : sim.volte === "wifi" ? "Wi-Fi 통화만" : sim.volte === "off" ? "VoLTE 꺼짐" : "VoLTE 미확인";
+}
+
 export function cellularReady(sim: SimInfo | undefined): boolean {
   if (!sim) return false;
   return sim.ims ? sim.ims.status === "registered" && sim.ims.registration === "registered" && sim.ims.voice === true && sim.ims.transport === "cellular" : sim.volte === "on";

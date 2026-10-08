@@ -451,3 +451,9 @@ invoke('firmware_dir_check', { dir, partition }) → { file, path, fingerprint, 
 종류/수동 화면은 device_list, 새 버전은 update 화면만 firmware_versions, 복구는 backup_manifest_check를 선택/쓰기 직전 호출한다. RootModuleInventory에 installed: Record<string,string>을 추가해 검증된 패키지와 실제 module ID를 구분한다. 세트 선택은 프론트 계약이며 기존 root_package_prepare/root_module_install/root_modules_inspect/root_reboot를 순차 재사용한다. 새로운 하드웨어 자동 활성화 없음.
 
 RootModuleInventory는 installed 영수증과 bootId를 반환합니다. 세트 러너는 매 재부팅 직전 부팅 ID를 조회하고 변경된 ID 및 모듈 활성/엔진 상태를 확인한 뒤에만 이어갑니다. 구형 응답에 ID가 없거나 ACK만 성공하면 다음 설치를 막습니다.
+
+- 2026-10-08 ReSukiSU 처음 루팅(사용자 결정): `resukisu_stage_stock(serial, stockPath) -> { devicePath, since }`(순정 init_boot를 /sdcard/Download에 전송, 기기 시각), `resukisu_fetch_patched(serial, since) -> string | null`(전송 이후 최신 kernelsu_patched_*.img를 크기 안정 확인 뒤 PC로 받음). 둘 다 `root-tools-write` 게이트. 받은 파일은 `root_external_patch_import`로 검사한 뒤에만 기록한다. `magisk_uninstall(serial) -> bool`(언루팅 후 Magisk 앱 삭제, `root-write`).
+- 2026-10-08 `backup_manifest_read(dir) -> BackupSummary | null`: 복구 폴더 선택용. manifest.json만 읽고 해시 검사 없음. `items`는 Skipped가 아닌 모든 항목(완결 판정에서 제외된 항목 포함). 폴더에 manifest가 없으면 null.
+- 2026-10-08 facade `attention(title, body)`: Tauri 창 `requestUserAttention` + `@tauri-apps/plugin-notification`(권한 `notification:default`, `core:window:allow-request-user-attention`). 브라우저 개발에서는 아무것도 하지 않는다.
+- 2026-10-08 폰별 장기 기록(앱 데이터 `devices/<기기 키>.json`): `device_record_get(key) -> DeviceRecord | null`, `device_record_set_backup(key, dir)`, `device_record_add_patch(key, { at, slot, carrier, snapshot })`. 키는 64자 hex(원본 시리얼 SHA-256)만 허용. 패치 이력은 최근 50개. 백업 완결 시 마지막 백업 폴더, VoLTE 패치 전 사본 생성 시 패치 이력을 남긴다.
+- 2026-10-08 `root_wipe(serial) -> string[]`(root-write): 언루팅·매니저 변경 직전, 루트가 있을 때 `/data/adb/*`를 비운다(지운 모듈 id 반환). `magisk_uninstall`은 Magisk·ReSukiSU 매니저 앱을 모두 지운다. `records_list() -> RecordItem[]`, `records_delete(ids) -> number`(앱 데이터 폴더 안 기록만, 경로 탈출 거부). 기기 상태에 `rootEngine`("magisk"|"kernelsu"|null) 추가.

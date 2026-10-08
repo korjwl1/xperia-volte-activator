@@ -1,0 +1,2317 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+band_set_01.xml 최종 배포본 (Aligned with carrier_policy*_FINAL_2025)
+band_set_01.xml Final Release (Aligned with carrier_policy*_FINAL_2025)
+
+[소니코리아 사용자모임 / Sony Korea User Group]
+2025-08-27 10:20:44
+
+설정 목적: LTE/5G VoLTE 통화 품질 최적화 (VoNR 제외)
+Purpose: LTE/5G VoLTE Call Quality Optimization (VoNR excluded)
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-->
+
+<!--
+  band_set_01.xml 최종 배포본 (Aligned with carrier_policy*_FINAL_2025)
+  - 생성일: 2025-08-27 10:17:20
+  - 버전 정렬:
+      • band_set_01 policy_ver: 45.0.6
+      • carrier_policy policy_ver: 125.2.2
+  - 표기 규칙:
+      • 세로형식(라인 브레이크)과 국가/사업자 주석 포함
+      • 인덱스 규칙 = (3GPP 대역번호 - 1)
+-->
+
+<policy name="generic" enabled="true" schema_ver="1" policy_ver="45.0.6">
+  <initial>
+<!--
+  band_set_01.xml 파일 최종 수정 내역:
+  - 생성일: 2025-08-27 10:03:31
+  - 적용 범위 추가: 유럽(영/독/프), 중동(KSA/KW/QA/BH/OM/UAE), 아프리카(EG/ZA/MA), 미국(US)
+  - 태그 규격: underscore 스타일 유지, 세로형식 정렬 및 국가/사업자 주석 추가
+  - 인덱스 규칙: (3GPP 대역번호 - 1) = 내부 인덱스
+-->
+
+    <!-- Global/Fallback bands -->
+    <rf_band_list ns="global" name="rf_bands_all">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 4 6 19 27 31 37 39 40 65 70</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>0 2 6 19 27 76 77 78 70</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 2 6 19 27 76 77 78 70</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+
+    <rf_band_list ns="global" name="skt_kr_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 4 6 27</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>0 2 27 76 77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 2 27 76 77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="kt_kr_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 4 6 27</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>0 2 27 76 77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 2 27 76 77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="lgu_kr_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 4 6 27</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>0 27 76 77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 27 76 77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="eu_ce_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 6 19 27</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>0 2 6 19 27 77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 2 6 19 27 77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="us_fcc_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>1 3 4 11 16 28 29 65 70</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>0 1 65 70 76</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 1 65 70 76</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="docomo_jp_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 18 20 27 41</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>76 77 78</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 2 76 77 78</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="kddi_au_jp_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 10 17 25 27 40 41</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>76 77 27</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 2 27 76 77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="softbank_jp_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7 10 27 40 41</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>76 77 27</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 2 27 76 77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="rakuten_jp_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>2 17 27 41</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>76</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>2 27 76</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="japan_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7 10 17 18 20 25 27 40 41</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>27 76 77 78</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 2 27 76 77 78</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="cmcc_cn_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 4 7 38 39 40</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>40 78 27</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 2 40 78 27</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="cu_cn_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7 39</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77 0 7</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77 0 2 7</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="ctc_cn_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 4 39</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77 0 4</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77 0 4</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="cbn_cn_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>27</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>27</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="china_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 4 7 38 39 40</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>0 4 7 27 40 77 78</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 2 4 7 27 40 77 78</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="singtel_sg_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 6 7 37 39</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77 27 0 2 6</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77 27 0 2 6</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="starhub_sg_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 6 7 37 39</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77 27 0 2 6</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77 27 0 2 6</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="m1_sg_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 6 7 37 39</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77 27 0 2 6</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77 27 0 2 6</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="singapore_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 6 7 37 39</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>0 2 6 27 77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 2 6 27 77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="maxis_my_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 6 7 27</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77 27</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77 27 0 2</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="celcomdigi_my_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 6 7 27</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77 27</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77 27 0 2</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="umobile_my_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 6</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77 0 2</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="yes_my_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>39</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="malaysia_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 6 7 27 39</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>27 77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 2 27 77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="ais_th_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 6 7 27</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>40 27</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>40 27 0 2</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="true_th_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 6 7 27</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>40 27</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>40 27 0 2</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="dtac_th_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 6 7 27</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>40 27</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>40 27 0 2</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="thailand_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 6 7 27</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>27 40</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 2 27 40</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="viettel_vn_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77 0 2</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="vinaphone_vn_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77 0 2</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="mobifone_vn_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77 0 2</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="vietnam_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 2 77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="telkomsel_id_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7 39</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>39 0</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>39 0 2</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="xl_id_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>39 0</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>39 0 2</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="indosat_id_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>39 0</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>39 0 2</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="smartfren_id_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>39</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>39</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>39</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="indonesia_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7 39</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>0 39</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 2 39</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="globe_ph_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 6 27</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77 27</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77 27 0 2</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="smart_ph_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 6 27</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77 27</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77 27 0 2</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="dito_ph_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>27 40</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77 27</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77 27</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="philippines_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 6 27 40</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>27 77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>0 2 27 77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="cellcard_kh_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="smart_kh_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7 39</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="metfone_kh_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="cambodia_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7 39</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="unitel_la_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="laotel_la_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="beeline_la_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="laos_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>0 2 7</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="mpt_mm_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>2 7</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="ooredoo_mm_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>2 7</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="mytel_mm_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>2 7</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="myanmar_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>2 7</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="dst_bn_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>2 6</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="imagine_bn_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>2 6</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+    <rf_band_list ns="global" name="brunei_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none"><include>2 6</include></lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+      <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+
+    
+<rf_band_list ns="global" name="chunghwa_tw_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>0 2 6 7 27</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77 27 0 2</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 27 0 2</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="fareastone_tw_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>0 2 6 7 27</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77 27 0 2</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 27 0 2</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="taiwanmobile_tw_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>0 2 6 7 27</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77 27 0 2</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 27 0 2</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="tstar_tw_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>0 2 6 7</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77 0 2</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 0 2</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="taiwan_fallback_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>0 2 6 7 27</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>0 2 27 77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>0 2 27 77</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="csl_hk_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>0 2 6 7 31 37</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77 0 2 27</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 0 2 27</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="smartone_hk_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>0 2 6 7 31 37</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77 0 2 27</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 0 2 27</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="three_hk_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>0 2 6 7 31 37</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77 0 2 27</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 0 2 27</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="cmhk_hk_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>0 2 6 7 37 40</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77 27 0 2</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 27 0 2</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="hongkong_fallback_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>0 2 6 7 31 37 40</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>0 2 27 77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>0 2 27 77</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="ctm_mo_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>0 2 6 7 27</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77 27 0 2</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 27 0 2</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="smartone_mo_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>0 2 6 7 27</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77 27 0 2</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 27 0 2</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="three_mo_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>0 2 6 7 27</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77 27 0 2</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 27 0 2</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="macau_fallback_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>0 2 6 7 27</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>0 2 27 77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>0 2 27 77</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+
+<rf_band_list ns="global" name="unitel_mn_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 27 39</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77 27</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 27 0 2</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="mobicom_mn_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 0 2</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="skytel_mn_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="gmobile_mn_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="mongolia_fallback_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 27 39</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>27 77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>0 2 27 77</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="kcell_kz_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 6 19</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 2 6</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="beeline_kz_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 6 19</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 2 6</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="tele2_kz_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 6 19</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 2 6</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="altel_kz_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 6 19</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 2 6</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="kazakhstan_fallback_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 6 19</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>2 6 77</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="beeline_uz_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 6</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 2 6</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="ucell_uz_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>27 2 6</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77 27</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 27 2 6</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="mobiuz_uz_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>19 2</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 2</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="uzmobile_uz_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 27</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77 27</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 27 2</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="perfectum_uz_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="evo_uz_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>39</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="uzbekistan_fallback_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 6 19 27 39</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>27 77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>2 6 27 77</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="beeline_kg_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 6</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="megacom_kg_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 6</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="o_kg_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 6</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="kyrgyzstan_fallback_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 6</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="tcell_tj_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 19</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="megafon_tj_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="babilon_tj_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="zetmobile_tj_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="tajikistan_fallback_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 19</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="tmcell_tm_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="mts_tm_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="agts_tm_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="turkmenistan_fallback_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="etisalat_ae_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>19 2 6</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77 40</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 40 2 6</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="du_ae_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>19 2 6</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>77 40</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>77 40 2 6</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+<rf_band_list ns="global" name="uae_fallback_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none"><include>2 6 19</include></lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none"><include>40 77</include></nr5g_sa_bands>
+  <nr5g_nsa_bands base="none"><include>2 6 40 77</include></nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+
+<!-- 유럽/미국/중동/아프리카 사업자 밴드셋 -->
+<!-- 국가: GB | 사업자: EE -->
+<rf_band_list ns="global" name="ee_gb_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>0 2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2 6</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: GB | 사업자: O2 UK -->
+<rf_band_list ns="global" name="o2_gb_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>0 2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27 0</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: GB | 사업자: Vodafone UK -->
+<rf_band_list ns="global" name="vodafone_gb_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>0 2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2 6</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: GB | 사업자: Three UK -->
+<rf_band_list ns="global" name="three_gb_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>0 2 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: GB | 사업자: Fallback -->
+<rf_band_list ns="global" name="gb_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>0 2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>0 2 27 77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>0 2 6 27 77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: DE | 사업자: Telekom DE -->
+<rf_band_list ns="global" name="telekom_de_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>0 2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 0 27 2 6</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 0 27 2 6</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: DE | 사업자: Vodafone DE -->
+<rf_band_list ns="global" name="vodafone_de_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>0 2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 0 27 2 6</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 0 27 2 6</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: DE | 사업자: o2 DE -->
+<rf_band_list ns="global" name="o2_de_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>0 2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 0 27 2 6</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 0 27 2 6</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: DE | 사업자: Fallback -->
+<rf_band_list ns="global" name="de_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>0 2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>0 2 6 27 77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>0 2 6 27 77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: FR | 사업자: Orange FR -->
+<rf_band_list ns="global" name="orange_fr_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>0 2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: FR | 사업자: SFR -->
+<rf_band_list ns="global" name="sfr_fr_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>0 2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: FR | 사업자: Bouygues -->
+<rf_band_list ns="global" name="bouygues_fr_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>0 2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: FR | 사업자: Free Mobile -->
+<rf_band_list ns="global" name="free_fr_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>0 2 6 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: FR | 사업자: Fallback -->
+<rf_band_list ns="global" name="fr_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>0 2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>0 2 27 77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>0 2 27 77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: SA | 사업자: stc KSA -->
+<rf_band_list ns="global" name="stc_sa_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 7 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: SA | 사업자: Mobily -->
+<rf_band_list ns="global" name="mobily_sa_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 7 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: SA | 사업자: Zain KSA -->
+<rf_band_list ns="global" name="zain_sa_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 7 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: SA | 사업자: Fallback -->
+<rf_band_list ns="global" name="sa_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 7 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>0 2 27 77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>0 2 27 77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: KW | 사업자: Zain KW -->
+<rf_band_list ns="global" name="zain_kw_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: KW | 사업자: Ooredoo KW -->
+<rf_band_list ns="global" name="ooredoo_kw_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: KW | 사업자: stc KW -->
+<rf_band_list ns="global" name="stc_kw_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: KW | 사업자: Fallback -->
+<rf_band_list ns="global" name="kw_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>0 2 27 77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>0 2 27 77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: QA | 사업자: Ooredoo QA -->
+<rf_band_list ns="global" name="ooredoo_qa_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 0 2 27</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: QA | 사업자: Vodafone QA -->
+<rf_band_list ns="global" name="vodafone_qa_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 0 2 27</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: QA | 사업자: Fallback -->
+<rf_band_list ns="global" name="qa_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 6 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>0 2 27 77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: BH | 사업자: Batelco -->
+<rf_band_list ns="global" name="batelco_bh_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: BH | 사업자: Zain BH -->
+<rf_band_list ns="global" name="zain_bh_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: BH | 사업자: stc BH -->
+<rf_band_list ns="global" name="stc_bh_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 19 27 7</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: BH | 사업자: Fallback -->
+<rf_band_list ns="global" name="bh_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 7 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>27 77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>0 2 27 77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: OM | 사업자: Omantel -->
+<rf_band_list ns="global" name="omantel_om_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 19 27 37</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: OM | 사업자: Ooredoo OM -->
+<rf_band_list ns="global" name="ooredoo_om_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 19 27 37</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: OM | 사업자: Vodafone OM -->
+<rf_band_list ns="global" name="vodafone_om_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 19 27</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 27</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 27 0 2</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: OM | 사업자: Fallback -->
+<rf_band_list ns="global" name="om_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 19 27 37</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>27 77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>0 2 27 77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: EG | 사업자: Orange Egypt -->
+<rf_band_list ns="global" name="orange_eg_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>40</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>40 77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: EG | 사업자: Vodafone Egypt -->
+<rf_band_list ns="global" name="vodafone_eg_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>40</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>40 77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: EG | 사업자: e& (Etisalat) EG -->
+<rf_band_list ns="global" name="etisalat_eg_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>40</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>40 77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: EG | 사업자: WE (Telecom Egypt) -->
+<rf_band_list ns="global" name="we_eg_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>40</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: EG | 사업자: Fallback -->
+<rf_band_list ns="global" name="eg_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>40</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>40 77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: ZA | 사업자: Vodacom ZA -->
+<rf_band_list ns="global" name="vodacom_za_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 6 19</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: ZA | 사업자: MTN ZA -->
+<rf_band_list ns="global" name="mtn_za_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 6 19</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: ZA | 사업자: Cell C -->
+<rf_band_list ns="global" name="cellc_za_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 6</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: ZA | 사업자: Telkom Mobile -->
+<rf_band_list ns="global" name="telkom_za_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 6 19</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: ZA | 사업자: Rain -->
+<rf_band_list ns="global" name="rain_za_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>37 40</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77 40</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77 40</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: ZA | 사업자: Fallback -->
+<rf_band_list ns="global" name="za_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 6 19 37 40</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>40 77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>40 77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: MA | 사업자: Maroc Telecom -->
+<rf_band_list ns="global" name="iam_ma_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 19</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: MA | 사업자: Orange MA -->
+<rf_band_list ns="global" name="orange_ma_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 19</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: MA | 사업자: inwi MA -->
+<rf_band_list ns="global" name="inwi_ma_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 19</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: MA | 사업자: Fallback -->
+<rf_band_list ns="global" name="ma_fallback_b">
+      <gw_bands base="hardware"/>
+      <lte_bands base="none">
+        <include>2 19</include>
+      </lte_bands>
+      <tds_bands base="none"/>
+      <nr5g_sa_bands base="none">
+        <include>77</include>
+      </nr5g_sa_bands>
+      <nr5g_nsa_bands base="none">
+        <include>77</include>
+      </nr5g_nsa_bands>
+      <nr5g_nrdc_bands base="none"/>
+    </rf_band_list>
+<!-- 국가: US | 사업자: T-Mobile US -->
+<rf_band_list ns="global" name="tmobile_us_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none">
+    <!-- LTE: B2(1) B4(3) B5(4) B12(11) B66(65) B71(70) -->
+    <include>1 3 4 11 65 70</include>
+  </lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none">
+    <!-- NR-SA: n71(70) n41(40) n77(76) -->
+    <include>70 40 76</include>
+  </nr5g_sa_bands>
+  <nr5g_nsa_bands base="none">
+    <!-- NR-NSA: n71(70) n41(40) n1(0) n66(65) n77(76) -->
+    <include>70 40 1 65 76</include>
+  </nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+
+<!-- 국가: US | 사업자: Verizon -->
+<rf_band_list ns="global" name="verizon_us_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none">
+    <!-- LTE: B2(1) B4(3) B5(4) B13(12) B66(65) -->
+    <include>1 3 4 12 65</include>
+  </lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none">
+    <!-- NR-SA: n71(70) n66(65) n77(76) n5(4) n260(259) n261(260) -->
+    <include>70 65 76 4 259 260</include>
+  </nr5g_sa_bands>
+  <nr5g_nsa_bands base="none">
+    <!-- NR-NSA: n71(70) n66(65) n77(76) n5(4) n260(259) n261(260) -->
+    <include>70 65 76 4 259 260</include>
+  </nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+
+<!-- 국가: US | 사업자: Fallback -->
+<rf_band_list ns="global" name="us_fallback_b">
+  <gw_bands base="hardware"/>
+  <lte_bands base="none">
+    <!-- LTE: B2(1) B4(3) B5(4) B12(11) B13(12) B29(28) B30(29) B66(65) B71(70) -->
+    <include>1 3 4 11 12 28 29 65 70</include>
+  </lte_bands>
+  <tds_bands base="none"/>
+  <nr5g_sa_bands base="none">
+    <!-- NR-SA: n5(4) n41(40) n66(65) n71(70) n77(76) n260(259) n261(260) -->
+    <include>4 40 65 70 76 259 260</include>
+  </nr5g_sa_bands>
+  <nr5g_nsa_bands base="none">
+    <!-- NR-NSA: n1(0) n5(4) n41(40) n66(65) n71(70) n77(76) n260(259) n261(260) -->
+    <include>1 4 40 65 70 76 259 260</include>
+  </nr5g_nsa_bands>
+  <nr5g_nrdc_bands base="none"/>
+</rf_band_list>
+
+<!-- ===== Rules ===== -->
+    <rule>
+      <conditions><location_mcc_in>450</location_mcc_in></conditions>
+      <actions>
+        <if><conditions><serving_plmn_in>450-05 450-11</serving_plmn_in></conditions><actions><rf_bands list="skt_kr_b"/><stop/></actions></if>
+        <if><conditions><serving_plmn_in>450-08</serving_plmn_in></conditions><actions><rf_bands list="kt_kr_b"/><stop/></actions></if>
+        <if><conditions><serving_plmn_in>450-06</serving_plmn_in></conditions><actions><rf_bands list="lgu_kr_b"/><stop/></actions></if>
+        <rf_bands list="skt_kr_b"/>
+      </actions>
+    </rule>
+<rule>
+      <conditions><location_mcc_in>428</location_mcc_in></conditions>
+      <actions>
+
+<if>
+  <conditions><serving_plmn_in>428-88</serving_plmn_in></conditions>
+  <actions><rf_bands list="unitel_mn_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>428-99</serving_plmn_in></conditions>
+  <actions><rf_bands list="mobicom_mn_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>428-00 428-91</serving_plmn_in></conditions>
+  <actions><rf_bands list="skytel_mn_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>428-98</serving_plmn_in></conditions>
+  <actions><rf_bands list="gmobile_mn_b"/><stop/></actions>
+</if>
+        <rf_bands list="mongolia_fallback_b"/>
+      </actions>
+    </rule>
+<rule>
+      <conditions><location_mcc_in>401</location_mcc_in></conditions>
+      <actions>
+
+<if>
+  <conditions><serving_plmn_in>401-02</serving_plmn_in></conditions>
+  <actions><rf_bands list="kcell_kz_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>401-01</serving_plmn_in></conditions>
+  <actions><rf_bands list="beeline_kz_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>401-77</serving_plmn_in></conditions>
+  <actions><rf_bands list="tele2_kz_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>401-07 401-08</serving_plmn_in></conditions>
+  <actions><rf_bands list="altel_kz_b"/><stop/></actions>
+</if>
+        <rf_bands list="kazakhstan_fallback_b"/>
+      </actions>
+    </rule>
+<rule>
+      <conditions><location_mcc_in>434</location_mcc_in></conditions>
+      <actions>
+
+<if>
+  <conditions><serving_plmn_in>434-04</serving_plmn_in></conditions>
+  <actions><rf_bands list="beeline_uz_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>434-05</serving_plmn_in></conditions>
+  <actions><rf_bands list="ucell_uz_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>434-07</serving_plmn_in></conditions>
+  <actions><rf_bands list="mobiuz_uz_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>434-08 434-03</serving_plmn_in></conditions>
+  <actions><rf_bands list="uzmobile_uz_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>434-06</serving_plmn_in></conditions>
+  <actions><rf_bands list="perfectum_uz_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>434-09</serving_plmn_in></conditions>
+  <actions><rf_bands list="evo_uz_b"/><stop/></actions>
+</if>
+        <rf_bands list="uzbekistan_fallback_b"/>
+      </actions>
+    </rule>
+<rule>
+      <conditions><location_mcc_in>437</location_mcc_in></conditions>
+      <actions>
+
+<if>
+  <conditions><serving_plmn_in>437-01</serving_plmn_in></conditions>
+  <actions><rf_bands list="beeline_kg_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>437-05</serving_plmn_in></conditions>
+  <actions><rf_bands list="megacom_kg_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>437-09</serving_plmn_in></conditions>
+  <actions><rf_bands list="o_kg_b"/><stop/></actions>
+</if>
+        <rf_bands list="kyrgyzstan_fallback_b"/>
+      </actions>
+    </rule>
+<rule>
+      <conditions><location_mcc_in>436</location_mcc_in></conditions>
+      <actions>
+
+<if>
+  <conditions><serving_plmn_in>436-01 436-02 436-12</serving_plmn_in></conditions>
+  <actions><rf_bands list="tcell_tj_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>436-03</serving_plmn_in></conditions>
+  <actions><rf_bands list="megafon_tj_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>436-04 436-10</serving_plmn_in></conditions>
+  <actions><rf_bands list="babilon_tj_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>436-05</serving_plmn_in></conditions>
+  <actions><rf_bands list="zetmobile_tj_b"/><stop/></actions>
+</if>
+        <rf_bands list="tajikistan_fallback_b"/>
+      </actions>
+    </rule>
+<rule>
+      <conditions><location_mcc_in>438</location_mcc_in></conditions>
+      <actions>
+
+<if>
+  <conditions><serving_plmn_in>438-02</serving_plmn_in></conditions>
+  <actions><rf_bands list="tmcell_tm_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>438-01</serving_plmn_in></conditions>
+  <actions><rf_bands list="mts_tm_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>438-03</serving_plmn_in></conditions>
+  <actions><rf_bands list="agts_tm_b"/><stop/></actions>
+</if>
+        <rf_bands list="turkmenistan_fallback_b"/>
+      </actions>
+    </rule>
+<rule>
+      <conditions><location_mcc_in>424</location_mcc_in></conditions>
+      <actions>
+
+<if>
+  <conditions><serving_plmn_in>424-02</serving_plmn_in></conditions>
+  <actions><rf_bands list="etisalat_ae_b"/><stop/></actions>
+</if>
+<if>
+  <conditions><serving_plmn_in>424-03</serving_plmn_in></conditions>
+  <actions><rf_bands list="du_ae_b"/><stop/></actions>
+</if>
+        <rf_bands list="uae_fallback_b"/>
+      </actions>
+    </rule>
+
+<rule>
+  <conditions><location_mcc_in>466</location_mcc_in></conditions>
+  <actions>
+    <rf_bands list="taiwan_fallback_b"/>
+  </actions>
+</rule>
+<rule>
+  <conditions><location_mcc_in>454</location_mcc_in></conditions>
+  <actions>
+    <rf_bands list="hongkong_fallback_b"/>
+  </actions>
+</rule>
+<rule>
+  <conditions><location_mcc_in>455</location_mcc_in></conditions>
+  <actions>
+    <rf_bands list="macau_fallback_b"/>
+  </actions>
+</rule>
+
+    <rule>
+      <conditions><location_mcc_in>440 441</location_mcc_in></conditions>
+      <actions>
+        <if>
+          <conditions><serving_plmn_in>440-10 440-11 440-12 440-13 440-20</serving_plmn_in></conditions>
+          <actions><rf_bands list="docomo_jp_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>440-50 440-51 440-52 440-53 440-54 440-70 440-71 440-72 440-73 440-74</serving_plmn_in></conditions>
+          <actions><rf_bands list="kddi_au_jp_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>440-20 440-30 440-31 440-32 440-40 440-41 440-42 440-88 440-89</serving_plmn_in></conditions>
+          <actions><rf_bands list="softbank_jp_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>440-11 441-10 441-11 441-12 441-13 441-14 441-15 441-16</serving_plmn_in></conditions>
+          <actions><rf_bands list="rakuten_jp_b"/><stop/></actions>
+        </if>
+        <rf_bands list="japan_fallback_b"/>
+      </actions>
+    </rule>
+    <rule>
+      <conditions><location_mcc_in>460</location_mcc_in></conditions>
+      <actions>
+        <if>
+          <conditions><serving_plmn_in>460-00 460-02 460-07</serving_plmn_in></conditions>
+          <actions><rf_bands list="cmcc_cn_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>460-01 460-09</serving_plmn_in></conditions>
+          <actions><rf_bands list="cu_cn_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>460-03 460-11</serving_plmn_in></conditions>
+          <actions><rf_bands list="ctc_cn_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>460-15</serving_plmn_in></conditions>
+          <actions><rf_bands list="cbn_cn_b"/><stop/></actions>
+        </if>
+        <rf_bands list="china_fallback_b"/>
+      </actions>
+    </rule>
+    <rule>
+      <conditions><location_mcc_in>525</location_mcc_in></conditions>
+      <actions>
+        <if>
+          <conditions><serving_plmn_in>525-01</serving_plmn_in></conditions>
+          <actions><rf_bands list="singtel_sg_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>525-05</serving_plmn_in></conditions>
+          <actions><rf_bands list="starhub_sg_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>525-03</serving_plmn_in></conditions>
+          <actions><rf_bands list="m1_sg_b"/><stop/></actions>
+        </if>
+        <rf_bands list="singapore_fallback_b"/>
+      </actions>
+    </rule>
+    <rule>
+      <conditions><location_mcc_in>502</location_mcc_in></conditions>
+      <actions>
+        <if>
+          <conditions><serving_plmn_in>502-12</serving_plmn_in></conditions>
+          <actions><rf_bands list="maxis_my_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>502-16 502-19</serving_plmn_in></conditions>
+          <actions><rf_bands list="celcomdigi_my_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>502-18</serving_plmn_in></conditions>
+          <actions><rf_bands list="umobile_my_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>502-11</serving_plmn_in></conditions>
+          <actions><rf_bands list="yes_my_b"/><stop/></actions>
+        </if>
+        <rf_bands list="malaysia_fallback_b"/>
+      </actions>
+    </rule>
+    <rule>
+      <conditions><location_mcc_in>520</location_mcc_in></conditions>
+      <actions>
+        <if>
+          <conditions><serving_plmn_in>520-01</serving_plmn_in></conditions>
+          <actions><rf_bands list="ais_th_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>520-05</serving_plmn_in></conditions>
+          <actions><rf_bands list="true_th_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>520-18</serving_plmn_in></conditions>
+          <actions><rf_bands list="dtac_th_b"/><stop/></actions>
+        </if>
+        <rf_bands list="thailand_fallback_b"/>
+      </actions>
+    </rule>
+    <rule>
+      <conditions><location_mcc_in>452</location_mcc_in></conditions>
+      <actions>
+        <if>
+          <conditions><serving_plmn_in>452-04</serving_plmn_in></conditions>
+          <actions><rf_bands list="viettel_vn_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>452-02</serving_plmn_in></conditions>
+          <actions><rf_bands list="vinaphone_vn_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>452-01</serving_plmn_in></conditions>
+          <actions><rf_bands list="mobifone_vn_b"/><stop/></actions>
+        </if>
+        <rf_bands list="vietnam_fallback_b"/>
+      </actions>
+    </rule>
+    <rule>
+      <conditions><location_mcc_in>510</location_mcc_in></conditions>
+      <actions>
+        <if>
+          <conditions><serving_plmn_in>510-10</serving_plmn_in></conditions>
+          <actions><rf_bands list="telkomsel_id_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>510-11</serving_plmn_in></conditions>
+          <actions><rf_bands list="xl_id_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>510-01</serving_plmn_in></conditions>
+          <actions><rf_bands list="indosat_id_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>510-09</serving_plmn_in></conditions>
+          <actions><rf_bands list="smartfren_id_b"/><stop/></actions>
+        </if>
+        <rf_bands list="indonesia_fallback_b"/>
+      </actions>
+    </rule>
+    <rule>
+      <conditions><location_mcc_in>515</location_mcc_in></conditions>
+      <actions>
+        <if>
+          <conditions><serving_plmn_in>515-02</serving_plmn_in></conditions>
+          <actions><rf_bands list="globe_ph_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>515-03</serving_plmn_in></conditions>
+          <actions><rf_bands list="smart_ph_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>515-66</serving_plmn_in></conditions>
+          <actions><rf_bands list="dito_ph_b"/><stop/></actions>
+        </if>
+        <rf_bands list="philippines_fallback_b"/>
+      </actions>
+    </rule>
+    <rule>
+      <conditions><location_mcc_in>456</location_mcc_in></conditions>
+      <actions>
+        <if>
+          <conditions><serving_plmn_in>456-01</serving_plmn_in></conditions>
+          <actions><rf_bands list="cellcard_kh_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>456-02</serving_plmn_in></conditions>
+          <actions><rf_bands list="smart_kh_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>456-08</serving_plmn_in></conditions>
+          <actions><rf_bands list="metfone_kh_b"/><stop/></actions>
+        </if>
+        <rf_bands list="cambodia_fallback_b"/>
+      </actions>
+    </rule>
+    <rule>
+      <conditions><location_mcc_in>457</location_mcc_in></conditions>
+      <actions>
+        <if>
+          <conditions><serving_plmn_in>457-08</serving_plmn_in></conditions>
+          <actions><rf_bands list="unitel_la_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>457-01</serving_plmn_in></conditions>
+          <actions><rf_bands list="laotel_la_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>457-02</serving_plmn_in></conditions>
+          <actions><rf_bands list="beeline_la_b"/><stop/></actions>
+        </if>
+        <rf_bands list="laos_fallback_b"/>
+      </actions>
+    </rule>
+    <rule>
+      <conditions><location_mcc_in>414</location_mcc_in></conditions>
+      <actions>
+        <if>
+          <conditions><serving_plmn_in>414-01</serving_plmn_in></conditions>
+          <actions><rf_bands list="mpt_mm_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>414-05</serving_plmn_in></conditions>
+          <actions><rf_bands list="ooredoo_mm_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>414-09</serving_plmn_in></conditions>
+          <actions><rf_bands list="mytel_mm_b"/><stop/></actions>
+        </if>
+        <rf_bands list="myanmar_fallback_b"/>
+      </actions>
+    </rule>
+    <rule>
+      <conditions><location_mcc_in>528</location_mcc_in></conditions>
+      <actions>
+        <if>
+          <conditions><serving_plmn_in>528-11</serving_plmn_in></conditions>
+          <actions><rf_bands list="dst_bn_b"/><stop/></actions>
+        </if>
+        <if>
+          <conditions><serving_plmn_in>528-02</serving_plmn_in></conditions>
+          <actions><rf_bands list="imagine_bn_b"/><stop/></actions>
+        </if>
+        <rf_bands list="brunei_fallback_b"/>
+      </actions>
+    </rule>
+    <rule>
+      <conditions>
+        <location_mcc_in>
+          202 204 206 208 212 213 214 218 219 220 221 222 225 226 228 230 231
+          232 234 238 240 242 244 246 247 248 260 262 266 268 270 272 274 276
+          278 280 284 286 288 289 292 293 294 295 297
+        </location_mcc_in>
+      </conditions>
+      <actions><rf_bands list="eu_ce_b"/></actions>
+    </rule>
+    <rule>
+      <conditions><location_mcc_in>310 311 312 313 314 315 316</location_mcc_in></conditions>
+      <actions><rf_bands list="us_fcc_b"/></actions>
+    </rule>
+    <rule>
+      <conditions><true/></conditions>
+      <actions><rf_bands list="rf_bands_all"/></actions>
+    </rule>
+
+  
+<!-- 유럽/미국/중동/아프리카 사업자 룰 -->
+  <rule>
+    <conditions><location_mcc_in>234 235</location_mcc_in></conditions>
+    <actions>
+      <if>
+        <conditions><serving_plmn_in>234-30 234-31 234-32 234-33 234-34</serving_plmn_in></conditions>
+        <actions><rf_bands list="ee_gb_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>234-10 234-11 234-02</serving_plmn_in></conditions>
+        <actions><rf_bands list="o2_gb_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>234-15 234-07 234-09</serving_plmn_in></conditions>
+        <actions><rf_bands list="vodafone_gb_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>234-20 235-94</serving_plmn_in></conditions>
+        <actions><rf_bands list="three_gb_b"/><stop/></actions>
+      </if>
+      <rf_bands list="gb_fallback_b"/>
+    </actions>
+  </rule>
+  <rule>
+    <conditions><location_mcc_in>262</location_mcc_in></conditions>
+    <actions>
+      <if>
+        <conditions><serving_plmn_in>262-01 262-06 262-78</serving_plmn_in></conditions>
+        <actions><rf_bands list="telekom_de_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>262-02 262-09 262-04</serving_plmn_in></conditions>
+        <actions><rf_bands list="vodafone_de_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>262-07 262-03 262-05 262-08 262-11 262-17 262-77</serving_plmn_in></conditions>
+        <actions><rf_bands list="o2_de_b"/><stop/></actions>
+      </if>
+      <rf_bands list="de_fallback_b"/>
+    </actions>
+  </rule>
+  <rule>
+    <conditions><location_mcc_in>208</location_mcc_in></conditions>
+    <actions>
+      <if>
+        <conditions><serving_plmn_in>208-01 208-02 208-91</serving_plmn_in></conditions>
+        <actions><rf_bands list="orange_fr_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>208-10 208-09 208-13</serving_plmn_in></conditions>
+        <actions><rf_bands list="sfr_fr_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>208-20 208-88 208-21</serving_plmn_in></conditions>
+        <actions><rf_bands list="bouygues_fr_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>208-15 208-16 208-35 208-36</serving_plmn_in></conditions>
+        <actions><rf_bands list="free_fr_b"/><stop/></actions>
+      </if>
+      <rf_bands list="fr_fallback_b"/>
+    </actions>
+  </rule>
+  <rule>
+    <conditions><location_mcc_in>420</location_mcc_in></conditions>
+    <actions>
+      <if>
+        <conditions><serving_plmn_in>420-01</serving_plmn_in></conditions>
+        <actions><rf_bands list="stc_sa_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>420-03</serving_plmn_in></conditions>
+        <actions><rf_bands list="mobily_sa_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>420-04</serving_plmn_in></conditions>
+        <actions><rf_bands list="zain_sa_b"/><stop/></actions>
+      </if>
+      <rf_bands list="sa_fallback_b"/>
+    </actions>
+  </rule>
+  <rule>
+    <conditions><location_mcc_in>419</location_mcc_in></conditions>
+    <actions>
+      <if>
+        <conditions><serving_plmn_in>419-02</serving_plmn_in></conditions>
+        <actions><rf_bands list="zain_kw_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>419-03</serving_plmn_in></conditions>
+        <actions><rf_bands list="ooredoo_kw_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>419-04</serving_plmn_in></conditions>
+        <actions><rf_bands list="stc_kw_b"/><stop/></actions>
+      </if>
+      <rf_bands list="kw_fallback_b"/>
+    </actions>
+  </rule>
+  <rule>
+    <conditions><location_mcc_in>427</location_mcc_in></conditions>
+    <actions>
+      <if>
+        <conditions><serving_plmn_in>427-01</serving_plmn_in></conditions>
+        <actions><rf_bands list="ooredoo_qa_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>427-02</serving_plmn_in></conditions>
+        <actions><rf_bands list="vodafone_qa_b"/><stop/></actions>
+      </if>
+      <rf_bands list="qa_fallback_b"/>
+    </actions>
+  </rule>
+  <rule>
+    <conditions><location_mcc_in>426</location_mcc_in></conditions>
+    <actions>
+      <if>
+        <conditions><serving_plmn_in>426-01 426-05</serving_plmn_in></conditions>
+        <actions><rf_bands list="batelco_bh_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>426-02</serving_plmn_in></conditions>
+        <actions><rf_bands list="zain_bh_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>426-04 426-06</serving_plmn_in></conditions>
+        <actions><rf_bands list="stc_bh_b"/><stop/></actions>
+      </if>
+      <rf_bands list="bh_fallback_b"/>
+    </actions>
+  </rule>
+  <rule>
+    <conditions><location_mcc_in>422</location_mcc_in></conditions>
+    <actions>
+      <if>
+        <conditions><serving_plmn_in>422-02 422-04</serving_plmn_in></conditions>
+        <actions><rf_bands list="omantel_om_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>422-03</serving_plmn_in></conditions>
+        <actions><rf_bands list="ooredoo_om_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>422-06</serving_plmn_in></conditions>
+        <actions><rf_bands list="vodafone_om_b"/><stop/></actions>
+      </if>
+      <rf_bands list="om_fallback_b"/>
+    </actions>
+  </rule>
+  <rule>
+    <conditions><location_mcc_in>602</location_mcc_in></conditions>
+    <actions>
+      <if>
+        <conditions><serving_plmn_in>602-01</serving_plmn_in></conditions>
+        <actions><rf_bands list="orange_eg_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>602-02</serving_plmn_in></conditions>
+        <actions><rf_bands list="vodafone_eg_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>602-03</serving_plmn_in></conditions>
+        <actions><rf_bands list="etisalat_eg_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>602-04</serving_plmn_in></conditions>
+        <actions><rf_bands list="we_eg_b"/><stop/></actions>
+      </if>
+      <rf_bands list="eg_fallback_b"/>
+    </actions>
+  </rule>
+  <rule>
+    <conditions><location_mcc_in>655</location_mcc_in></conditions>
+    <actions>
+      <if>
+        <conditions><serving_plmn_in>655-01</serving_plmn_in></conditions>
+        <actions><rf_bands list="vodacom_za_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>655-10 655-12</serving_plmn_in></conditions>
+        <actions><rf_bands list="mtn_za_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>655-07</serving_plmn_in></conditions>
+        <actions><rf_bands list="cellc_za_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>655-02 655-05</serving_plmn_in></conditions>
+        <actions><rf_bands list="telkom_za_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>655-19 655-38</serving_plmn_in></conditions>
+        <actions><rf_bands list="rain_za_b"/><stop/></actions>
+      </if>
+      <rf_bands list="za_fallback_b"/>
+    </actions>
+  </rule>
+  <rule>
+    <conditions><location_mcc_in>604</location_mcc_in></conditions>
+    <actions>
+      <if>
+        <conditions><serving_plmn_in>604-01 604-06</serving_plmn_in></conditions>
+        <actions><rf_bands list="iam_ma_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>604-00</serving_plmn_in></conditions>
+        <actions><rf_bands list="orange_ma_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>604-02 604-05</serving_plmn_in></conditions>
+        <actions><rf_bands list="inwi_ma_b"/><stop/></actions>
+      </if>
+      <rf_bands list="ma_fallback_b"/>
+    </actions>
+  </rule>
+  <rule>
+    <conditions><location_mcc_in>310 311 312 313 314 315 316</location_mcc_in></conditions>
+    <actions>
+      <if>
+        <conditions><serving_plmn_in>310-410 310-070 310-080 310-380 310-560</serving_plmn_in></conditions>
+        <actions><rf_bands list="att_us_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>310-260 310-160 310-200 310-210 310-220 310-230 310-240 310-250 310-270</serving_plmn_in></conditions>
+        <actions><rf_bands list="tmobile_us_b"/><stop/></actions>
+      </if>
+      <if>
+        <conditions><serving_plmn_in>311-480 311-481 310-012 310-010</serving_plmn_in></conditions>
+        <actions><rf_bands list="verizon_us_b"/><stop/></actions>
+      </if>
+      <rf_bands list="us_fallback_b"/>
+    </actions>
+  </rule>
+</initial>
+</policy>

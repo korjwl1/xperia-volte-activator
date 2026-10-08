@@ -24,6 +24,10 @@ export const rootToolsApi = {
   rootSwitchStatus: (serial: string, verifyStock = false) => transport.result<RootSwitch>("root_switch_status", { serial, verifyStock }),
   rootExternalPatchImport: (serial: string, stockPath: string, patchedPath: string, confirmSamePhone: boolean) => rootWrite<RootImportedImage>("root_external_patch_import", { serial, stockPath, patchedPath, confirmSamePhone }),
   resukisuInstall: (serial: string, sha256: string, confirm: boolean) => rootWrite<null>("resukisu_install", { serial, sha256, confirm }),
+  /** 처음부터 ReSukiSU 루팅: 순정 init_boot를 폰 Download에 둔다 — since(기기 시각) 이후의 패치 결과만 받는다 */
+  resukisuStageStock: (serial: string, stockPath: string) => rootWrite<{ devicePath: string; since: number }>("resukisu_stage_stock", { serial, stockPath }),
+  /** 매니저가 만든 kernelsu_patched_*.img를 PC로 받는다 — 아직 없거나 쓰는 중이면 null */
+  resukisuFetchPatched: (serial: string, since: number) => rootWrite<string | null>("resukisu_fetch_patched", { serial, since }),
   rootSwitchFinish: (serial: string) => transport.result<RootSwitch>("root_switch_finish", { serial }),
 };
 export type RootToolsApi = typeof rootToolsApi;

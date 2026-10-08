@@ -1,0 +1,445 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+plmn_mcc_supported_01.xml 최종 배포본 (Aligned with carrier_policy*_FINAL_2025)
+plmn_mcc_supported_01.xml Final Release (Aligned with carrier_policy*_FINAL_2025)
+
+[소니코리아 사용자모임 / Sony Korea User Group]
+2025-08-27 10:20:44
+
+설정 목적: 전세계 통신사 MCC/PLMN 코드 지원 최신화
+Purpose: Global Carrier MCC/PLMN Code Support Update
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-->
+
+<!--
+  plmn_mcc_supported_01.xml 최종 배포본 (Aligned with carrier_policy*_FINAL_2025)
+  - 생성일: 2025-08-27 10:17:20
+  - 버전 정렬:
+      • plmn_mcc_supported_01 policy_ver: 45.0.6
+      • carrier_policy policy_ver: 125.2.2
+  - 표기 규칙:
+      • 세로형식(라인 브레이크)과 국가/사업자 주석 포함
+-->
+
+<policy name="generic" enabled="true" schema_ver="1" policy_ver="45.0.6">
+  <initial>
+
+    <mcc_list ns="global" name="default_m">
+      202 204 206 208 212 213 214 218 219 220 221 222 225 226 228 230 231 232 234 238 240 242 244 246 247 248 260 262 266 268 270 272 274 276 278 280 284 286 288 289 292 293 294 295 297 310 311 312 313 314 315 316 450 440 441 460 525 502 520 452 510 515 456 457 414 528
+     466
+     454
+     455
+     428
+     401
+     434
+     437
+     436
+     438
+     424
+     235 419 420 422 426 427 602 604 655</mcc_list>
+
+    <country name="korea">
+      <mcc>450</mcc>
+      <plmn_list name="korea_plmns">
+        <plmn supported="true">450-05</plmn>
+        <plmn supported="true">450-11</plmn>
+        <plmn supported="true">450-08</plmn>
+        <plmn supported="true">450-06</plmn>
+      </plmn_list>
+    </country>
+
+    <country name="japan">
+      <mcc>440 441</mcc>
+      <plmn_list name="japan_plmns">
+        <plmn supported="true">440-10</plmn>
+        <plmn supported="true">440-11</plmn>
+        <plmn supported="true">440-12</plmn>
+        <plmn supported="true">440-13</plmn>
+        <plmn supported="true">440-20</plmn>
+        <plmn supported="true">440-50</plmn>
+        <plmn supported="true">440-51</plmn>
+        <plmn supported="true">440-52</plmn>
+        <plmn supported="true">440-53</plmn>
+        <plmn supported="true">440-54</plmn>
+        <plmn supported="true">440-70</plmn>
+        <plmn supported="true">440-71</plmn>
+        <plmn supported="true">440-72</plmn>
+        <plmn supported="true">440-73</plmn>
+        <plmn supported="true">440-74</plmn>
+        <plmn supported="true">440-30</plmn>
+        <plmn supported="true">440-31</plmn>
+        <plmn supported="true">440-32</plmn>
+        <plmn supported="true">440-40</plmn>
+        <plmn supported="true">440-41</plmn>
+        <plmn supported="true">440-42</plmn>
+        <plmn supported="true">440-88</plmn>
+        <plmn supported="true">440-89</plmn>
+        <plmn supported="true">441-10</plmn>
+        <plmn supported="true">441-11</plmn>
+        <plmn supported="true">441-12</plmn>
+        <plmn supported="true">441-13</plmn>
+        <plmn supported="true">441-14</plmn>
+        <plmn supported="true">441-15</plmn>
+        <plmn supported="true">441-16</plmn>
+      </plmn_list>
+    </country>
+    <country name="china">
+      <mcc>460</mcc>
+      <plmn_list name="china_plmns">
+        <plmn supported="true">460-00</plmn>
+        <plmn supported="true">460-02</plmn>
+        <plmn supported="true">460-07</plmn>
+        <plmn supported="true">460-01</plmn>
+        <plmn supported="true">460-09</plmn>
+        <plmn supported="true">460-03</plmn>
+        <plmn supported="true">460-11</plmn>
+        <plmn supported="true">460-15</plmn>
+      </plmn_list>
+    </country>
+    <country name="singapore">
+      <mcc>525</mcc>
+      <plmn_list name="singapore_plmns">
+        <plmn supported="true">525-01</plmn>
+        <plmn supported="true">525-05</plmn>
+        <plmn supported="true">525-03</plmn>
+      </plmn_list>
+    </country>
+    <country name="malaysia">
+      <mcc>502</mcc>
+      <plmn_list name="malaysia_plmns">
+        <plmn supported="true">502-12</plmn>
+        <plmn supported="true">502-16</plmn>
+        <plmn supported="true">502-19</plmn>
+        <plmn supported="true">502-18</plmn>
+        <plmn supported="true">502-11</plmn>
+      </plmn_list>
+    </country>
+    <country name="thailand">
+      <mcc>520</mcc>
+      <plmn_list name="thailand_plmns">
+        <plmn supported="true">520-01</plmn>
+        <plmn supported="true">520-05</plmn>
+        <plmn supported="true">520-18</plmn>
+      </plmn_list>
+    </country>
+    <country name="vietnam">
+      <mcc>452</mcc>
+      <plmn_list name="vietnam_plmns">
+        <plmn supported="true">452-04</plmn>
+        <plmn supported="true">452-02</plmn>
+        <plmn supported="true">452-01</plmn>
+      </plmn_list>
+    </country>
+    <country name="indonesia">
+      <mcc>510</mcc>
+      <plmn_list name="indonesia_plmns">
+        <plmn supported="true">510-10</plmn>
+        <plmn supported="true">510-11</plmn>
+        <plmn supported="true">510-01</plmn>
+        <plmn supported="true">510-09</plmn>
+      </plmn_list>
+    </country>
+    <country name="philippines">
+      <mcc>515</mcc>
+      <plmn_list name="philippines_plmns">
+        <plmn supported="true">515-02</plmn>
+        <plmn supported="true">515-03</plmn>
+        <plmn supported="true">515-66</plmn>
+      </plmn_list>
+    </country>
+    <country name="cambodia">
+      <mcc>456</mcc>
+      <plmn_list name="cambodia_plmns">
+        <plmn supported="true">456-01</plmn>
+        <plmn supported="true">456-02</plmn>
+        <plmn supported="true">456-08</plmn>
+      </plmn_list>
+    </country>
+    <country name="laos">
+      <mcc>457</mcc>
+      <plmn_list name="laos_plmns">
+        <plmn supported="true">457-08</plmn>
+        <plmn supported="true">457-01</plmn>
+        <plmn supported="true">457-02</plmn>
+      </plmn_list>
+    </country>
+    <country name="myanmar">
+      <mcc>414</mcc>
+      <plmn_list name="myanmar_plmns">
+        <plmn supported="true">414-01</plmn>
+        <plmn supported="true">414-05</plmn>
+        <plmn supported="true">414-09</plmn>
+      </plmn_list>
+    </country>
+    <country name="brunei">
+      <mcc>528</mcc>
+      <plmn_list name="brunei_plmns">
+        <plmn supported="true">528-11</plmn>
+        <plmn supported="true">528-02</plmn>
+      </plmn_list>
+    </country>
+
+  
+<country name="taiwan">
+  <mcc>466</mcc>
+  <plmn_list name="taiwan_plmns">
+    <!-- Add exact PLMN codes if you want per-operator mapping:
+         Example (uncomment and edit):
+         <plmn supported="true">XXX-YY</plmn>
+    -->
+  </plmn_list>
+</country>
+<country name="hongkong">
+  <mcc>454</mcc>
+  <plmn_list name="hongkong_plmns">
+    <!-- Add exact PLMN codes if you want per-operator mapping:
+         Example (uncomment and edit):
+         <plmn supported="true">XXX-YY</plmn>
+    -->
+  </plmn_list>
+</country>
+<country name="macau">
+  <mcc>455</mcc>
+  <plmn_list name="macau_plmns">
+    <!-- Add exact PLMN codes if you want per-operator mapping:
+         Example (uncomment and edit):
+         <plmn supported="true">XXX-YY</plmn>
+    -->
+  </plmn_list>
+</country>
+
+    <country name="mongolia">
+      <mcc>428</mcc>
+      <plmn_list name="mongolia_plmns">
+        <plmn supported="true">428-88</plmn>
+        <plmn supported="true">428-99</plmn>
+        <plmn supported="true">428-00</plmn>
+        <plmn supported="true">428-91</plmn>
+        <plmn supported="true">428-98</plmn>
+      </plmn_list>
+    </country>
+    <country name="kazakhstan">
+      <mcc>401</mcc>
+      <plmn_list name="kazakhstan_plmns">
+        <plmn supported="true">401-02</plmn>
+        <plmn supported="true">401-01</plmn>
+        <plmn supported="true">401-77</plmn>
+        <plmn supported="true">401-07</plmn>
+        <plmn supported="true">401-08</plmn>
+      </plmn_list>
+    </country>
+    <country name="uzbekistan">
+      <mcc>434</mcc>
+      <plmn_list name="uzbekistan_plmns">
+        <plmn supported="true">434-04</plmn>
+        <plmn supported="true">434-05</plmn>
+        <plmn supported="true">434-07</plmn>
+        <plmn supported="true">434-08</plmn>
+        <plmn supported="true">434-03</plmn>
+        <plmn supported="true">434-06</plmn>
+        <plmn supported="true">434-09</plmn>
+      </plmn_list>
+    </country>
+    <country name="kyrgyzstan">
+      <mcc>437</mcc>
+      <plmn_list name="kyrgyzstan_plmns">
+        <plmn supported="true">437-01</plmn>
+        <plmn supported="true">437-05</plmn>
+        <plmn supported="true">437-09</plmn>
+      </plmn_list>
+    </country>
+    <country name="tajikistan">
+      <mcc>436</mcc>
+      <plmn_list name="tajikistan_plmns">
+        <plmn supported="true">436-01</plmn>
+        <plmn supported="true">436-02</plmn>
+        <plmn supported="true">436-12</plmn>
+        <plmn supported="true">436-03</plmn>
+        <plmn supported="true">436-04</plmn>
+        <plmn supported="true">436-10</plmn>
+        <plmn supported="true">436-05</plmn>
+      </plmn_list>
+    </country>
+    <country name="turkmenistan">
+      <mcc>438</mcc>
+      <plmn_list name="turkmenistan_plmns">
+        <plmn supported="true">438-02</plmn>
+        <plmn supported="true">438-01</plmn>
+        <plmn supported="true">438-03</plmn>
+      </plmn_list>
+    </country>
+    <country name="uae">
+      <mcc>424</mcc>
+      <plmn_list name="uae_plmns">
+        <plmn supported="true">424-02</plmn>
+        <plmn supported="true">424-03</plmn>
+      </plmn_list>
+    </country>
+
+<!-- 유럽/미국/중동/아프리카 PLMN 매핑 -->
+    <!-- 국가: GB -->
+    <country name="GB">
+      <mcc>234 235</mcc>
+      <plmn_list name="gb_plmns">
+        <plmn supported="true">234-30</plmn>
+        <plmn supported="true">234-31</plmn>
+        <plmn supported="true">234-32</plmn>
+        <plmn supported="true">234-33</plmn>
+        <plmn supported="true">234-34</plmn>
+        <plmn supported="true">234-10</plmn>
+        <plmn supported="true">234-11</plmn>
+        <plmn supported="true">234-02</plmn>
+        <plmn supported="true">234-15</plmn>
+        <plmn supported="true">234-07</plmn>
+        <plmn supported="true">234-09</plmn>
+        <plmn supported="true">234-20</plmn>
+        <plmn supported="true">235-94</plmn>
+      </plmn_list>
+    </country>
+    <!-- 국가: DE -->
+    <country name="DE">
+      <mcc>262</mcc>
+      <plmn_list name="de_plmns">
+        <plmn supported="true">262-01</plmn>
+        <plmn supported="true">262-06</plmn>
+        <plmn supported="true">262-78</plmn>
+        <plmn supported="true">262-02</plmn>
+        <plmn supported="true">262-09</plmn>
+        <plmn supported="true">262-04</plmn>
+        <plmn supported="true">262-07</plmn>
+        <plmn supported="true">262-03</plmn>
+        <plmn supported="true">262-05</plmn>
+        <plmn supported="true">262-08</plmn>
+        <plmn supported="true">262-11</plmn>
+        <plmn supported="true">262-17</plmn>
+        <plmn supported="true">262-77</plmn>
+      </plmn_list>
+    </country>
+    <!-- 국가: FR -->
+    <country name="FR">
+      <mcc>208</mcc>
+      <plmn_list name="fr_plmns">
+        <plmn supported="true">208-01</plmn>
+        <plmn supported="true">208-02</plmn>
+        <plmn supported="true">208-91</plmn>
+        <plmn supported="true">208-10</plmn>
+        <plmn supported="true">208-09</plmn>
+        <plmn supported="true">208-13</plmn>
+        <plmn supported="true">208-20</plmn>
+        <plmn supported="true">208-88</plmn>
+        <plmn supported="true">208-21</plmn>
+        <plmn supported="true">208-15</plmn>
+        <plmn supported="true">208-16</plmn>
+        <plmn supported="true">208-35</plmn>
+        <plmn supported="true">208-36</plmn>
+      </plmn_list>
+    </country>
+    <!-- 국가: SA -->
+    <country name="SA">
+      <mcc>420</mcc>
+      <plmn_list name="sa_plmns">
+        <plmn supported="true">420-01</plmn>
+        <plmn supported="true">420-03</plmn>
+        <plmn supported="true">420-04</plmn>
+      </plmn_list>
+    </country>
+    <!-- 국가: KW -->
+    <country name="KW">
+      <mcc>419</mcc>
+      <plmn_list name="kw_plmns">
+        <plmn supported="true">419-02</plmn>
+        <plmn supported="true">419-03</plmn>
+        <plmn supported="true">419-04</plmn>
+      </plmn_list>
+    </country>
+    <!-- 국가: QA -->
+    <country name="QA">
+      <mcc>427</mcc>
+      <plmn_list name="qa_plmns">
+        <plmn supported="true">427-01</plmn>
+        <plmn supported="true">427-02</plmn>
+      </plmn_list>
+    </country>
+    <!-- 국가: BH -->
+    <country name="BH">
+      <mcc>426</mcc>
+      <plmn_list name="bh_plmns">
+        <plmn supported="true">426-01</plmn>
+        <plmn supported="true">426-05</plmn>
+        <plmn supported="true">426-02</plmn>
+        <plmn supported="true">426-04</plmn>
+        <plmn supported="true">426-06</plmn>
+      </plmn_list>
+    </country>
+    <!-- 국가: OM -->
+    <country name="OM">
+      <mcc>422</mcc>
+      <plmn_list name="om_plmns">
+        <plmn supported="true">422-02</plmn>
+        <plmn supported="true">422-04</plmn>
+        <plmn supported="true">422-03</plmn>
+        <plmn supported="true">422-06</plmn>
+      </plmn_list>
+    </country>
+    <!-- 국가: EG -->
+    <country name="EG">
+      <mcc>602</mcc>
+      <plmn_list name="eg_plmns">
+        <plmn supported="true">602-01</plmn>
+        <plmn supported="true">602-02</plmn>
+        <plmn supported="true">602-03</plmn>
+        <plmn supported="true">602-04</plmn>
+      </plmn_list>
+    </country>
+    <!-- 국가: ZA -->
+    <country name="ZA">
+      <mcc>655</mcc>
+      <plmn_list name="za_plmns">
+        <plmn supported="true">655-01</plmn>
+        <plmn supported="true">655-10</plmn>
+        <plmn supported="true">655-12</plmn>
+        <plmn supported="true">655-07</plmn>
+        <plmn supported="true">655-02</plmn>
+        <plmn supported="true">655-05</plmn>
+        <plmn supported="true">655-19</plmn>
+        <plmn supported="true">655-38</plmn>
+      </plmn_list>
+    </country>
+    <!-- 국가: MA -->
+    <country name="MA">
+      <mcc>604</mcc>
+      <plmn_list name="ma_plmns">
+        <plmn supported="true">604-01</plmn>
+        <plmn supported="true">604-06</plmn>
+        <plmn supported="true">604-00</plmn>
+        <plmn supported="true">604-02</plmn>
+        <plmn supported="true">604-05</plmn>
+      </plmn_list>
+    </country>
+    <!-- 국가: US -->
+    <country name="US">
+      <mcc>310 311 312 313 314 315 316</mcc>
+      <plmn_list name="us_plmns">
+        <plmn supported="true">310-410</plmn>
+        <plmn supported="true">310-070</plmn>
+        <plmn supported="true">310-080</plmn>
+        <plmn supported="true">310-380</plmn>
+        <plmn supported="true">310-560</plmn>
+        <plmn supported="true">310-260</plmn>
+        <plmn supported="true">310-160</plmn>
+        <plmn supported="true">310-200</plmn>
+        <plmn supported="true">310-210</plmn>
+        <plmn supported="true">310-220</plmn>
+        <plmn supported="true">310-230</plmn>
+        <plmn supported="true">310-240</plmn>
+        <plmn supported="true">310-250</plmn>
+        <plmn supported="true">310-270</plmn>
+        <plmn supported="true">311-480</plmn>
+        <plmn supported="true">311-481</plmn>
+        <plmn supported="true">310-012</plmn>
+        <plmn supported="true">310-010</plmn>
+      </plmn_list>
+    </country>
+</initial>
+</policy>

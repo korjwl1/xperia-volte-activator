@@ -30,6 +30,7 @@ beforeEach(() => {
     fastbootLock: async () => { calls.order.push("lock"); return { ok: true, value: { unlocked: false } }; },
     magiskInstall: async () => { calls.install++; return { ok: true, value: null }; },
     rootCheck: async () => true,
+    rootWipe: async () => { calls.order.push("wipe"); return { ok: true, value: ["neozygisk"] }; },
     backupCancel: async () => true,
   });
 });
@@ -63,6 +64,8 @@ test("manual firmware sends the extracted IMG rather than the original SIN", asy
 test("unroot cannot complete when root access remains after reboot", async () => {
   const w = wizard("unroot"); await w.runRealUnroot(w.runSteps[0]);
   assert.equal(w.runSteps[0].status, "failed"); assert.equal(calls.flash.length, 1);
+  // 루트가 있는 동안 모듈·매니저 데이터를 먼저 지우고 나서 fastbootd로 들어간다
+  assert.ok(calls.order.indexOf("wipe") >= 0 && calls.order.indexOf("wipe") < calls.order.indexOf("enter"));
 });
 test("mixed real flags fail root and unroot before any checks or writes", () => {
   for (const id of ["root", "unroot"]) for (const values of [{ root: false, fastboot: true }, { root: true, fastboot: false }]) {

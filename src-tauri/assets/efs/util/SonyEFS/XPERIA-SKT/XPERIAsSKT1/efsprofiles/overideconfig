@@ -1,0 +1,77 @@
+#-----------------------------------------------------------------------
+# 네트워크 핵심 설정 (2025년 한국 환경) - SKT
+# overrideconfig (균형형 Balanced)
+# 작성: [소니코리아 사용자모임]
+# 일자: 2025년 8월 29일
+#
+# 설정 목적:
+#   - 원본 사업자 설정 유지
+#   - 핸드오버 안정성/배터리 소모 최소화
+#   - 국내: VoLTE 기본 / VoWiFi는 정책에 따름
+#   - NSA(ENDC) 운용 원본값 유지
+#-----------------------------------------------------------------------
+
+# ---------- 5G 측정/진입·이탈 임계 ----------
+5GMeasurementsFeatureEnabled     = 1;
+
+NR_RSRP_Single_in                 = -105;
+NR_RSRP_Single_out                = -120;
+NR_RSRQ_Single_in                 = -15;
+NR_RSRQ_Single_out                = -18;
+NR_SINR_Single_in                 = 0;
+NR_SINR_Single_out                = -3;
+
+# ---------- LTE 측정/진입·이탈 임계 ----------
+LTE_RSRP_Single_in                = -115;
+LTE_RSRP_Single_out               = -125;
+LTE_RSRQ_Single_in                = -12;
+LTE_RSRQ_Single_out               = -15;
+
+# ---------- 5G/LTE 상호 전환 ----------
+ENDC_Enabled                      = 1;
+NR5G_LTE_Handover_Threshold       = -120;
+LTE_NR5G_Handover_Threshold       = -110;
+SingleRatFeatureEnable            = 0;
+
+# ---------- IMS 핸드오버 안정성 ----------
+IMS_Handover_Enable               = 1
+IMS_HO_Evaluation_Timer           = 3000
+IMS_HO_Hysteresis_Timer           = 5000
+IMS_HO_RSRP_Hysteresis_dB         = 3
+IMS_HO_RSRQ_Hysteresis_dB         = 2
+IMS_HO_Min_Stay_Time_ms           = 8000
+IMS_HO_Backoff_Time_ms            = 10000
+IMS_HO_Suppress_After_Switch_ms   = 6000
+IMS_ReReg_On_HO                   = 1
+IMS_Bearer_Check_Interval         = 2000
+
+# ---------- 미디어 품질 ----------
+MediaDLJitterAcceptable           = 30
+MediaULJitterAcceptable           = 30
+MediaDLFrameLossAcceptable        = 2
+MediaULFrameLossAcceptable        = 2
+
+# ---------- SRVCC (국내 ON) ----------
+ImsVoiceSrvccConfig               = 1
+ImsMidCallSrvccEnabled            = 1
+ImsPS_HO_To_3G_Enabled            = 1
+
+# ----------------------------------------------------------------------
+# 3G CS Voice (WCDMA) HD Voice Enable (SKT)
+# - Safe addition: unknown keys are ignored by vendor parser
+# - No impact on VoLTE/VoNR profiles
+AudioProfileCS_WCDMA      = "AMR_WB_23_85;AMR_WB_12_65;AMR_12_2"
+CS_WCDMA_AMR_WB_Enabled   = 1
+CS_WCDMA_AMR_NB_Enabled   = 1
+CS_WCDMA_Codec_Preference = "AMR_WB;AMR"
+CS_WCDMA_AMR_WB_DefaultMode_kbps = 23.85
+
+# Fallback when IMS not attached
+CS_Fallback_Policy        = 1        ; 0=OFF, 1=ON
+CS_VideoTelephony_Disable = 1        ; CS domain = voice-only
+
+# Guard timers (ms)
+CS_CodecSwitch_EvalMs     = 1500
+CS_CodecSwitch_HysMs      = 2000
+# ----------------------------------------------------------------------
+

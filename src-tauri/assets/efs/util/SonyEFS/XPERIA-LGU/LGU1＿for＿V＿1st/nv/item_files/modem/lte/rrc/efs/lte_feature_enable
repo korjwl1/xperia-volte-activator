@@ -1,0 +1,132 @@
+# lte_feature_enable (cleaned)
+# NON_CA_BAND_SUPPORT 제거됨
+
+✔ TM8 TDD
+✔ OTDOA_RSTD_TDD for inter-frequency
+✔ OTDOA_RSTD_FDD for inter-frequency
+✔ REQ_FREQ_BAND_SUPPORT
+✔ UL 64-QAM
+✔ FREQ_BAND_PRIORITY_ADJUST
+✔ DL 256-QAM
+✔ 3xDLCA
+✔ ULCA
+✔ MULTI_CLUSTER_PUSCH
+✔ MAX_RX_NON_CA
+✔ MAX_RX_CA
+✔ 4L_MIMO_TM3_TM4_NON_CA
+✔ 4L_MIMO_NON_CA
+✔ BW validation for all CA combos defined in spec
+✔ 4xDLCA
+✔ Inter-band ULCA
+✔ 4x4 MIMO in CA for TM9
+✔ FDD_TDD_CA in TuneAway Modes
+✔ 4x4 MIMO in CA for TM3/TM4
+✔ HoRXD with CA in TuneAway Modes
+✔ AMPR modication
+✔ Inter-freq gapless meas in TDD
+✔ UTRA_PROXIMITY_IND
+✔ EUTRA_PROXIMITY_IND
+✔ SSF9
+✔ PMI_RI_RPT_TDD
+✔ PMI_RI_RPT_FDD
+✔ UL 64-QAM R8
+✔ Inter-freq gapless meas in DR mode
+✔ DS_CRS_MEASUREMENTS
+✔ DS_CSI_RS_MEASUREMENTS
+✔ 4x4 MIMO support in MSIM
+✔ ETTI_BUNDLING_FDD
+✔ Inter-freq gapless meas in FDD
+✔ alternativeTBS-Indices-r12
+✔ Non-Contiguous intra-band ULCA
+✔ 5xDLCA
+✔ Inter-band ULCA in SRLTE mode
+✔ SCell LAA (B46)
+✔ 3xDLCA with at least 1 TDD band
+✔ 4xDLCA with at least 1 TDD band
+✔ LTE CA FDD+TDD
+✔ FDD TM9
+✔ maxLayersMIMO-Indication-r12 dependent on MIMO
+✔ Inter-band ULCA TDD ULCA duplex PCELL
+✔ Inter-band ULCA FDD ULCA duplex PCELL
+✔ 5xDLCA in MSIM/SRLTE modes
+✔ 4xDLCA in MSIM/SRLTE modes
+✔ alternativeTBS-Index-r14
+✔ UL 256-QAM for non-CA bands
+✔ UL 256-QAM for CA bands
+✔ UL 256-QAM for MSIM/CRAT modes
+✔ Force to advertise the MAX UE DL Category
+✔ Cross-carrier Dynamic 4RX feature
+✔ 3xULCA
+✔ If feature control from PM is to be obeyed
+✔ measurementEnhancements-r14
+✔ demodulationEnhancements-r14
+✔ prach-Enhancements-r14
+✔ Reduced Format Cap enquiry/combo advertisement
+✔ Skip fallback Cap enquiry/combo advertisement
+✔ Max DL/UL CC Cap enquiry/combo advertisement
+✔ Reduced intra-band none contiguous combo advertisement
+✔ Diff fallback Cap enquiry/combo advertisement
+✔ PUCCH format 4
+✔ PUCCH format 5
+✔ DAI-based codebook size determination
+✔ Codebook determination based on the number of configured CCs
+✔ Update the maximum number of CSI processes across CCs
+✔ Aperiodic CSI reporting with 3 bits of the CSI request field size
+✔ uci-PUSCH-Ext-r13 and spatialBundling-HARQ-ACK-r13
+✔ pdcp-SN-Extension-18bits-r13
+✔ extendedRLC-SN-SO-Field-r13
+✔ srs-Enhancements-r13
+✔ srs-EnhancementsTDD-r13
+✔ dmrs-Enhancements-r13
+✔ channelMeasRestriction-r13
+✔ beamformed Class B per band per combo
+✔ Short SPS interval
+✔ skipUplinkSPS-r14
+✔ skipUplinkDynamic-r14
+✔ RAN assisted rate control
+✔ UL only ROHC
+✔ Advertise XDD fgi IEs even if TDD and FDD FGIs are the same
+✔ R12 INCMON
+✔ R13 extended meas object
+✔ SCell LAA for MSIM
+✔ SCell LAA for SRLTE
+✔ Advertise XDD diff FGIs in XDD ADD IEs
+✔ Logged measurement
+✔ rach-Report-r9
+✔ Advertise measurement report for TDD UTRAN related FGIs
+✔ R14 delay budget
+✔ OTDOA_RSTD_TDD for intra-frequency
+✔ OTDOA_RSTD_FDD for intra-frequency
+✔ Advertise Tx antenna selection per CA combo
+✔ tdd-SpecialSubframe-r14
+✔ tdd-tti-bundling-r14
+✔ dmrs-LessUpPTS-r14
+✔ crs-LessDwPTS-r14
+✔ Extended Poll byte
+✔ DL 1k-QAM
+✔ 6-bit MCS table
+✔ LAA band supports 4L
+✔ Extended DRB number
+✔ Extended LC ID
+✔ PUSCH enhancement mode
+✔ Aperiodic CSI reporting mode 1-0 and mode 1-1
+✔ FDD+TDD in MSIM SRLTE mode
+✔ FDD+TDD or TDD+FDD CA combos with any UL capable TDD band
+✔ 4xDLCA combos with ALL TDD bands
+✔ 5xDLCA combos with ALL TDD bands
+✔ L2NR CGI
+✔ Standard dictionary for UDC R15
+✔ Operator based dictionary for UDC R15
+✔ L2NR CGI in ENDC
+✔ L2L CGI in ENDC
+✔ L2WG CGI in ENDC
+✔ Overheating assistance for SCG
+✔ Generic UDC R15
+✔ interRAT-enhancementNR-r16
+✔ UL 256-QAM in ENDC
+✔ SHORT MEAS gap
+✔ SHORT MEAS gap in NR only
+✔ AMPR for NS_04
+✔ 2L since SRS blank impact
+✔ UL DCCH segmentation for Cap Info
+✔ flexibleUM-AM-Combinations-r15

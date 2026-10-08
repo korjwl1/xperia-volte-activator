@@ -11,6 +11,8 @@
         document.documentElement.classList.add("dark");
       }
     </script>
+    <!-- 스크립트가 뜨기 전 빈 창이 흰색으로 번쩍이지 않게 스플래시 배경색을 먼저 칠한다. 앱 화면은 자체 배경으로 덮는다 -->
+    <style>html { background: #080b12; }</style>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

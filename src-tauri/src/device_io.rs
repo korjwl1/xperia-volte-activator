@@ -160,6 +160,24 @@ pub fn shell(dev: &mut dyn ADBDeviceExt, command: &str) -> Result<String, String
     String::from_utf8(out.stdout).map_err(|e| format!("출력 해석 실패: {e}"))
 }
 
+/// 재부팅 직후 ADB는 붙었어도 Android 서비스가 덜 떴을 수 있다 — 부팅 완료와 패키지 관리자 응답을 기다린다.
+/// 실기기(XQ-DQ44, 2026-10-08): 재연결 직후 앱 설치가 `PackageManagerInternal.freeStorage` NullPointerException으로 실패했다.
+pub fn wait_boot_completed(dev: &mut dyn ADBDeviceExt, timeout: std::time::Duration) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let booted = shell(dev, "getprop sys.boot_completed").map(|v| v.trim() == "1").unwrap_or(false);
+        if booted && shell(dev, "pm path android").map(|v| v.contains("package:")).unwrap_or(false) {
+            // 패키지 관리자가 응답해도 저장소 서비스가 바로 뒤따라 뜬다 — 잠깐 더 둔다
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("폰 부팅이 끝나지 않았습니다 — 폰 화면이 다 켜진 뒤 다시 시도해 주세요".into());
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+}
+
 /// 기기 변경 명령 — 판정 규칙은 `shell`과 같다. 호출부에서 쓰기 의도를 드러내기 위한 이름.
 pub fn shell_write(dev: &mut dyn ADBDeviceExt, command: &str) -> Result<String, String> {
     shell(dev, command)

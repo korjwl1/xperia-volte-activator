@@ -38,9 +38,9 @@ test("set dependencies are automatic, cannot be deselected under dependents and 
   const magisk = domain.moduleSetPackages(s, "magisk"), ksu = domain.moduleSetPackages(s, "kernelsu-family");
   assert.equal(ksu[0], "overlayfs"); assert.ok(!magisk.includes("overlayfs"));
   assert.ok(magisk.indexOf("tricky-store") < magisk.indexOf("tricky-addon"));
-  assert.ok(!domain.moduleSetPackages({ ...s, integrity: "integrity-box" }, "magisk").includes("play-integrity-fork"));
-  assert.throws(() => domain.moduleSetPackages({ ...s, extras: ["shamiko"] }, "magisk"));
-  assert.throws(() => domain.moduleSetPackages({ ...s, zygisk: "zygisk-next", extras: ["shamiko"] }, "kernelsu-family"));
+  // 세트 안 구성은 고정 프리셋 — 예전 기록의 자유 선택값은 무시한다(2026-10-08 사용자 결정)
+  assert.deepEqual(magisk, ["neozygisk", "bootloop-protector", "play-integrity-fork", "tricky-store", "tricky-addon", "hma"]);
+  assert.deepEqual(domain.moduleSetPackages({ ...s, zygisk: "zygisk-next", integrity: "integrity-box", extras: ["shamiko"] }, "magisk"), magisk);
 });
 test("automatic modules follow VoLTE configuration, disappear for unroot/relock/unlock and never enter update/manual plans", () => {
   const opts = { mode: "automatic", unroot: false, relock: false, restore: false, modules: selection() };
@@ -56,14 +56,15 @@ test("automatic modules follow VoLTE configuration, disappear for unroot/relock/
 });
 test("set installation verifies every reboot and executes phone-setting gates", async () => {
   const f = fake("kernelsu-family"); const result = await domain.installModuleSets(f.port, "sample", selection(), f.hooks);
-  assert.equal(result.rebootRequired, false); assert.equal(f.events[0], "prepare:overlayfs");
+  assert.equal(result.rebootRequired, false); assert.match(f.events[0], /^instruction:ReSukiSU/); assert.equal(f.events[1], "prepare:overlayfs");
   for (const [index, event] of f.events.entries()) if (event.startsWith("install:")) assert.deepEqual(f.events.slice(index + 1, index + 3), ["reboot", "verify"]);
-  assert.equal(f.events.filter(event => event.startsWith("instruction:")).length, 3);
+  // 매니저 설정(설치 전) + PIF·TrickyAddon·HMA 설정
+  assert.equal(f.events.filter(event => event.startsWith("instruction:")).length, 4);
   assert.ok(f.events.find(event => event.includes("카페 JSON")));
 });
 test("failed, ambiguous or cancelled module work never installs the next dependency", async () => {
   const failed = fake("magisk", "neozygisk"); await assert.rejects(domain.installModuleSets(failed.port, "sample", selection(), failed.hooks), /failure/);
-  assert.deepEqual(failed.events, ["prepare:neozygisk", "install:neozygisk"]);
+  assert.deepEqual(failed.events.filter(event => !event.startsWith("instruction:")), ["prepare:neozygisk", "install:neozygisk"]);
   const cancelled = fake(); let stopped = false;
   cancelled.hooks.instruction = async () => { stopped = true; }; cancelled.hooks.check = () => { if (stopped) throw new Error("cancelled"); };
   await assert.rejects(domain.installModuleSets(cancelled.port, "sample", selection(), cancelled.hooks), /cancelled/);
@@ -71,10 +72,10 @@ test("failed, ambiguous or cancelled module work never installs the next depende
   const uncertain = fake(); uncertain.hooks.rebooted = async () => ({ ...uncertain.inventory, uncertain: true });
   await assert.rejects(domain.installModuleSets(uncertain.port, "sample", selection(), uncertain.hooks)); assert.ok(!uncertain.events.includes("prepare:bootloop-protector"));
 });
-test("resume uses installation receipts but still requires configuration acknowledgement", async () => {
+test("resume uses installation receipts but still shows manager and phone-setting instructions", async () => {
   const f = fake(); await domain.installModuleSets(f.port, "sample", selection(), f.hooks); f.events.length = 0;
   await domain.installModuleSets(f.port, "sample", selection(), f.hooks);
-  assert.ok(!f.events.some(event => event.startsWith("install:"))); assert.equal(f.events.filter(event => event.startsWith("instruction:")).length, 3);
+  assert.ok(!f.events.some(event => event.startsWith("install:"))); assert.equal(f.events.filter(event => event.startsWith("instruction:")).length, 4);
   f.inventory.installed.neozygisk = "another-module";
   f.events.length = 0; await domain.installModuleSets(f.port, "sample", selection(), f.hooks); assert.ok(f.events.includes("install:neozygisk"));
 });
@@ -101,7 +102,7 @@ test("module journals retain set dependencies and reject incompatible post-proce
   const plan = buildPlan(device(), config(), opts, false);
   const journal = { version: 1, model: "XQ-DQ44", productName: "Xperia", serialMasked: "sa****", startedAt: "2026-10-08", updatedAt: "2026-10-08", config: config(), opts, backupPath: "", firmwareDir: "", firmware: null, backupItems: [], cursor: 0, steps: plan, runSteps: plan.map(step => ({ id: step.id, title: step.title, status: "pending", progress: 0, manualDone: 0, logs: [] })), stop: null };
   assert.deepEqual(decodeJournal(JSON.stringify(journal)).opts.modules.sets, ["foundation", "evasion"]);
-  for (const change of [{ modules: { ...selection(), sets: ["evasion"] } }, { relock: true }, { unroot: true }, { modules: domain.emptyModuleSelection() }, { modules: { ...selection(), settingsAck: false } }]) {
+  for (const change of [{ modules: { ...selection(), sets: ["evasion"] } }, { relock: true }, { unroot: true }, { modules: domain.emptyModuleSelection() }]) {
     assert.equal(decodeJournal(JSON.stringify({ ...journal, opts: { ...opts, ...change } })), null);
   }
 });

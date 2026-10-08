@@ -4,7 +4,7 @@ import path from "node:path";
 import { after, before, beforeEach, test } from "node:test";
 import { createServer } from "vite";
 
-const offFlags = { backup: false, restore: false, fastboot: false, relock: false, root: false, rootTools: false, verify: false, efs: false };
+const offFlags = { backup: false, restore: false, fastboot: false, relock: false, root: false, rootTools: false, volteRollback: false, verify: false, efs: false };
 let server, Wizard, itemProgress, transferStatusText, api, flags, originalApi, originalFlags, createTransport, AsyncQueue, decodeJournal, buildPlan, stepHazard, firmwareUpdateProblems;
 before(async () => {
   server = await createServer({ server: { middlewareMode: true, watch: null, hmr: false, ws: false }, appType: "custom" });
@@ -841,7 +841,7 @@ test("explicit standalone backup has one live step and never enables write engin
   const w=wizard();await w.startBackupSession();w.ensureOptions(false);
   assert.equal(w.view,"step2");assert.equal(w.hasAnyTask,true);
   assert.deepEqual(w.plan.map(s=>s.id),["backup"]);
-  assert.deepEqual(w.executionFlags,{backup:true,restore:false,fastboot:false,relock:false,root:false,rootTools:false,verify:false,efs:false});
+  assert.deepEqual(w.executionFlags,{backup:true,restore:false,fastboot:false,relock:false,root:false,rootTools:false,volteRollback:false,verify:false,efs:false});
   assert.equal(w.opts.restore,false);assert.equal(w.backupLive,true);
   w.startSession();assert.equal(w.opts.backupOnly,false);
 });

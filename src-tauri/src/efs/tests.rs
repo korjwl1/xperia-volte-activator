@@ -662,10 +662,19 @@ fn device_errors_put_status_counts_and_malformed_responses_fail_closed() {
             .status,
         Some(13)
     );
+    // 스냅샷 stat 모드(아이템 종류 비트 포함)로 되돌릴 때도 PUT·응답 대조는 권한 비트만 쓴다
+    let mut ok = wire::efs(38);
+    ok.extend(0o777u16.to_le_bytes());
+    ok.extend(0u16.to_le_bytes());
+    ok.extend(1u16.to_le_bytes());
+    let mut d = replay(vec![stat.clone(), mkdir.clone(), ok, wire::words(48, &[0])]);
+    let put_err = d.write_file("/nv/item", 0o160777, 15, &[1]).err();
+    assert!(put_err.as_ref().map_or(true, |e| e.code != "malformed"), "{put_err:?}");
+    // 쓴 바이트 수가 0이면(XQ-DQ44 실측) 리드백에 맡기고, 0이 아닌데 길이와 다르면 실패
     let mut put = wire::efs(38);
     put.extend(777u16.to_le_bytes());
     put.extend(0u16.to_le_bytes());
-    put.extend(0u16.to_le_bytes());
+    put.extend(5u16.to_le_bytes());
     assert_eq!(
         replay(vec![stat, mkdir, put])
             .write_file("/nv/item", 777, 15, &[1])

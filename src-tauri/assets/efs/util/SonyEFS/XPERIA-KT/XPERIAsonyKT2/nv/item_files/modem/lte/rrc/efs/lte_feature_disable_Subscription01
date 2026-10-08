@@ -1,0 +1,2 @@
+# lte_feature_disable (cleaned)
+# 성능 핵심 기능 비활성화 항목 전부 제거 → 기기 기본값(MCFG/PM)에 따름

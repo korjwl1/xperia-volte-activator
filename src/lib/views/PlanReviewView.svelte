@@ -4,7 +4,7 @@
   import OptionCard from "$lib/components/OptionCard.svelte";
   import OptionCategory from "$lib/components/OptionCategory.svelte";
   import { Checkbox } from "$lib/components/ui/checkbox";
-  import { TriangleAlert, FolderOpen, LoaderCircle } from "@lucide/svelte/icons";
+  import { TriangleAlert, FolderOpen, LoaderCircle, ArrowLeft } from "@lucide/svelte/icons";
   import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "$lib/components/ui/tooltip";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { api, inDesktop as desktopRuntime } from "$lib/api";
@@ -13,8 +13,9 @@
   import { hasLiveActions, liveStepEnabled } from "$lib/domain/execution";
   import { REAL_STEPS } from "$lib/data/runMode";
   import { patchProcedureProblem } from "$lib/data/devices";
-  import EfsSetup from "$lib/components/EfsSetup.svelte";
   import ModuleSetSelector from "$lib/components/ModuleSetSelector.svelte";
+  import RootEngineSelect from "$lib/components/RootEngineSelect.svelte";
+  import RestoreSourcePanel from "$lib/components/RestoreSourcePanel.svelte";
   import { selectedModuleSets } from "$lib/domain/moduleSets";
 
   // 선택 상태·실측 결과는 스토어에 보관 — 이전/다음으로 오가도 유지 (기기가 바뀔 때만 초기화)
@@ -24,17 +25,19 @@
   let activeTab = $state<"backup" | "rooting">("backup");
   let showPathAlert = $state(false);
   let pathAlertTimer: ReturnType<typeof setTimeout> | undefined;
-  let efsNeedsSave = $state(true);
   const procedureProblem = $derived(patchProcedureProblem(wizard.device?.model ?? "", wizard.volteConfig.sims.flatMap(s => s.carrier ? [s.carrier] : [])));
-  const efsBlocked = $derived(!wizard.opts.backupOnly && REAL_STEPS.efs && wizard.hasPatchTarget && (efsNeedsSave || procedureProblem !== null));
+  const efsBlocked = $derived(!wizard.opts.backupOnly && REAL_STEPS.efs && wizard.hasPatchTarget && procedureProblem !== null);
   $effect(() => () => clearTimeout(pathAlertTimer));
 
   const bootloaderKnown = $derived(wizard.device?.bootloader === "locked" || wizard.device?.bootloader === "unlocked");
   const restoring = $derived(wizard.mode === "manual" && wizard.manualTask === "restore");
-  // 언루팅은 초기화가 없어 백업을 고르지 않는다(사용자 결정 2026-10-08) — 백업 선택 화면 자체를 보이지 않는다
-  const noBackup = $derived(wizard.mode === "manual" && wizard.manualTask === "unroot");
+  // 수동 모드는 작업마다 독립 — 백업·복원 작업 외에는 백업을 고르지 않는다(사용자 결정 2026-10-08)
+  const noBackup = $derived(wizard.mode === "manual" && wizard.manualTask !== "backup" && wizard.manualTask !== "restore");
   const extraOptions = $derived(wizard.mode !== "manual" && wizard.mode !== "update" && !wizard.opts.backupOnly);
-  const taskBlocked = $derived(wizard.mode === "update" ? "전체 펌웨어의 Newflasher 기록 연결·기기별 검증을 준비 중입니다" : restoring && (!wizard.backupDir || wizard.restoreSourceState !== "done") ? "복구할 원본 백업 폴더를 먼저 검증하세요" : selectedModuleSets(wizard.opts.modules).length && !wizard.moduleSelection.settingsAck ? "선택한 모듈 세트의 매니저 설정을 확인하세요" : selectedModuleSets(wizard.opts.modules).length && !REAL_STEPS.rootTools ? "루팅 모듈 설치 실전 기능이 비활성화되어 있습니다" : null);
+  // 계획에 루팅이 있으면 엔진(Magisk/ReSukiSU)을 고른다
+  const rooting = $derived(wizard.plan.some((s) => s.id === "root"));
+  // VoLTE 적용 위치는 앱이 정한다(포트 자동·프리셋 동봉) — 막히는 경우는 기종 절차 문제뿐이고 그 사유를 하단에 보인다
+  const taskBlocked = $derived(efsBlocked ? procedureProblem : rooting && wizard.opts.rootEngine === "resukisu" && !wizard.opts.resukisuTag ? "ReSukiSU 버전을 선택하세요" : wizard.mode === "update" ? "전체 펌웨어의 Newflasher 기록 연결·기기별 검증을 준비 중입니다" : restoring && (!wizard.backupDir || wizard.restoreSourceState !== "done") ? "복원할 원본 백업 폴더를 먼저 검증하세요" : selectedModuleSets(wizard.opts.modules).length && !REAL_STEPS.rootTools ? "루팅 모듈 설치 실전 기능이 비활성화되어 있습니다" : null);
   const sizesLoading = $derived(wizard.sizesState === "loading");
 
   // ── 항목별 용량: 실측(storage_sizes) 매핑, 실측 불가 항목은 고정 추정치 ──
@@ -107,10 +110,6 @@
     const path = await api.pickFolder();
     if (path) wizard.backupPath = path;
   }
-  async function pickRestoreFolder() {
-    const path = await api.pickFolder();
-    if (path) await wizard.loadRestoreSource(path);
-  }
 
   const backupCategories = [
     { id: "settings", label: "설정", groupIds: ["settings"] },
@@ -161,7 +160,7 @@
   const riskySteps = $derived(planSteps.filter((s) => s.hazard !== null));
   const hasWipe = $derived(planSteps.some((s) => s.wipe));
   // 백업 미선택 이중 확인은 초기화가 있을 때만
-  const canLaunch = $derived(!efsBlocked && hazardAck && (anyBackupChecked || !hasWipe || noBackupAck));
+  const canLaunch = $derived(!efsBlocked && hazardAck && (anyBackupChecked || !hasWipe || noBackupAck || noBackup));
 
   function confirm() {
     if (taskBlocked || efsBlocked || planSteps.length === 0 || wizard.journalBlocked || wizard.pendingJournal) return;
@@ -189,45 +188,50 @@
     confirmOpen = false;
     wizard.launch();
   }
+  // 초기화(언락·리락)가 있는 계획인지 — 없으면 "복원 자동 실행"은 아무 일도 하지 않으므로 사유와 함께 비활성
+  const wipesInPlan = $derived(wizard.plan.some((s) => s.wipe));
+  // 수동 단일 작업에서 고를 것(루팅 엔진)이 없으면 왼쪽 영역을 숨긴다
+  const leftEmpty = $derived(noBackup && !rooting);
+  // 리락은 실기기 검증 전이면 선택지는 보이되 고를 수 없다(사용자 원칙 2026-10-08: 기능은 숨기지 않고 사유를 보인다)
+  const relockLive = $derived(REAL_STEPS.fastboot && REAL_STEPS.relock);
+  const moduleReason = $derived(wizard.moduleSetProblem ?? (REAL_STEPS.rootTools ? null : "모듈 세트 설치는 실기기 검증 전이라 아직 사용할 수 없습니다"));
+  // 백업 저장 위치·용량 문제 — 버튼을 누른 뒤 잠깐 보이는 알림 대신 [실행]을 막고 사유를 계속 보인다
+  const saveBlocked = $derived(restoring || noBackup || !anyBackupChecked ? null
+    : !wizard.backupPath.trim() ? "백업 저장 위치를 지정하세요"
+    : diskWarning ? "백업 저장 위치의 여유 공간이 부족합니다"
+    : sizesLoading || diskUnknown ? "백업 용량·여유 공간을 계산하는 중입니다"
+    : null);
 </script>
 
 <div class="flex-1 min-h-0 flex flex-col">
   <div class="flex-1 min-h-0 flex gap-4 p-4 lg:p-6">
-    <!-- 좌: 옵션 (더 넓게) -->
-    <div class="flex-[7] min-w-0 flex flex-col gap-4">
-      {#if !noBackup}<div class="shrink-0 flex gap-1 rounded-lg bg-muted p-1">
+    <!-- 좌: 옵션 (더 넓게) — 고를 것이 없는 수동 단일 작업이면 숨기고 실행 순서를 넓힌다 -->
+    {#if !leftEmpty}<div class="flex-[7] min-w-0 flex flex-col gap-4">
+      {#if !noBackup && !restoring && extraOptions}<div class="shrink-0 flex gap-1 rounded-lg bg-muted p-1">
         <button
           class="flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors
             {activeTab === 'backup' ? 'bg-background elev-1 text-foreground' : 'text-muted-foreground hover:text-foreground'}"
           onclick={() => (activeTab = "backup")}
         >
-          {restoring ? "복구할 항목" : "백업 선택"}
+          백업 선택
         </button>
         {#if extraOptions}<button
           class="flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors
             {activeTab === 'rooting' ? 'bg-background elev-1 text-foreground' : 'text-muted-foreground hover:text-foreground'}"
           onclick={() => (activeTab = "rooting")}
         >
-          루팅
+          루팅 · 후처리
         </button>{/if}
       </div>{/if}
 
       <div class="flex-1 min-h-0 overflow-y-auto">
-        {#if REAL_STEPS.efs && patching}<EfsSetup bind:dirty={efsNeedsSave} />{/if}
         {#if noBackup}
-          <div class="rounded-xl bg-muted p-4 text-sm leading-relaxed">
-            <p class="font-semibold">백업 없이 진행합니다</p>
-            <p class="mt-1 text-muted-foreground">언루팅은 순정 부트 이미지만 다시 기록하므로 폰 데이터가 초기화되지 않습니다. 오른쪽 실행 순서를 확인하고 [실행]을 누르세요.</p>
-          </div>
+          {#if rooting}<div class="rounded-xl border p-4"><RootEngineSelect /></div>{/if}
+        {:else if restoring}
+          <!-- 복원은 폰이 아니라 고른 백업 폴더가 기준 — 폴더 선택 → 인식한 항목 선택 -->
+          <RestoreSourcePanel />
         {:else if activeTab === "backup"}
-          {#if restoring}
-            <div class="sticky top-0 z-10 mb-3 rounded-xl bg-info-container text-info p-3 space-y-2 text-xs">
-              <p>복구할 원본 백업 폴더를 선택하세요. 현재 기기와 원본 기기·파일 해시를 대조합니다.</p>
-              <div class="flex items-center gap-2"><span class="flex-1 min-w-0 break-all">{wizard.backupDir || "원본 백업을 선택하지 않았습니다"}</span><Button size="sm" variant="outline" disabled={wizard.restoreSourceState === "loading"} onclick={pickRestoreFolder}>백업 폴더 선택</Button></div>
-              {#if wizard.restoreSourceState === "loading"}<p>원본 백업 검사 중…</p>{/if}
-              {#if wizard.restoreSourceError}<p role="alert" class="text-destructive">{wizard.restoreSourceError}</p>{/if}
-            </div>
-          {:else if anyBackupChecked}
+          {#if anyBackupChecked}
             <div class="sticky top-0 z-10 mb-3 bg-background/95 backdrop-blur border-b pb-3 space-y-2">
               <div class="flex items-center gap-2.5">
                 <FolderOpen size={16} class="text-primary shrink-0" />
@@ -293,9 +297,10 @@
 
           <div class="space-y-1.5">
             <OptionCard
-              checked={wizard.opts.restore}
-              label="복구 자동 실행"
-              desc="모든 작업 완료 후 백업한 데이터를 자동으로 복원합니다"
+              checked={wipesInPlan && wizard.opts.restore}
+              disabled={!wipesInPlan}
+              label="복원 자동 실행"
+              desc={wipesInPlan ? "모든 작업 완료 후 백업한 데이터를 자동으로 복원합니다" : "이번 작업에는 초기화가 없어 복원할 필요가 없습니다"}
               onToggle={(v) => (wizard.opts.restore = v)}
             />
           </div>{/if}
@@ -336,7 +341,8 @@
               <OptionCard
                 checked={wizard.opts.relock}
                 label="부트로더 리락"
-                desc="기기가 다시 초기화됩니다"
+                desc={relockLive ? "기기가 다시 초기화됩니다" : "실기기 검증 전이라 아직 사용할 수 없습니다"}
+                disabled={!relockLive}
                 onToggle={(v) => (wizard.opts.relock = v)}
                 badge={wizard.opts.relock ? "초기화" : undefined}
                 badgeVariant="destructive"
@@ -355,15 +361,17 @@
           {#if wizard.mode === "automatic"}
             <div class="mt-5 border-t pt-4 space-y-3">
               <h2 class="text-sm font-semibold">루팅 유지 시</h2>
-              <ModuleSetSelector selection={wizard.moduleSelection} onChange={selection => wizard.setModuleSelection(selection)} disabled={!!wizard.moduleSetProblem} reason={wizard.moduleSetProblem} />
+              <!-- 루팅 엔진은 루팅을 새로 하는 계획에서만, 엔진 선택 기능이 켜졌을 때만 보인다(꺼져 있으면 Magisk) -->
+              {#if rooting}<RootEngineSelect />{/if}
+              <ModuleSetSelector selection={wizard.moduleSelection} onChange={selection => wizard.setModuleSelection(selection)} disabled={!!moduleReason} reason={moduleReason} engine={rooting ? (wizard.opts.rootEngine ?? "magisk") : wizard.device?.rooted === true ? "unknown" : "magisk"} />
             </div>
           {/if}
         {/if}
       </div>
-    </div>
+    </div>{/if}
 
     <!-- 우: 실행 순서 (좁게) -->
-    <div class="flex-[3] min-w-0 max-w-[280px] rounded-xl border bg-muted/30 flex flex-col overflow-hidden">
+    <div class="min-w-0 rounded-xl border bg-muted/30 flex flex-col overflow-hidden {leftEmpty ? 'flex-1 max-w-3xl mx-auto' : 'flex-[3] max-w-[280px]'}">
       <div class="shrink-0 px-4 py-3 border-b">
         <div class="text-sm font-semibold">실행 순서</div>
         <div class="text-[11px] text-muted-foreground">{planSteps.length}단계</div>
@@ -439,12 +447,12 @@
   {/if}
 
   <footer class="h-14 shrink-0 border-t bg-muted/40 flex items-center justify-between gap-4 px-6">
-    <Button variant="ghost" size="sm" onclick={() => (wizard.view = wizard.optionsPrevious)}>← 이전</Button>
-    {#if taskBlocked}<span role="status" class="min-w-0 flex-1 text-right text-[11px] text-warning">{taskBlocked}</span>
+    <Button variant="ghost" size="sm" onclick={() => (wizard.view = wizard.optionsPrevious)}><ArrowLeft size={14} />이전</Button>
+    {#if taskBlocked || saveBlocked}<span role="status" class="min-w-0 flex-1 text-right text-[11px] text-warning">{taskBlocked ?? saveBlocked}</span>
     {:else if notLiveSteps.length}
       <span class="min-w-0 flex-1 truncate text-right text-[11px] text-warning">이 빌드에서 아직 실제로 실행할 수 없는 단계가 있습니다: {notLiveSteps.join(", ")} — [← 이전]에서 작업을 바꿔 주세요</span>
     {/if}
-    <Button size="sm" onclick={confirm} disabled={!!taskBlocked || efsBlocked || planSteps.length === 0 || notLiveSteps.length > 0 || wizard.journalBlocked || !!wizard.pendingJournal}>실행</Button>
+    <Button size="sm" onclick={confirm} disabled={!!taskBlocked || !!saveBlocked || efsBlocked || planSteps.length === 0 || notLiveSteps.length > 0 || wizard.journalBlocked || !!wizard.pendingJournal}>실행</Button>
   </footer>
 </div>
 
@@ -477,9 +485,9 @@
         <Checkbox checked={hazardAck} onCheckedChange={(v: boolean | "indeterminate") => (hazardAck = v === true)} />
         <span class="text-[13px] font-medium">위 단계들의 모든 위험성을 확인했으며, 책임은 사용자에게 있음에 동의합니다</span>
       </label>
-      {#if hasWipe && !anyBackupChecked}
+      {#if hasWipe && !anyBackupChecked && !noBackup}
         <div class="rounded-lg bg-danger-container/60 px-4 py-2 text-xs text-destructive">
-          백업 항목이 선택되지 않았습니다. 초기화된 데이터는 복구할 수 없습니다.
+          백업 항목이 선택되지 않았습니다. 초기화된 데이터는 복원할 수 없습니다.
         </div>
         <label class="flex items-center gap-2.5 rounded-lg border px-4 py-2.5 cursor-pointer {noBackupAck ? 'border-destructive/40 bg-danger-container/40' : 'border-border'}">
           <Checkbox checked={noBackupAck} onCheckedChange={(v: boolean | "indeterminate") => (noBackupAck = v === true)} />

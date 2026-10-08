@@ -406,6 +406,36 @@ pub(crate) async fn backup_manifest_check_with_events(
     .await
 }
 
+/// 복구 화면의 폴더 선택용 빠른 읽기 — 매니페스트만 읽어 항목 목록·원본 기기를 돌려준다.
+/// 파일 전수 해시 검사는 하지 않는다(수백 GB면 수십 분). 전수 검사는 복구 실행 직전 backup_manifest_check가 한다.
+#[tauri::command]
+pub async fn backup_manifest_read(dir: String) -> Result<Option<BackupSummary>, String> {
+    let root = PathBuf::from(&dir);
+    if !root.join("manifest.json").is_file() {
+        return Ok(None);
+    }
+    crate::tasks::blocking("백업 목록 읽기", move || {
+        let manifest = model::load_manifest(&root)?;
+        let mut summary = BackupSummary::from(&manifest);
+        summary.dir = root.to_string_lossy().into_owned();
+        // 복구할 수 있는 항목은 데이터가 있는 모든 항목이다 — 나중 백업에서 선택을 빼(excludedItems) 완결 판정에서
+        // 빠진 문자·통화 기록도 이전에 받은 파일이 있으면 보여 준다(문자·통화는 복원 단계가 파일을 따로 검사한다)
+        summary.items = manifest
+            .items
+            .iter()
+            .filter(|i| i.status != model::ItemStatus::Skipped)
+            .map(|i| model::ItemBrief {
+                id: i.id.clone(),
+                status: model::status_str(i.status),
+                files: i.files,
+                bytes: i.bytes,
+            })
+            .collect();
+        Ok(Some(summary))
+    })
+    .await
+}
+
 /// PC-only repair of an already-finished backup; does not contact the phone.
 #[cfg(feature = "dev-cli")]
 pub(crate) async fn backup_clean_unreadable_apps(dir: String) -> Result<BackupSummary, String> {

@@ -14,6 +14,11 @@ export default defineConfig(() => ({
   plugins: [tailwindcss(), sveltekit()],
 
   clearScreen: false,
+  // Tauri 모듈은 facade에서 동적 import한다. 개발 중 처음 import될 때 Vite가 의존성을 다시 묶으면 이미 열린 창의
+  // 모듈 해시가 낡아 "Failed to fetch dynamically imported module"로 폴더 선택 창 등이 안 뜬다 — 시작할 때 미리 묶는다
+  optimizeDeps: {
+    include: ["@tauri-apps/api/core", "@tauri-apps/api/event", "@tauri-apps/api/window", "@tauri-apps/plugin-dialog", "@tauri-apps/plugin-notification"],
+  },
   server: {
     port: 1420,
     strictPort: true,
