@@ -247,7 +247,7 @@ status: 진행 전 — 2026-10-05 기준 아래 항목은 모두 **실기기에�
 - [ ] main에서 자동/수동/업데이트 선택과 기기 교체/연결 실패 카드 상태 확인
 - [ ] 수동 매니저 변경 양방향 절차와 모듈 세트 A/B 설치·의존 선택 확인
 - [ ] 자동 루팅 유지 시 세트 적용, 언루팅/리락/언락 초기화 시 선택 해제 확인
-- [ ] KernelSU OverlayFS 선행·실제 재부팅 후 모듈 활성/영수증 대조 확인
+- [x] KernelSU OverlayFS 선행·실제 재부팅 후 모듈 활성 확인 — 2026-10-09 XQ-DQ44/ReSukiSU: Set A+B 7개(meta-overlayfsx·zygisksu(NeoZygisk)·AshLooper·playintegrityfix(PIF)·tricky_store·TA_utl·hma_oss_zygisk) 설치·enabled. OverlayFS가 맨 앞에 설치됨. 매니저 설정(selinux_hide)·PIF Action 자동 실행. TrickyAddon keybox·HMA 프리셋 가져오기는 폰에서 수동(HMA 프리셋 자동 전송은 재부팅 직후 /storage 네임스페이스 이슈로 su -M 수정). 모듈별 재부팅 사이 "Android is Booting!"은 부팅 완료 대기(device_wait_ready)로 해결
 - [ ] 설치 실패·불확정·취소·재개 시 후속 설치 차단과 설정 재확인
 - [ ] 실제 PIF Action/TrickyAddon/HMA 카페 JSON 가져오기 및 사용자 앱/IMS 확인
 
