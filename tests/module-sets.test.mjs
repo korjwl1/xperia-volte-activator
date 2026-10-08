@@ -66,7 +66,7 @@ test("set installation verifies every reboot and executes phone-setting gates", 
   assert.ok(f.events.includes("setup") && f.events.some(event => event.startsWith("action:")));
   assert.equal(f.events.filter(event => event.startsWith("instruction:")).length, 2);
   // HMA는 카페 프리셋을 폰 Download에 넣은 뒤 가져오기만 안내한다
-  assert.ok(f.events.indexOf("preset") >= 0 && f.events.indexOf("preset") < f.events.findIndex(event => event.includes("카페 HMA 프리셋")));
+  assert.ok(f.events.indexOf("preset") >= 0 && f.events.indexOf("preset") < f.events.findIndex(event => event.includes("HMA")));
 });
 test("failed, ambiguous or cancelled module work never installs the next dependency", async () => {
   const failed = fake("magisk", "neozygisk"); await assert.rejects(domain.installModuleSets(failed.port, "sample", selection(), failed.hooks), /failure/);

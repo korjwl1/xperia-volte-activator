@@ -22,12 +22,38 @@ export const MODULE_PRESET: Record<"foundation" | "evasion", { id: string; name:
     { id: "hma", name: "Hide My Applist", role: "루팅 앱 숨김 · 카페 프리셋" },
   ],
 };
+/** 지금 루팅 엔진의 매니저 앱 이름 */
+export function managerAppName(engine: RootState["engine"]): string {
+  return engine === "kernelsu-family" ? "ReSukiSU" : "Magisk";
+}
 /** 모듈을 설치하기 전 폰의 매니저에서 한 번 맞출 설정 — 실행 중 안내로 보여 준다(계획 단계의 체크 대신) */
 export function managerSettingsInstruction(engine: RootState["engine"]): string {
   return engine === "kernelsu-family"
     ? "ReSukiSU 앱 → 설정에서 [모듈 마운트 해제 기본값]과 [Hide SELinux Modification]을 켠 뒤 계속을 눌러 주세요."
     // NeoZygisk는 Magisk에서 DenyList에 등록한 앱만 숨긴다(README, 2026-10-08 조사) — 적용(Enforce)은 끄고 목록에는 등록한다
     : "Magisk 앱 → 설정에서 [Zygisk]와 [DenyList 적용]은 끄고, [DenyList 설정]에서 은행·결제 앱(토스·은행 앱 등)과 Google Play 서비스를 체크한 뒤 계속을 눌러 주세요.";
+}
+/** TrickyAddon·HMA처럼 매니저 모듈 화면(WebUI)에서 직접 하는 설정 — 번호 단계로 안내한다(2026-10-09) */
+export function trickyAddonInstruction(engine: RootState["engine"]): string {
+  const app = managerAppName(engine);
+  const open = engine === "kernelsu-family"
+    ? `${app} 앱 → [모듈] 탭에서 TrickyStore 위젯(Tricky Addon)의 [열기](지구본/WebUI 아이콘)를 누릅니다.`
+    : `${app} 앱 → 모듈 목록에서 TrickyStore 위젯(Tricky Addon)의 [열기](WebUI)를 누릅니다. WebUI가 없다는 안내가 나오면 그 화면에서 설치됩니다.`;
+  return [
+    open,
+    "열린 설정 화면에서 [Target]을 눌러, 쓰시는 은행·결제 앱(토스·각 은행 앱 등)을 켭니다. Play 스토어·Play 서비스는 기본으로 켜져 있습니다.",
+    "[Keybox]는 기본값이 들어가 있습니다 — 그대로 두고, Integrity가 통과되지 않을 때만 이 화면에서 다른 keybox로 바꿉니다.",
+    `설정이 저장되면 ${app} 앱을 닫고 아래 [설정을 완료했습니다]를 누릅니다.`,
+  ].join("\n");
+}
+export function hmaInstruction(engine: RootState["engine"], presetPath: string): string {
+  const app = managerAppName(engine);
+  return [
+    `${app} 앱 → [모듈] 탭에서 Hide My Applist(HMA) 위젯의 [열기](WebUI)를 누릅니다.`,
+    `[설정] → [가져오기]에서 폰의 다운로드 폴더에 있는 프리셋 파일(${presetPath.split("/").pop()})을 고릅니다.`,
+    "가져온 뒤, 숨길 앱 목록에 쓰시는 은행·결제 앱이 들어 있는지 확인합니다.",
+    `끝나면 ${app} 앱을 닫고 아래 [설정을 완료했습니다]를 누릅니다.`,
+  ].join("\n");
 }
 export const emptyModuleSelection = (): RootModuleSelection => ({ sets: [], zygisk: "neozygisk", integrity: "play-integrity-fork", extras: [], settingsAck: false });
 export function selectedModuleSets(selection?: RootModuleSelection): RootModuleSelection["sets"] {
@@ -127,13 +153,13 @@ export async function installModuleSets(port: ModuleSetPort, serial: string, sel
       if (action.ok) hooks.progress(`PlayIntegrityFork Action 실행: ${action.value.split(/\r?\n/).pop() ?? ""}`, index, packages.length);
       else await hooks.instruction(`폰 매니저에서 PlayIntegrityFork Action(autopif)을 실행하고 설정을 확인하세요. (자동 실행 실패: ${action.error})`);
     }
-    if (id === "tricky-addon") await hooks.instruction("폰의 매니저에서 TrickyAddon을 열어(WebUI가 없으면 자동 설치됨) target·keybox를 설정하세요. 설정 완료 후 계속하세요.");
+    if (id === "tricky-addon") await hooks.instruction(trickyAddonInstruction(root.engine));
     if (id === "hma") {
       // 카페 프리셋을 폰 Download에 넣어 두고 가져오기만 안내한다(PC 저장 → 폰 이동 단계를 없앰, 2026-10-09)
       const pushed = await port.rootPresetPush(serial); hooks.check();
       await hooks.instruction(pushed.ok
-        ? "폰 Download 폴더에 카페 HMA 프리셋(HMA-OSS_SonyUserCommunity_2026-10-01.json)을 넣어 두었습니다. HMA 앱 → 설정 → 가져오기에서 그 파일을 고르고, 필요한 은행 앱이 대상에 들어 있는지 확인하세요."
-        : `HMA 프리셋을 폰에 넣지 못했습니다(${pushed.error}). 소니 카페 HMA JSON을 직접 가져와 주세요.`);
+        ? hmaInstruction(root.engine, pushed.value)
+        : `HMA 프리셋을 폰에 넣지 못했습니다(${pushed.error}). 소니 카페 HMA JSON을 ${managerAppName(root.engine)} 앱의 HMA WebUI에서 직접 가져와 주세요.`);
     }
     if (["play-integrity-fork", "tricky-addon", "hma"].includes(id)) {
       hooks.progress(`${id}: 폰 설정 후 재부팅·적용 확인 중`, index, packages.length);
