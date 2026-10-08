@@ -1839,3 +1839,15 @@ Filesystem     1K-blocks      Used Available Use% Mounted on\n\
         }
     }
 }
+
+/// 재부팅 후 폰이 다 떴는지 기다린다 — 모든 "재부팅 → 재연결" 경로가 이 명령 하나를 거친다(2026-10-09 사용자 요청).
+/// ADB가 다시 붙어도 Android 서비스가 덜 떠 있으면 앱 설치(PackageManager NPE)·ksud 모듈 설치("Android is Booting!")가 실패했다.
+/// 읽기 전용: sys.boot_completed=1과 패키지 관리자 응답을 확인한다.
+#[tauri::command]
+pub async fn device_wait_ready(serial: Option<String>, timeout_secs: u64) -> Result<(), String> {
+    let limit = Duration::from_secs(timeout_secs.clamp(10, 600));
+    guarded(limit + Duration::from_secs(15), move || {
+        with_first_device(&serial, |dev| crate::device_io::wait_boot_completed(dev, limit))
+    })
+    .await
+}

@@ -139,6 +139,8 @@ export interface Api extends EfsApi, RootToolsApi {
   recordsDelete(ids: string[]): Promise<ApiResult<number>>;
   /** adb 재부팅 — os | bootloader (root-write 또는 fastboot-write 게이트) */
   rootReboot(serial: string | undefined, target: "os" | "bootloader" | "fastboot"): Promise<ApiResult<null>>;
+  /** 재부팅 후 폰이 다 떴는지(부팅 완료·패키지 관리자 응답) 기다린다 — 모든 재부팅 후 재연결 경로가 거친다 */
+  deviceWaitReady(serial: string | undefined, timeoutSecs?: number): Promise<ApiResult<null>>;
   /** Magisk 패치 로그 이벤트 구독 */
   onMagiskLog(cb: (line: string) => void): Promise<() => void>;
 }
@@ -440,6 +442,11 @@ const hybridApi: Api = {
   async magiskInstall(serial, apkPath, apkSha256) {
     if (!REAL_STEPS.root) return { ok: false, error: "루팅 실전 실행이 비활성화되어 있습니다" };
     return await invokeResult<null>("magisk_install", { serial: serial ?? null, apkPath, apkSha256 });
+  },
+
+  async deviceWaitReady(serial, timeoutSecs = 180) {
+    if (!inTauri()) return { ok: true, value: null };
+    return await invokeResult<null>("device_wait_ready", { serial: serial ?? null, timeoutSecs });
   },
 
   async rootReboot(serial, target) {

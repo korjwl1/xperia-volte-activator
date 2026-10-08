@@ -292,7 +292,6 @@ pub async fn resukisu_install(serial: String, sha256: String, confirm: bool) -> 
             return Err("ReSukiSU 매니저 APK가 필요합니다".into());
         }
         crate::adb::with_first_device(&Some(serial), |dev| {
-            crate::device_io::wait_boot_completed(dev, std::time::Duration::from_secs(180))?;
             if crate::device_io::shell(dev, "getprop ro.product.cpu.abi")?.trim() != "arm64-v8a" {
                 return Err("arm64-v8a 기기만 지원합니다".into());
             }

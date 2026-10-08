@@ -372,7 +372,6 @@ pub async fn magisk_install(
         // 앱 서명 자체는 설치 때 Android가 검증한다.
         load_verified_apk(&apk, &apk_sha256)?;
         adb::with_first_device(&serial, move |dev| {
-            crate::device_io::wait_boot_completed(dev, std::time::Duration::from_secs(180))?;
             dev.install(&apk, None)
                 .map_err(|e| format!("Magisk 앱 설치 실패: {e}"))
         })

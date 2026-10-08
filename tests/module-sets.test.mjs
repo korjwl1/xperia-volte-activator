@@ -27,6 +27,7 @@ function fake(engine = "magisk", fail = "") {
       return { ok: true, value: inventory };
     },
     rootReboot: async () => { events.push("reboot"); inventory = { ...inventory, rebootRequired: false, bootId: `boot-${++boots}` }; return { ok: true, value: null }; },
+    deviceWaitReady: async () => ({ ok: true, value: null }),
     rootManagerSetup: async () => { events.push("setup"); return { ok: true, value: ["manager settings"] }; },
     rootModuleRunAction: async (_serial, id) => { events.push(`action:${id}`); return { ok: true, value: "done" }; },
     rootPresetPush: async () => { events.push("preset"); return { ok: true, value: "/storage/emulated/0/Download/hma.json" }; },

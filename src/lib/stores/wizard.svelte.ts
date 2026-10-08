@@ -2357,7 +2357,15 @@ export class Wizard {
     if (!down) return "재부팅이 감지되지 않습니다 — 폰 화면을 확인한 뒤 [이 단계 다시 시도]를 눌러 주세요";
     const back = await this.waitFor(gen, () => this.usbDebugReady(), 300_000, 3000);
     if (gen !== this.runGen) return null;
-    return back ? null : "재부팅 후 폰이 다시 연결되지 않습니다 — 부팅이 끝났는지, USB 디버깅 허용을 확인해 주세요";
+    if (!back) return "재부팅 후 폰이 다시 연결되지 않습니다 — 부팅이 끝났는지, USB 디버깅 허용을 확인해 주세요";
+    return this.waitAndroidReady(gen);
+  }
+
+  /** 재부팅 후 재연결의 마지막 관문 — ADB가 붙어도 Android가 덜 떴으면 다음 작업이 실패한다(공용, 2026-10-09) */
+  private async waitAndroidReady(gen: number): Promise<string | null> {
+    const ready = await api.deviceWaitReady(this.device?.serial);
+    if (gen !== this.runGen) return null;
+    return ready.ok ? null : `폰 부팅이 끝나지 않았습니다 — ${ready.error}`;
   }
 
   /** 실전 최종 확인 — OS 재부팅 → 재연결 → VoLTE 등록 확인(수동 안내창이 자동 감지) */
@@ -2867,7 +2875,8 @@ export class Wizard {
     if (!rebooted.ok) return `${rebootFailed} (${rebooted.error})`;
     const back = await this.waitFor(gen, () => this.usbDebugReady(), 240_000);
     if (gen !== this.runGen) return null;
-    return back ? null : notBack;
+    if (!back) return notBack;
+    return this.waitAndroidReady(gen);
   }
 
   /** 실전 언루팅 — 원본 unRoot 계승: 순정 이미지 양 슬롯 기록 후 안내(앱 삭제는 수동) */

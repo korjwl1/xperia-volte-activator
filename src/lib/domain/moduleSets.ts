@@ -71,6 +71,7 @@ export interface ModuleSetPort {
   rootReboot(serial: string, target: "os"): Promise<ApiResult<unknown>>;
   rootPresetPush(serial: string): Promise<ApiResult<string>>;
   rootManagerSetup(serial: string): Promise<ApiResult<string[]>>;
+  deviceWaitReady(serial: string): Promise<ApiResult<null>>;
   rootModuleRunAction(serial: string, moduleId: string): Promise<ApiResult<string>>;
 }
 export interface ModuleSetHooks {
@@ -150,8 +151,11 @@ export async function waitForModuleReboot(port: ModuleSetPort, serial: string, e
     const result = await port.rootModulesInspect(serial); check();
     if (result.ok && !result.value.bootId) throw new Error("부팅 ID를 조회하지 못했습니다");
     if (result.ok && result.value.bootId !== previousBootId && !result.value.rebootRequired) {
-      if (result.value.uncertain || result.value.engine !== engine) throw new Error("재부팅 후 모듈·엔진 상태가 불확정입니다");
-      return result.value;
+      // 새 부팅 ID만으로는 아직 부팅 중일 수 있다 — 공용 부팅 완료 대기를 거친 뒤 상태를 다시 읽는다(2026-10-09)
+      requireResult(await port.deviceWaitReady(serial)); check();
+      const ready = requireResult(await port.rootModulesInspect(serial)); check();
+      if (ready.uncertain || ready.engine !== engine) throw new Error("재부팅 후 모듈·엔진 상태가 불확정입니다");
+      return ready;
     }
     await new Promise(resolve => setTimeout(resolve, 1500));
   } while (Date.now() < until);

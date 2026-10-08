@@ -97,6 +97,7 @@ pub fn run() {
             adb::settings_overview,
             adb::read_imei1,
             adb::open_settings_screen,
+            adb::device_wait_ready,
             usbmode::usb_modes,
             efs::efs_tool_check,
             efs::efs_validate_presets,
