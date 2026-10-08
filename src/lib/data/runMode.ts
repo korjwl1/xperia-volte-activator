@@ -16,10 +16,10 @@ export const REAL_STEPS: ExecutionFlags = {
   backup: true,
   restore: true,
   fastboot: true,
-  relock: false,
+  relock: false, // 리락은 실기기 미검증(사용자 결정 2026-10-09: 리락 빼고 검증된 것만 켬)
   root: true,
-  rootTools: false,
-  volteRollback: false,
+  rootTools: true, // 2026-10-09 XQ-DQ44 검증: ReSukiSU 루팅·매니저 변경(Magisk↔ReSukiSU)·모듈 A/B 설치
+  volteRollback: true, // 2026-10-09 XQ-DQ44 검증: 패치 전 모뎀 설정 복원·IMS 해제 확인
   verify: false,
   efs: true,
 };

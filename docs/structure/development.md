@@ -23,8 +23,8 @@ pnpm.cmd build
 | 항목 | 현재 기본 | 역할 |
 |---|---|---|
 | `SIMULATED_RUN` | true | 화면의 모의 기기 절차/수동 확인 개발 |
-| `REAL_STEPS` | backup·restore·fastboot·root·efs true, relock·rootTools·verify false | GUI 단계별 실전 엔진 연결. 리락(`relock`)과 루팅 도구·ReSukiSU 루팅(`rootTools`)은 별도 스위치 |
-| Cargo default features | `fastboot-write`, `root-write`, `efs-write` | 실기기 검증을 마친 부트 기록·Magisk 루팅/언루팅·EFS 쓰기. `root-tools-write`는 제외 |
+| `REAL_STEPS` | backup·restore·fastboot·root·efs·rootTools·volteRollback true, relock·verify false | GUI 단계별 실전 엔진 연결. 리락(`relock`)·업데이트 확인(`verify`)만 미검증이라 끈다 |
+| Cargo default features | `fastboot-write`, `root-write`, `efs-write`, `root-tools-write` | 실기기 검증을 마친 부트 기록·루팅/언루팅·EFS·루팅 도구 쓰기 |
 | `fastboot-write` / `root-write` / `efs-write` | 명시적 선택 | 각각 부트 기록, Magisk 폰 작업, DIAG/EFS 작업 허용 |
 | `dev-cli` | 명시적 선택 | 공유 엔진 개발 실행 파일 포함 |
 

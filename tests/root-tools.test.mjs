@@ -25,7 +25,8 @@ test("root inspection has no browser success and preserves denied root without c
   assert.deepEqual(await api.rootInspect("sha256:phone"),{ok:true,value:state});
   assert.deepEqual(calls,[{command:"root_inspect",args:{serial:"sha256:phone"}}]);
 });
-test("all new root tools writes remain blocked by default without contacting a device", async () => {
+// 2026-10-09: 루팅 도구가 XQ-DQ44 검증으로 기본 실전이 되어, 쓰기 명령이 네이티브 브리지로 전달된다(차단 아님)
+test("root tools writes reach the native bridge now that rootTools is enabled by default", async () => {
   let calls=0;globalThis.window={__TAURI_INTERNALS__:{invoke:async()=>{calls++;throw Error("unexpected");}}};
   for(const result of await Promise.all([
     api.rootModuleInstall("phone","a".repeat(64),true,true),
@@ -34,7 +35,7 @@ test("all new root tools writes remain blocked by default without contacting a d
     api.rootExternalPatchImport("phone","C:/stock.img","C:/patched.img",true),
     api.resukisuInstall("phone","a".repeat(64),true),
   ])) assert.equal(result.ok,false);
-  assert.equal(calls,0);
+  assert.equal(calls,5);
 });
 test("package preparation pins selected ReSukiSU tag and never substitutes latest",async()=>{
   const calls=[];globalThis.window={__TAURI_INTERNALS__:{invoke:async(command,args)=>{calls.push({command,args});throw "certificate pin mismatch";}}};

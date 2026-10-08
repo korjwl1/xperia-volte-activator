@@ -56,7 +56,7 @@ tempfile = "3"
 [features]
 # 실기기 검증 전에는 직접 invoke도 쓰기/재부팅을 실행할 수 없다.
 # 2026-10-08 실기기 검증을 마친 쓰기 기능은 기본 포함(사용자 결정). 루팅 도구(root-tools-write)는 검증 전이라 제외.
-default = ["fastboot-write", "root-write", "efs-write"]
+default = ["fastboot-write", "root-write", "efs-write", "root-tools-write"]
 dev-cli = []
 fastboot-write = []
 root-write = []

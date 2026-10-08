@@ -711,7 +711,7 @@ test("the mock skip button is unavailable while real checks are on", () => {
 
 
 test("SMS confirmation cannot dismiss its guide and backup-only live mode cannot skip it", () => {
-  const w = wizard(); Object.assign(flags, { backup: true, restore: false, root: false, fastboot: false, efs: false, verify: false });
+  const w = wizard(); Object.assign(flags, { backup: true, restore: false, root: false, fastboot: false, relock: false, rootTools: false, volteRollback: false, efs: false, verify: false });
   w.manualCurrent = { id: "smsie-export" };
   w.manualChecking = true; assert.equal(w.manualCanDismiss, false); assert.equal(w.manualSkippable, false);
   w.manualChecking = false; assert.equal(w.manualCanDismiss, true);

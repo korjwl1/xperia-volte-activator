@@ -19,11 +19,11 @@ beforeEach(() => {
 });
 after(async () => { Object.assign(flags, defaults); delete globalThis.window; await server?.close(); });
 
-// 2026-10-08: 실기기 검증을 마친 단계만 기본 실전(사용자 결정). 리락·루팅 도구·업데이트 확인과 루팅 도구 쓰기 기능은 끈다.
+// 2026-10-09: 실기기 검증을 마친 단계만 기본 실전(사용자 결정). 리락·업데이트 확인은 끈다. 루팅 도구·VoLTE 되돌리기는 XQ-DQ44 검증으로 켠다.
 test("release defaults enable only device-verified live steps and write features", () => {
-  assert.deepEqual(defaults, { backup: true, restore: true, fastboot: true, relock: false, root: true, rootTools: false, volteRollback: false, verify: false, efs: true });
+  assert.deepEqual(defaults, { backup: true, restore: true, fastboot: true, relock: false, root: true, rootTools: true, volteRollback: true, verify: false, efs: true });
   const features = fs.readFileSync("src-tauri/Cargo.toml", "utf8").match(/\[features\][\s\S]*?\ndefault\s*=\s*\[([^\]]*)\]/)[1];
-  assert.deepEqual(features.split(",").map(s => s.trim().replace(/"/g, "")).filter(Boolean), ["fastboot-write", "root-write", "efs-write"]);
+  assert.deepEqual(features.split(",").map(s => s.trim().replace(/"/g, "")).filter(Boolean), ["fastboot-write", "root-write", "efs-write", "root-tools-write"]);
 });
 
 test("actual API facade rejects disabled writes before invoking the native bridge", async () => {
