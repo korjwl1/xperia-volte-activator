@@ -27,6 +27,8 @@ function fake(engine = "magisk", fail = "") {
       return { ok: true, value: inventory };
     },
     rootReboot: async () => { events.push("reboot"); inventory = { ...inventory, rebootRequired: false, bootId: `boot-${++boots}` }; return { ok: true, value: null }; },
+    rootManagerSetup: async () => { events.push("setup"); return { ok: true, value: ["manager settings"] }; },
+    rootModuleRunAction: async (_serial, id) => { events.push(`action:${id}`); return { ok: true, value: "done" }; },
     rootPresetPush: async () => { events.push("preset"); return { ok: true, value: "/storage/emulated/0/Download/hma.json" }; },
   };
   const hooks = { check() {}, progress() {}, rebooted: async () => { events.push("verify"); return inventory; }, instruction: async message => { events.push(`instruction:${message}`); } };
@@ -57,27 +59,29 @@ test("automatic modules follow VoLTE configuration, disappear for unroot/relock/
 });
 test("set installation verifies every reboot and executes phone-setting gates", async () => {
   const f = fake("kernelsu-family"); const result = await domain.installModuleSets(f.port, "sample", selection(), f.hooks);
-  assert.equal(result.rebootRequired, false); assert.match(f.events[0], /^instruction:ReSukiSU/); assert.equal(f.events[1], "prepare:overlayfs");
+  assert.equal(result.rebootRequired, false); assert.equal(f.events[0], "setup"); assert.equal(f.events[1], "prepare:overlayfs");
   for (const [index, event] of f.events.entries()) if (event.startsWith("install:")) assert.deepEqual(f.events.slice(index + 1, index + 3), ["reboot", "verify"]);
-  // 매니저 설정(설치 전) + PIF·TrickyAddon·HMA 설정
-  assert.equal(f.events.filter(event => event.startsWith("instruction:")).length, 4);
+  // 매니저 설정·PIF Action은 자동, 폰에서 할 것은 TrickyAddon·HMA 두 가지
+  assert.ok(f.events.includes("setup") && f.events.some(event => event.startsWith("action:")));
+  assert.equal(f.events.filter(event => event.startsWith("instruction:")).length, 2);
   // HMA는 카페 프리셋을 폰 Download에 넣은 뒤 가져오기만 안내한다
   assert.ok(f.events.indexOf("preset") >= 0 && f.events.indexOf("preset") < f.events.findIndex(event => event.includes("카페 HMA 프리셋")));
 });
 test("failed, ambiguous or cancelled module work never installs the next dependency", async () => {
   const failed = fake("magisk", "neozygisk"); await assert.rejects(domain.installModuleSets(failed.port, "sample", selection(), failed.hooks), /failure/);
-  assert.deepEqual(failed.events.filter(event => !event.startsWith("instruction:")), ["prepare:neozygisk", "install:neozygisk"]);
+  assert.deepEqual(failed.events.filter(event => !event.startsWith("instruction:") && event !== "setup"), ["prepare:neozygisk", "install:neozygisk"]);
   const cancelled = fake(); let stopped = false;
   cancelled.hooks.instruction = async () => { stopped = true; }; cancelled.hooks.check = () => { if (stopped) throw new Error("cancelled"); };
   await assert.rejects(domain.installModuleSets(cancelled.port, "sample", selection(), cancelled.hooks), /cancelled/);
-  assert.ok(!cancelled.events.includes("prepare:tricky-store"));
+  // 첫 폰 안내(TrickyAddon 설정)에서 멈추면 다음 모듈(HMA)은 설치하지 않는다
+  assert.ok(!cancelled.events.includes("prepare:hma"));
   const uncertain = fake(); uncertain.hooks.rebooted = async () => ({ ...uncertain.inventory, uncertain: true });
   await assert.rejects(domain.installModuleSets(uncertain.port, "sample", selection(), uncertain.hooks)); assert.ok(!uncertain.events.includes("prepare:bootloop-protector"));
 });
 test("resume uses installation receipts but still shows manager and phone-setting instructions", async () => {
   const f = fake(); await domain.installModuleSets(f.port, "sample", selection(), f.hooks); f.events.length = 0;
   await domain.installModuleSets(f.port, "sample", selection(), f.hooks);
-  assert.ok(!f.events.some(event => event.startsWith("install:"))); assert.equal(f.events.filter(event => event.startsWith("instruction:")).length, 4);
+  assert.ok(!f.events.some(event => event.startsWith("install:"))); assert.equal(f.events.filter(event => event.startsWith("instruction:")).length, 2);
   f.inventory.installed.neozygisk = "another-module";
   f.events.length = 0; await domain.installModuleSets(f.port, "sample", selection(), f.hooks); assert.ok(f.events.includes("install:neozygisk"));
 });
@@ -89,7 +93,7 @@ test("a reboot ACK or a settings acknowledgement cannot replace a changed boot i
   settings.hooks.instruction = async () => { stopBoots = true; };
   settings.port.rootReboot = async (...args) => stopBoots ? { ok: true, value: null } : reboot(...args);
   await assert.rejects(domain.installModuleSets(settings.port, "sample", selection(), settings.hooks), /새 OS 부팅/);
-  assert.ok(!settings.events.includes("prepare:tricky-store"));
+  assert.ok(!settings.events.includes("prepare:hma"));
 });
 test("feature and setting preflight block automatic modules before any phone operation", async () => {
   const w = new Wizard(); w.device = device(); w.volteConfig = config(); w.opts = { mode: "automatic", unroot: false, relock: false, restore: false, modules: selection() };

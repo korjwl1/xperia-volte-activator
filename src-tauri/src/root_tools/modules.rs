@@ -601,3 +601,83 @@ mod tests {
         assert!(super::super::switch::require_module_install_stage(dir.path(), &key).is_ok());
     }
 }
+
+/// 모듈 설치 전 매니저 설정 자동화(2026-10-09 사용자 요청) — 지금 엔진에 맞춰 루트 셸로 바꾼다.
+/// - KernelSU 계열: SELinux 숨김 기능을 켜고 저장한다. "모듈 마운트 해제 기본값"은 커널 기본값이 켜짐(allowlist.c)이라 그대로 둔다.
+/// - Magisk: 내장 Zygisk·DenyList 적용을 끄고, 카페 HMA 프리셋 대상 중 설치된 앱을 DenyList에 등록한다(NeoZygisk는 DenyList 대상만 숨김).
+/// 적용은 다음 재부팅부터다(모듈 설치가 매번 재부팅한다). 결과 로그 줄을 돌려준다.
+#[tauri::command]
+pub async fn root_manager_setup(serial: String) -> Result<Vec<String>, String> {
+    super::write_gate(&serial, true)?;
+    let operation = crate::device_io::WriteOperation::acquire()?;
+    crate::tasks::blocking("Root manager setup", move || {
+        let _operation = operation;
+        crate::adb::with_first_device(&Some(serial), manager_setup_work)
+    })
+    .await
+}
+fn manager_setup_work(dev: &mut dyn ADBDeviceExt) -> Result<Vec<String>, String> {
+    let root = crate::root_state::inspect(dev)?;
+    if root.access != Access::Granted {
+        return Err("Shell 루트 권한을 허용하세요".into());
+    }
+    let su = |dev: &mut dyn ADBDeviceExt, cmd: &str| crate::device_io::shell(dev, &crate::device_io::su_command(cmd));
+    match root.engine {
+        Engine::KernelsuFamily => {
+            su(dev, "/data/adb/ksud feature set selinux_hide 1 && /data/adb/ksud feature save")?;
+            let got = su(dev, "/data/adb/ksud feature get selinux_hide")?;
+            if !got.lines().any(|l| l.trim() == "Value: 1") {
+                return Err("SELinux 숨김 설정을 확인하지 못했습니다".into());
+            }
+            Ok(vec!["SELinux 숨김(Hide SELinux Modification) 켬".into(), "모듈 마운트 해제 기본값: 커널 기본값(켜짐) 유지".into()])
+        }
+        Engine::Magisk => {
+            su(dev, "magisk --sqlite \"REPLACE INTO settings (key,value) VALUES('zygisk',0)\" && magisk --denylist disable; true")?;
+            let preset: serde_json::Value = serde_json::from_slice(include_bytes!("../../assets/root/HMA-OSS_SonyUserCommunity_2026-10-01.json"))
+                .map_err(|_| "HMA 프리셋 해석 실패".to_string())?;
+            let installed = crate::device_io::shell(dev, "pm list packages")?;
+            let targets: Vec<String> = preset["scope"]
+                .as_object()
+                .map(|m| m.keys().cloned().collect::<Vec<String>>())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|p: &String| p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_'))
+                .filter(|p| installed.lines().any(|l| l.trim() == format!("package:{p}")))
+                .collect();
+            if !targets.is_empty() {
+                let adds: Vec<String> = targets.iter().map(|p| format!("magisk --denylist add {p}")).collect();
+                su(dev, &format!("{}; true", adds.join("; ")))?;
+            }
+            Ok(vec![
+                "Magisk 내장 Zygisk·DenyList 적용 끔".into(),
+                format!("DenyList에 은행·결제 앱 {}개 등록(카페 HMA 프리셋 대상 중 설치된 앱)", targets.len()),
+            ])
+        }
+        _ => Err("지원하는 루팅 엔진을 확인하지 못했습니다".into()),
+    }
+}
+
+/// 모듈 Action 실행(예: PlayIntegrityFork autopif) — 앱의 Action 버튼과 같은 스크립트를 루트 셸로 돌린다
+#[tauri::command]
+pub async fn root_module_run_action(serial: String, module_id: String) -> Result<String, String> {
+    super::write_gate(&serial, true)?;
+    if module_id.is_empty() || !module_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.') {
+        return Err("모듈 ID 오류".into());
+    }
+    let operation = crate::device_io::WriteOperation::acquire()?;
+    crate::tasks::blocking("Root module action", move || {
+        let _operation = operation;
+        crate::adb::with_first_device(&Some(serial), |dev| {
+            let root = crate::root_state::inspect(dev)?;
+            let cmd = match root.engine {
+                Engine::KernelsuFamily => format!("/data/adb/ksud module action {module_id} 2>&1"),
+                Engine::Magisk => format!("cd /data/adb/modules/{module_id} && /data/adb/magisk/busybox sh -o standalone ./action.sh 2>&1"),
+                _ => return Err("지원하는 루팅 엔진을 확인하지 못했습니다".into()),
+            };
+            let out = crate::device_io::shell(dev, &crate::device_io::su_command(&cmd))
+                .map_err(|e| format!("모듈 Action 실패: {e}"))?;
+            Ok(out.lines().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n"))
+        })
+    })
+    .await
+}

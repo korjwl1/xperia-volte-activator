@@ -128,6 +128,8 @@ pub fn run() {
             root_tools::modules::root_module_install,
             root_tools::modules::root_module_action,
             root_tools::modules::root_module_reconcile,
+            root_tools::modules::root_manager_setup,
+            root_tools::modules::root_module_run_action,
             root_tools::switch::root_switch_prepare,
             root_tools::switch::root_switch_status,
             root_tools::switch::root_external_patch_import,

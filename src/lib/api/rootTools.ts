@@ -15,6 +15,10 @@ export const rootToolsApi = {
   rootPresetExport: (dest: string) => transport.result<string>("root_preset_export", { dest }),
   /** 카페 HMA 프리셋을 폰 Download에 넣는다 — 폰 경로 반환 */
   rootPresetPush: (serial: string) => rootWrite<string>("root_preset_push", { serial }),
+  /** 모듈 설치 전 매니저 설정 자동화(엔진별) — 로그 줄 */
+  rootManagerSetup: (serial: string) => rootWrite<string[]>("root_manager_setup", { serial }),
+  /** 모듈 Action 실행(예: PIF autopif) — 출력 끝부분 */
+  rootModuleRunAction: (serial: string, moduleId: string) => rootWrite<string>("root_module_run_action", { serial, moduleId }),
   rootModulesInspect: (serial: string) => transport.result<RootModuleInventory>("root_modules_inspect", { serial }),
   rootModuleInstall: (serial: string, sha256: string, confirm: boolean, confirmExternal: boolean) => rootWrite<RootModuleInventory>("root_module_install", { serial, sha256, confirm, confirmExternal }),
   rootModuleAction: (serial: string, moduleId: string, action: "disable" | "remove", confirm: boolean) => rootWrite<null>("root_module_action", { serial, moduleId, action, confirm }),

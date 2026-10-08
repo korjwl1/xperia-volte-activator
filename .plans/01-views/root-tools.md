@@ -14,3 +14,4 @@ status: implemented / live default disabled (2026-10-08)
 
 [계약](../02-contracts/tauri-commands.md) · [현재 동작](../../docs/structure/root-tools.md).
 - 2026-10-09 (사용자 지적): 모듈 화면의 [동봉 HMA 프리셋 PC 저장]·[WebUI 설치 안내]·[MMRL 설치 안내]를 없앴다. HMA 단계에서 카페 프리셋을 폰 Download에 자동으로 넣고(`root_preset_push`) 가져오기만 안내한다. WebUI는 TrickyAddon이 스스로 설치한다. [재부팅]은 끄기·제거 예약 뒤 재부팅이 남았을 때만 보인다.
+- 2026-10-09 (사용자 요청): 매니저 설정 자동화(`root_manager_setup`) — KernelSU 계열은 `ksud feature set selinux_hide 1`+`feature save`(모듈 마운트 해제 기본값은 커널 기본값 켜짐), Magisk는 Zygisk·DenyList 적용 끄기+카페 HMA 프리셋 대상 중 설치된 앱 DenyList 등록. PIF Action은 `root_module_run_action`(KSU: `ksud module action`, Magisk: busybox sh action.sh). 실패하면 기존 폰 안내로 대체. 화면을 열면 권한·엔진·모듈을 자동 조회하고, [전환 기록 불러오기]·[업데이트 루트 유지 점검] 버튼은 없앴다. 폰에서 직접 할 것은 TrickyAddon(keybox)·HMA 가져오기 두 가지.

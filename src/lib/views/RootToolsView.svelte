@@ -44,6 +44,8 @@
 
   onMount(() => {
     void api.rootToolsCapabilities().then(result => { if (result.ok) caps = result.value; else error = result.error; });
+    // 들어오자마자 권한·엔진·모듈을 조회한다(버튼을 누르지 않아도 되게)
+    if (serial) void work("루트 상태 조회", inspect);
   });
   async function work(label: string, operation: () => Promise<void>, writes = false) {
     if (busy) return;
@@ -165,9 +167,8 @@
       <section class="rounded-xl bg-card elev-1 p-4 space-y-3">
         <div class="flex items-center gap-2"><ShieldCheck size={16} class="text-info" /><h2 class="text-sm font-semibold">현재 엔진 확인</h2></div>
         <p class="text-xs text-muted-foreground">폰 화면을 켜고 잠금을 푼 뒤 Shell 루트 요청을 허용하세요. 권한 거부는 순정 상태로 판정하지 않습니다.</p>
-        <div class="flex gap-2 flex-wrap"><Button size="sm" disabled={busy || !serial} onclick={() => work("루트 상태 조회", inspect)}>권한·엔진·모듈 조회</Button>
-          <Button size="sm" variant="outline" disabled={busy} onclick={() => work("전환 기록 조회", loadSwitch)}>전환 기록 불러오기</Button>
-          <Button size="sm" variant="outline" disabled={busy || !root} onclick={() => work("업데이트 루트 유지 점검", inspectUpdate)}>업데이트 루트 유지 점검</Button></div>
+        <!-- 화면을 열면 자동으로 조회한다. 전환 기록·업데이트 점검 버튼은 매니저 변경이 일반 계획으로 바뀌어 없앴다(2026-10-09) -->
+        <div class="flex gap-2 flex-wrap"><Button size="sm" variant="outline" disabled={busy || !serial} onclick={() => work("루트 상태 조회", inspect)}><RefreshCw size={14} />다시 조회</Button></div>
         {#if root}<p class="text-xs rounded-lg bg-muted p-2">권한: {root.access === "granted" ? "허용" : root.access === "denied" ? "거부됨" : root.access === "unavailable" ? "su 미감지" : "확인 불가"} · 엔진: {root.engine === "magisk" ? "Magisk" : root.engine === "kernelsu-family" ? "KernelSU 계열 · 세부 포크 미확정" : root.engine === "conflicting" ? "마커 충돌 · 진행 중단" : "확인 불가"}</p>{/if}
         {#if updatePlan}<p class="text-xs text-info">{updatePlan.action === "blocked" ? "현재 상태에서는 루팅 유지 업데이트를 제공할 수 없습니다." : "목표 버전의 새 이미지를 같은 폰에서 패치하고, 순정 업데이트 후 별도로 적용해야 합니다."} 업데이트 실행 연결과 기종별 검증이 남아 있습니다.</p>{/if}
       </section>

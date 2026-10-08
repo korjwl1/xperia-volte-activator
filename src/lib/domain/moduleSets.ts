@@ -70,6 +70,8 @@ export interface ModuleSetPort {
   rootModuleInstall(serial: string, sha256: string, confirm: boolean, confirmExternal: boolean): Promise<ApiResult<RootModuleInventory>>;
   rootReboot(serial: string, target: "os"): Promise<ApiResult<unknown>>;
   rootPresetPush(serial: string): Promise<ApiResult<string>>;
+  rootManagerSetup(serial: string): Promise<ApiResult<string[]>>;
+  rootModuleRunAction(serial: string, moduleId: string): Promise<ApiResult<string>>;
 }
 export interface ModuleSetHooks {
   check(): void;
@@ -84,8 +86,12 @@ export async function installModuleSets(port: ModuleSetPort, serial: string, sel
   const root = requireResult(await port.rootInspect(serial)); hooks.check();
   if (root.access !== "granted") throw new Error("Shell 루트 권한을 허용하세요");
   const packages = moduleSetPackages(selection, root.engine);
-  // 매니저 설정은 매니저가 깔린 지금 폰에서 맞춘다
-  if (packages.length) await hooks.instruction(managerSettingsInstruction(root.engine));
+  // 매니저 설정은 매니저가 깔린 지금 루트 셸로 맞춘다(2026-10-09 자동화) — 실패하면 폰에서 직접 하도록 안내
+  if (packages.length) {
+    const setup = await port.rootManagerSetup(serial); hooks.check();
+    if (setup.ok) hooks.progress(`매니저 설정: ${setup.value.join(" · ")}`, 0, packages.length);
+    else await hooks.instruction(`${managerSettingsInstruction(root.engine)} (자동 설정 실패: ${setup.error})`);
+  }
   hooks.check();
   let inventory = requireResult(await port.rootModulesInspect(serial)); hooks.check();
   const reboot = async () => {
@@ -114,7 +120,12 @@ export async function installModuleSets(port: ModuleSetPort, serial: string, sel
       inventory = await reboot();
       if (inventory.uncertain || inventory.rebootRequired || inventory.engine !== root.engine || !inventory.modules.some(module => module.id === prepared.moduleId && module.state === "enabled")) throw new Error("재부팅 후 모듈 적용을 확인하지 못했습니다");
     }
-    if (id === "play-integrity-fork") await hooks.instruction("폰 매니저에서 PlayIntegrityFork Action(autopif)을 실행하고 설정을 확인하세요.");
+    if (id === "play-integrity-fork") {
+      // 매니저의 Action 버튼과 같은 스크립트(autopif)를 루트 셸로 실행한다 — 실패하면 폰에서 직접
+      const action = await port.rootModuleRunAction(serial, appliedId ?? id); hooks.check();
+      if (action.ok) hooks.progress(`PlayIntegrityFork Action 실행: ${action.value.split(/\r?\n/).pop() ?? ""}`, index, packages.length);
+      else await hooks.instruction(`폰 매니저에서 PlayIntegrityFork Action(autopif)을 실행하고 설정을 확인하세요. (자동 실행 실패: ${action.error})`);
+    }
     if (id === "tricky-addon") await hooks.instruction("폰의 매니저에서 TrickyAddon을 열어(WebUI가 없으면 자동 설치됨) target·keybox를 설정하세요. 설정 완료 후 계속하세요.");
     if (id === "hma") {
       // 카페 프리셋을 폰 Download에 넣어 두고 가져오기만 안내한다(PC 저장 → 폰 이동 단계를 없앰, 2026-10-09)
