@@ -54,3 +54,8 @@ DeviceStatus += state:'device'|'unauthorized'|'offline'|'usb'…,  SimInfo += st
 2026-10-06 SimInfo.type에 unknown 추가. 구독 정보가 없거나 충돌할 때 슬롯 순서로 물리/eSIM을 가정하지 않는다. mock의 미삽입 slot1도 unknown이며 관찰한 slot2 구독만 esim이다. 기록 로더는 unknown을 그대로 보존한다.
 
 2026-10-06 단계 대기: RunJournal v1의 optional `awaitingNext: string|null`은 cursor 직전 완료/스킵 단계 id와 대조한다. optional `backupOmissions: {apps: BackupSummary.omittedApps, pending:boolean}`은 제외 안내의 확인 여부를 유지하며 구조·개수·바이트·boolean 타입을 검사한다. 구형 기록은 필드 없이 읽을 수 있다. mock도 메인 단계 완료 후 자동으로 진행하지 않고 [다음]을 기다린다.
+
+
+## 2026-10-08 ?? ?? ??
+
+WorkflowMode=automatic|manual|update, ManualTask=backup|restore|unlock|relock|root|unroot|volte|verify. RunJournal.opts? optional mode/manualTask? ????. ?? ?? ??? ?? ?? ??? ??? ????. VolteConfig.firmware? ?? UI?? update ??, bootloaderAction? ?? ?? ?? ???. ?? ?? mock? ??? VoLTE off?.

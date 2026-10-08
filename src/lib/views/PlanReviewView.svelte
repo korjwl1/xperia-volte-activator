@@ -27,6 +27,9 @@
   $effect(() => () => clearTimeout(pathAlertTimer));
 
   const bootloaderKnown = $derived(wizard.device?.bootloader === "locked" || wizard.device?.bootloader === "unlocked");
+  const restoring = $derived(wizard.mode === "manual" && wizard.manualTask === "restore");
+  const extraOptions = $derived(wizard.mode !== "manual" && wizard.mode !== "update" && !wizard.opts.backupOnly);
+  const taskBlocked = $derived(wizard.mode === "update" ? "전체 펌웨어의 Newflasher 기록 연결·기기별 검증을 준비 중입니다" : restoring && (!wizard.backupDir || wizard.restoreSourceState !== "done") ? "복구할 원본 백업 폴더를 먼저 검증하세요" : null);
   const sizesLoading = $derived(wizard.sizesState === "loading");
 
   // ── 항목별 용량: 실측(storage_sizes) 매핑, 실측 불가 항목은 고정 추정치 ──
@@ -99,6 +102,10 @@
     const path = await api.pickFolder();
     if (path) wizard.backupPath = path;
   }
+  async function pickRestoreFolder() {
+    const path = await api.pickFolder();
+    if (path) await wizard.loadRestoreSource(path);
+  }
 
   const backupCategories = [
     { id: "settings", label: "설정", groupIds: ["settings"] },
@@ -152,10 +159,10 @@
   const canLaunch = $derived(!efsBlocked && hazardAck && (anyBackupChecked || !hasWipe || noBackupAck));
 
   function confirm() {
-    if (efsBlocked || planSteps.length === 0 || wizard.journalBlocked || wizard.pendingJournal) return;
+    if (taskBlocked || efsBlocked || planSteps.length === 0 || wizard.journalBlocked || wizard.pendingJournal) return;
     // 방어: 백업 선택 + 경로 미지정 or 용량 부족
     // 용량 계산 중에는 여유 공간 판단이 불완전하므로 실행 보류
-    if (anyBackupChecked && (!wizard.backupPath.trim() || diskWarning || diskUnknown || sizesLoading)) {
+    if (!restoring && anyBackupChecked && (!wizard.backupPath.trim() || diskWarning || diskUnknown || sizesLoading)) {
       showPathAlert = true;
       // 연속 클릭 시 이전 타이머가 새 알림을 일찍 닫지 않게 다시 건다
       clearTimeout(pathAlertTimer);
@@ -173,7 +180,7 @@
   }
 
   function launch() {
-    if (efsBlocked) return;
+    if (taskBlocked || efsBlocked) return;
     confirmOpen = false;
     wizard.launch();
   }
@@ -189,9 +196,9 @@
             {activeTab === 'backup' ? 'bg-background elev-1 text-foreground' : 'text-muted-foreground hover:text-foreground'}"
           onclick={() => (activeTab = "backup")}
         >
-          백업 및 복구
+          {restoring ? "복구할 항목" : "백업 선택"}
         </button>
-        {#if !wizard.opts.backupOnly}<button
+        {#if extraOptions}<button
           class="flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors
             {activeTab === 'rooting' ? 'bg-background elev-1 text-foreground' : 'text-muted-foreground hover:text-foreground'}"
           onclick={() => (activeTab = "rooting")}
@@ -203,7 +210,14 @@
       <div class="flex-1 min-h-0 overflow-y-auto">
         {#if REAL_STEPS.efs && patching}<EfsSetup bind:dirty={efsNeedsSave} />{/if}
         {#if activeTab === "backup"}
-          {#if anyBackupChecked}
+          {#if restoring}
+            <div class="sticky top-0 z-10 mb-3 rounded-xl bg-info-container text-info p-3 space-y-2 text-xs">
+              <p>복구할 원본 백업 폴더를 선택하세요. 현재 기기와 원본 기기·파일 해시를 대조합니다.</p>
+              <div class="flex items-center gap-2"><span class="flex-1 min-w-0 break-all">{wizard.backupDir || "원본 백업을 선택하지 않았습니다"}</span><Button size="sm" variant="outline" disabled={wizard.restoreSourceState === "loading"} onclick={pickRestoreFolder}>백업 폴더 선택</Button></div>
+              {#if wizard.restoreSourceState === "loading"}<p>원본 백업 검사 중…</p>{/if}
+              {#if wizard.restoreSourceError}<p role="alert" class="text-destructive">{wizard.restoreSourceError}</p>{/if}
+            </div>
+          {:else if anyBackupChecked}
             <div class="sticky top-0 z-10 mb-3 bg-background/95 backdrop-blur border-b pb-3 space-y-2">
               <div class="flex items-center gap-2.5">
                 <FolderOpen size={16} class="text-primary shrink-0" />
@@ -265,7 +279,7 @@
             </div>
           {/each}
 
-          {#if !wizard.opts.backupOnly}<div class="h-px bg-border mb-3"></div>
+          {#if extraOptions}<div class="h-px bg-border mb-3"></div>
 
           <div class="space-y-1.5">
             <OptionCard
@@ -411,11 +425,12 @@
   {/if}
 
   <footer class="h-14 shrink-0 border-t bg-muted/40 flex items-center justify-between gap-4 px-6">
-    <Button variant="ghost" size="sm" onclick={() => (wizard.view = wizard.opts.backupOnly ? "device" : "step1")}>← 이전</Button>
-    {#if notLiveSteps.length}
+    <Button variant="ghost" size="sm" onclick={() => (wizard.view = wizard.optionsPrevious)}>← 이전</Button>
+    {#if taskBlocked}<span role="status" class="min-w-0 flex-1 text-right text-[11px] text-warning">{taskBlocked}</span>
+    {:else if notLiveSteps.length}
       <span class="min-w-0 flex-1 truncate text-right text-[11px] text-warning">이 빌드에서 아직 실제로 실행할 수 없는 단계가 있습니다: {notLiveSteps.join(", ")} — [← 이전]에서 작업을 바꿔 주세요</span>
     {/if}
-    <Button size="sm" onclick={confirm} disabled={efsBlocked || planSteps.length === 0 || notLiveSteps.length > 0 || wizard.journalBlocked || !!wizard.pendingJournal}>실행</Button>
+    <Button size="sm" onclick={confirm} disabled={!!taskBlocked || efsBlocked || planSteps.length === 0 || notLiveSteps.length > 0 || wizard.journalBlocked || !!wizard.pendingJournal}>실행</Button>
   </footer>
 </div>
 

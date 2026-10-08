@@ -15,6 +15,7 @@
 
 <div class="flex-1 overflow-y-auto flex">
   <div class="m-auto w-full max-w-5xl p-6 space-y-4">
+    {#if wizard.mode !== "manual" || wizard.manualTask === "volte"}
     <!-- 1. OMD 등록 확인 -->
     <Card class="elev-1">
       <CardHeader>
@@ -78,19 +79,22 @@
       </CardContent>
     </Card>
 
+    {/if}
     <!-- 2. 데이터 손실 경고 -->
     <Card class="elev-1">
       <CardHeader>
         <CardTitle class="text-base flex items-center gap-2">
           <TriangleAlert size={18} class="text-warning" />
-          데이터 초기화 경고
+          {wizard.mode === "manual" ? `${wizard.taskTitle} 전 확인` : "데이터 초기화 경고"}
         </CardTitle>
       </CardHeader>
       <CardContent>
         <ul class="space-y-1.5 text-[13px] leading-relaxed list-disc pl-5">
-          <li>부트로더 언락/리락 과정에서 핸드폰이 <b>초기화</b>되며, 내부 저장소의 모든 데이터가 삭제됩니다.</li>
+          {#if wizard.mode !== "manual" || wizard.manualTask === "unlock" || wizard.manualTask === "relock"}<li>부트로더 언락/리락 과정에서 핸드폰이 <b>초기화</b>되며, 내부 저장소의 모든 데이터가 삭제됩니다.</li>
+          {:else if wizard.manualTask === "restore"}<li>선택한 백업의 데이터를 현재 기기에 복원합니다. 기존 파일·앱·설정이 덮어써질 수 있습니다.</li>
+          {:else}<li>부트 이미지·모뎀 설정 작업은 부팅·통신에 영향을 줄 수 있습니다. 이 작업에 언락·리락을 자동으로 추가하지 않습니다.</li>{/if}
           <li>공동인증서·OTP·금융 앱 인증 등 일부 데이터는 백업하더라도 복구되지 않습니다. 작업 전 각 앱에서 직접 내보내기/이전을 해 두세요.</li>
-          <li>작업 전 반드시 백업을 진행해 주세요. 다음 단계에서 백업 항목과 저장 위치를 지정할 수 있습니다.</li>
+          <li>{wizard.manualTask === "restore" ? "다음 화면에서 원본 백업 폴더와 복구할 항목을 검증·선택합니다." : "다음 단계에서 백업 항목과 저장 위치를 지정할 수 있습니다."}</li>
         </ul>
       </CardContent>
     </Card>

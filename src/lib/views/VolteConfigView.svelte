@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "$lib/components/ui/card";
   import { Badge } from "$lib/components/ui/badge";
-  import { LoaderCircle, LockOpen, Lock, TriangleAlert, ExternalLink } from "@lucide/svelte/icons";
+  import { TriangleAlert, ExternalLink } from "@lucide/svelte/icons";
   import { api } from "$lib/api";
   import { wizard } from "$lib/stores/wizard.svelte";
   import { resolveCarrier, simStateLabel, type CarrierId, type SimTarget } from "$lib/types";
@@ -27,51 +27,6 @@
   // 인식된 기종·사용자 선택 통신사·리락 여부에 맞는 안내만 표시한다.
   const support = $derived(wizard.workflow.support);
 
-  // 펌웨어 버전 — 서버 조회는 기기당 1회 (읽기 전용)
-  wizard.ensureFirmwareVersions();
-  const installed = $derived(wizard.device?.firmware ?? "");
-  const versionRows = $derived.by(() => {
-    // 서버 목록의 중복 버전은 한 줄로 — each 키(version)가 겹치면 화면이 깨진다
-    const seen = new Set<string>();
-    const list = (wizard.fwVersions?.versions ?? []).filter((v) => !seen.has(v.version) && !!seen.add(v.version));
-    // 서버 목록에 설치된 버전이 없더라도 "현재 설치된 버전"은 항상 첫 줄
-    return list.some((v) => v.version === installed)
-      ? list
-      : [{ version: installed, android: wizard.device?.android ?? "" }, ...list];
-  });
-  const selectedVersion = $derived(wizard.volteConfig.firmware ?? installed);
-  const pickVersion = (v: string) => {
-    wizard.volteConfig.firmware = v === installed ? null : v;
-    if (v !== installed) wizard.volteConfig.bootloaderAction = null; // 업데이트와 함께 진행하지 않음
-  };
-
-  // 부트로더만 작업 — 모든 슬롯 "패치 안 함" + 업데이트 없음일 때만, 기기 상태에 맞는 쪽만
-  const blAvailable = $derived(!wizard.hasPatchTarget && wizard.updateVersion === null);
-  const bl = $derived(wizard.device?.bootloader ?? "unknown");
-  const blActions = $derived([
-    {
-      id: "unlock" as const,
-      label: "언락만 진행하기",
-      desc: "부트로더 언락만 진행합니다 — 기기가 초기화됩니다",
-      icon: LockOpen,
-      enabled: blAvailable && bl === "locked",
-      reason: bl === "unlocked" ? "이미 언락된 기기입니다" : bl === "unknown" ? "부트로더 상태를 확인할 수 없습니다" : "",
-    },
-    {
-      id: "relock" as const,
-      label: "리락만 진행하기",
-      desc: "현재 펌웨어의 순정 부트 이미지를 복원한 뒤 잠급니다 — 기기가 초기화됩니다",
-      icon: Lock,
-      enabled: blAvailable && bl === "unlocked",
-      reason: bl === "locked" ? "이미 잠긴 기기입니다" : bl === "unknown" ? "부트로더 상태를 확인할 수 없습니다" : "",
-    },
-  ]);
-  const pickAction = (id: "unlock" | "relock") =>
-    (wizard.volteConfig.bootloaderAction = wizard.volteConfig.bootloaderAction === id ? null : id);
-  // 조건이 깨지면(패치·업데이트 선택) 선택도 해제된 것으로 표시
-  const actionPicked = (id: "unlock" | "relock") => wizard.bootloaderOnly === id;
-
-  // 표시 기준: LGU_V도 "LG U+" 버튼이 선택된 것으로
   const isPicked = (slot: 1 | 2, id: CarrierId | null) => {
     const cur = targetOf(slot)?.carrier ?? null;
     return id === "LGU" ? cur === "LGU" || cur === "LGU_V" : cur === id;
@@ -138,67 +93,6 @@
     </CardContent>
   </Card>
 
-  <Card class="elev-1">
-    <CardHeader>
-      <CardTitle class="text-base">펌웨어 설정</CardTitle>
-      <CardDescription>설치할 펌웨어 버전을 선택합니다 — 새 버전을 고르면 사용자 데이터를 유지한 채 업데이트합니다</CardDescription>
-    </CardHeader>
-    <CardContent class="space-y-2">
-      {#each versionRows as v (v.version)}
-        {@const picked = selectedVersion === v.version}
-        <button
-          class="w-full flex items-center gap-3 rounded-xl border-2 px-4 py-3 text-left transition-all
-            {picked ? 'border-primary ring-2 ring-primary/25 bg-primary/5' : 'border-border hover:border-primary/40'}"
-          onclick={() => pickVersion(v.version)}
-        >
-          <span class="font-mono text-sm font-semibold">{v.version}</span>
-          {#if v.android}<span class="text-xs text-muted-foreground">Android {v.android}</span>{/if}
-          {#if v.version === installed}
-            <Badge variant="outline" class="ml-auto text-[10px]">현재 설치된 버전</Badge>
-          {:else}
-            <Badge class="ml-auto text-[10px]">새 버전</Badge>
-          {/if}
-        </button>
-      {/each}
-      {#if wizard.fwVersionsState === "loading"}
-        <div class="flex items-center gap-2 px-1 text-[11px] text-muted-foreground">
-          <LoaderCircle size={12} class="animate-spin text-primary" />서버에서 새 버전 확인 중…
-        </div>
-      {:else if wizard.fwVersionsState === "failed"}
-        <p class="px-1 text-[11px] text-muted-foreground">서버에서 새 버전을 확인할 수 없습니다</p>
-      {:else if wizard.fwVersions && !wizard.fwVersions.supported}
-        <p class="px-1 text-[11px] text-muted-foreground">이 기종은 아직 새 버전 확인을 지원하지 않습니다</p>
-      {:else if versionRows.length === 1}
-        <p class="px-1 text-[11px] text-muted-foreground">현재 설치된 버전이 서버의 최신 버전입니다</p>
-      {/if}
-    </CardContent>
-  </Card>
 
-  <!-- 부트로더만 작업 — 모든 SIM이 "패치 안 함"이고 업데이트가 없을 때만 -->
-  <Card class="elev-1">
-    <CardHeader>
-      <CardTitle class="text-base">부트로더만 작업</CardTitle>
-      <CardDescription>VoLTE 패치 없이 언락 또는 리락만 진행합니다 — 모든 SIM이 '패치 안 함'이고 펌웨어가 현재 버전일 때 선택할 수 있습니다</CardDescription>
-    </CardHeader>
-    <CardContent class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      {#each blActions as a (a.id)}
-        {@const picked = actionPicked(a.id)}
-        <button
-          class="flex items-start gap-3 rounded-xl border-2 px-4 py-3 text-left transition-all
-            {picked ? 'border-primary ring-2 ring-primary/25 bg-primary/5' : 'border-border'}
-            {a.enabled ? (picked ? '' : 'hover:border-primary/40') : 'opacity-50 cursor-not-allowed'}"
-          disabled={!a.enabled}
-          title={a.enabled ? undefined : a.reason || undefined}
-          onclick={() => pickAction(a.id)}
-        >
-          <a.icon size={16} class="mt-0.5 shrink-0 {picked ? 'text-primary' : 'text-muted-foreground'}" />
-          <div class="min-w-0 space-y-0.5">
-            <div class="text-sm font-semibold">{a.label}</div>
-            <div class="text-[11px] text-muted-foreground">{a.desc}</div>
-          </div>
-        </button>
-      {/each}
-    </CardContent>
-  </Card>
   </div>
 </div>

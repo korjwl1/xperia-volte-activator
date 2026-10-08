@@ -1,7 +1,9 @@
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge";
-  import { CircleCheck, LoaderCircle, ChevronUp, ChevronDown, OctagonX } from "@lucide/svelte/icons";
+  import { CircleCheck, LoaderCircle, ChevronUp, ChevronDown, OctagonX, Lock, LockOpen, CircleHelp } from "@lucide/svelte/icons";
   import { wizard, MACRO_STEPS } from "$lib/stores/wizard.svelte";
+  import { cellularReady } from "$lib/domain/communication";
+  const visibleSteps = $derived(wizard.mode === "manual" && wizard.manualTask !== "volte" ? MACRO_STEPS.filter(step => step.id !== 1) : MACRO_STEPS);
 
   // 서브스텝 가시 창: 실행 중 기준 3개
   const subWindow = $derived.by(() => {
@@ -23,7 +25,7 @@
 
 <aside class="w-60 shrink-0 border-r bg-muted/40 flex flex-col overflow-hidden">
   <nav class="flex-1 p-2 pt-6 space-y-0.5 overflow-y-auto">
-    {#each MACRO_STEPS as step, i (step.id)}
+    {#each visibleSteps as step, i (step.id)}
       <div>
         <button
           class="w-full flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors
@@ -32,13 +34,13 @@
         >
           <span class="w-[18px] h-[18px] shrink-0 rounded-full border flex items-center justify-center text-[10px]
             {step.view === wizard.view ? 'border-current' : 'border-muted-foreground/40'}">
-            {#if wizard.macroStepIdx > i}
+            {#if wizard.macroStepIdx > MACRO_STEPS.findIndex(s => s.id === step.id)}
               <CircleCheck size={11} class="text-success" />
             {:else}
-              {step.id}
+              {i + 1}
             {/if}
           </span>
-          {step.label}
+          {step.id === 3 ? wizard.mode === "automatic" ? "자동 작업 진행" : `${wizard.taskTitle} 진행` : step.id === 1 && wizard.mode === "update" ? "업데이트 안내·버전" : step.label}
         </button>
 
         <!-- 3단계 서브스텝 -->
@@ -82,11 +84,11 @@
       <div class="text-muted-foreground">{wizard.device.firmware} · Android {wizard.device.android}</div>
       <div class="pt-1 flex flex-wrap gap-1">
         <Badge variant="outline" class="text-[10px] px-1.5 py-0">
-          {wizard.device.bootloader === "locked" ? "🔒 잠김" : wizard.device.bootloader === "unlocked" ? "🔓 언락" : "?"}
+          {#if wizard.device.bootloader === "locked"}<Lock size={10} />잠김{:else if wizard.device.bootloader === "unlocked"}<LockOpen size={10} />언락{:else}<CircleHelp size={10} />확인 불가{/if}
         </Badge>
         <Badge variant="outline" class="text-[10px] px-1.5 py-0">
           <!-- 켜짐/꺼짐만: 셀룰러 IMS 음성 등록이 확인되면 ✓, 아니면 ✗ -->
-          {wizard.device.sims.some((s) => s.volte === "on") ? "VoLTE ✓" : "VoLTE ✗"}
+          {wizard.device.sims.some(cellularReady) ? "VoLTE 활성" : "VoLTE 미확인"}
         </Badge>
       </div>
     </div>

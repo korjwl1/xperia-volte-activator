@@ -121,7 +121,7 @@
           {/if}
           {#if !wizard.finished}
             {#if wizard.awaitingNext}
-              <Button size="sm" disabled={wizard.busy > 0 || wizard.backupOmissionNotice || wizard.usbError || !!wizard.stepError || wizard.firmwareDirState === "loading"} onclick={() => wizard.nextStep()}>다음 → {wizard.nextStepTitle}</Button>
+              <Button size="sm" disabled={wizard.busy > 0 || wizard.backupOmissionNotice || wizard.usbError || !!wizard.stepError || wizard.firmwareDirState === "loading"} onclick={() => wizard.nextStep()}>다음 과정 진행 → {wizard.nextStepTitle}</Button>
             {:else if wizard.running}
               <Button size="sm" variant="outline" onclick={() => wizard.pause()}><Pause size={13} class="mr-1" />일시정지</Button>
             {:else if wizard.busy === 0}

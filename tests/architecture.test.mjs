@@ -433,11 +433,11 @@ test("every concrete IPC command used by the facade is registered in Rust", () =
 });
 
 test("run confirmation covers wipes, firmware, boot image writes and EFS edits", () => {
-  for (const kind of ["fw-flash", "root", "unroot", "efs"]) {
+  for (const kind of ["fw-flash", "root", "unroot", "efs", "restore"]) {
     assert.ok(stepHazard({ kind, wipe: false }), kind);
   }
   assert.equal(stepHazard({ kind: "unlock", wipe: true }).short, "데이터 초기화");
-  for (const kind of ["backup", "setup", "verify", "restore"]) {
+  for (const kind of ["backup", "setup", "verify"]) {
     assert.equal(stepHazard({ kind, wipe: false }), null, kind);
   }
 });

@@ -1,4 +1,4 @@
-import { MANUAL_IDS, STEP_KINDS, type RunJournal } from "$lib/types";
+import { MANUAL_IDS, MANUAL_TASK_IDS, STEP_KINDS, type RunJournal } from "$lib/types";
 import { CALL_ITEMS } from "$lib/domain/communication";
 
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -7,6 +7,9 @@ const texts = (value: unknown): value is string[] => Array.isArray(value) && val
 const integer = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const option = (value: unknown) => object(value) && ["unroot", "relock", "restore"].every(key => typeof value[key] === "boolean")
   && (value.backupOnly === undefined || typeof value.backupOnly === "boolean")
+  && (value.mode === undefined || ["automatic", "manual", "update"].includes(value.mode as string))
+  && (value.manualTask === undefined || (value.mode === "manual" && MANUAL_TASK_IDS.includes(value.manualTask as never)))
+  && (value.mode !== "manual" || value.manualTask !== undefined)
   && (value.backupOnly !== true || (!value.unroot && !value.relock && !value.restore));
 const manualIds = new Set<string>(MANUAL_IDS);
 const kinds = new Set<string>(STEP_KINDS);
@@ -75,6 +78,16 @@ export function decodeJournal(raw: string): RunJournal | null {
       definitions.set(step.id, step);
     }
     if ((value.opts as Record<string,unknown>).backupOnly === true && (value.steps.length!==1 || value.backupItems.length===0 || value.steps.some(step => step.id !== "backup" || step.kind!=="backup" || step.wipe || (step.manual ?? []).some((id: unknown)=>!["backup-notice", "usb-debug", "smsie-export"].includes(id as string))) || config.bootloaderAction!==null || config.firmware!==null || config.sims.some(sim=>sim.carrier!==null))) return null;
+    const opts = value.opts as Record<string, unknown>;
+    if (opts.mode === "update" && (opts.unroot || opts.relock || opts.restore || config.bootloaderAction !== null || config.sims.some(sim => sim.carrier !== null))) return null;
+    if (opts.mode === "manual") {
+      const allowed: Record<string, string[]> = {
+        backup: ["backup"], restore: ["restore"], unlock: ["prep", "backup", "unlock", "setup-min"],
+        relock: ["prep", "backup", "unroot", "relock", "setup-relock"], root: ["prep", "backup", "root"],
+        unroot: ["prep", "backup", "unroot"], volte: ["efs-input", "backup", "efs-preflight", "efs", "verify", "volte-props", "final-verify"], verify: [],
+      };
+      if (opts.unroot || opts.relock || opts.restore || config.firmware !== null || value.steps.some(step => !allowed[opts.manualTask as string]?.includes(step.id))) return null;
+    }
     const enabled = value.steps.filter(step => step.enabled);
     if (enabled.length !== value.runSteps.length) return null;
     for (const [index, step] of value.runSteps.entries()) {

@@ -138,7 +138,8 @@
       </CardContent>
     </Card>
 
-    <div class="flex justify-center pt-2">
+    <div class="flex justify-center gap-2 pt-2">
+      {#if wizard.mode === "manual" && wizard.finished}<Button variant="outline" disabled={wizard.busy > 0} onclick={() => wizard.returnToTasks()}>수동 작업 목록으로</Button>{/if}
       <Button variant="outline" onclick={() => wizard.restart()}>
         <RotateCcw size={14} class="mr-2" />
         처음으로

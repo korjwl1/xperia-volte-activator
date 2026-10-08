@@ -1,5 +1,5 @@
 // 위자드 상태 머신 + 실행 시뮬레이션 러너 (mock)
-import type { CallCheck, CommunicationSnapshot, FirmwareDirInfo, AppItem, FirmwareResult, FirmwareVersions, SettingsOverview, SimInfo, BackupGroup, DeviceStatus, EnvCheckItem, ManualId, ManualPrompt, PlanStep, RunJournal, RunStep, VolteConfig } from "$lib/types";
+import type { CallCheck, CommunicationSnapshot, FirmwareDirInfo, AppItem, FirmwareResult, FirmwareVersions, SettingsOverview, SimInfo, BackupGroup, DeviceStatus, EnvCheckItem, ManualId, ManualPrompt, ManualTask, WorkflowMode, PlanStep, RunJournal, RunStep, VolteConfig } from "$lib/types";
 import { api } from "$lib/api";
 import { LINKS, maskSecret } from "$lib/data/links";
 import { deviceWorkflow, patchProcedureProblem } from "$lib/data/devices";
@@ -14,11 +14,12 @@ import { AsyncQueue } from "$lib/domain/asyncQueue";
 import { decodeJournal } from "$lib/domain/journal";
 import { waitUntil } from "$lib/domain/waitUntil";
 import { callsComplete, cellularReady, imsLabel, newCallCheck, type CallItem } from "$lib/domain/communication";
+import { MANUAL_TASKS, manualTaskProblem, updateProblem } from "$lib/domain/workflow";
 
 /** 목 모드 언락 코드 예시값 — 16자리 16진수 형식만 맞춘 가짜 값(실전 fastboot에서는 채우지 않음) */
 const MOCK_UNLOCK_CODE = "0x1234567890ABCDEF";
 
-export type WizardView = "device" | "warning" | "step1" | "step2" | "step3" | "step4";
+export type WizardView = "device" | "mode-select" | "manual-tasks" | "communication" | "warning" | "step1" | "step2" | "step3" | "step4";
 
 export const MACRO_STEPS = [
   { id: 1, view: "step1" as const, label: "사전 옵션 선택" },
@@ -241,7 +242,7 @@ export class Wizard {
 
   /** 펌웨어 업데이트 대상 버전 (없으면 null) */
   get updateVersion(): string | null {
-    return updateTarget(this.device, this.volteConfig);
+    return this.mode === "update" ? updateTarget(this.device, this.volteConfig) : null;
   }
 
   /** 부트로더만 작업(언락만/리락만) — 유효할 때만 값 */
@@ -251,6 +252,9 @@ export class Wizard {
 
   /** 1단계 [다음] 활성 조건 — VoLTE 패치, 펌웨어 업데이트, 부트로더만 작업 중 하나 이상 */
   get hasAnyTask(): boolean {
+    if (this.opts.mode === "manual") return this.opts.manualTask === "volte" ? this.hasPatchTarget : !!this.opts.manualTask;
+    if (this.opts.mode === "update") return this.updateVersion !== null && updateProblem(this.device) === null;
+    if (this.opts.mode === "automatic") return this.hasPatchTarget;
     return !!this.opts.backupOnly || this.hasPatchTarget || this.updateVersion !== null || this.bootloaderOnly !== null;
   }
 
@@ -262,7 +266,7 @@ export class Wizard {
   /** 1단계 진입 시 기기당 1회 서버 버전 조회 */
   ensureFirmwareVersions() {
     const d = this.device;
-    if (!d) return;
+    if (!d || this.mode !== "update") return;
     const key = d.serial ?? d.serialMasked;
     if (this.fwVersionsFor === key) return;
     this.fwVersionsFor = key;
@@ -291,12 +295,55 @@ export class Wizard {
       this.sessionFor = key;
     }
     this.opts = { ...this.opts, backupOnly: false };
-    this.view = "warning";
+    this.view = "mode-select";
+  }
+
+  get mode(): WorkflowMode | null { return this.opts.mode ?? null; }
+  get manualTask(): ManualTask | null { return this.opts.manualTask ?? null; }
+  get taskTitle(): string {
+    return this.mode === "manual" ? MANUAL_TASKS.find(t => t.id === this.manualTask)?.title ?? "수동 진행" : this.mode === "update" ? "업데이트" : "자동 진행";
+  }
+  get optionsPrevious(): WizardView { return this.mode === "manual" ? (this.manualTask === "volte" ? "step1" : "manual-tasks") : "step1"; }
+
+  chooseMode(mode: WorkflowMode) {
+    if (!this.device || this.device.state !== "device") return;
+    if (this.busy > 0 || this.runInDanger || this.runUnfinished) return;
+    if (mode === "update" && updateProblem(this.device)) return;
+    this.resetExecution();
+    this.runSteps = []; this.steps = [];
+    this.volteConfig = defaultVolteConfig();
+    this.opts = { mode, unroot: false, relock: false, restore: false };
+    this.optionsFor = null; this.omdAck = false; this.riskAck = false;
+    this.backupDir = ""; this.backupSummary = null;
+    this.view = mode === "manual" ? "manual-tasks" : mode === "update" ? "step1" : "warning";
+  }
+
+  async chooseManualTask(task: ManualTask) {
+    if (this.busy > 0 || this.runInDanger || this.runUnfinished || manualTaskProblem(task, this.device)) return;
+    this.resetExecution(); this.runSteps = []; this.steps = [];
+    this.opts = { mode: "manual", manualTask: task, backupOnly: task === "backup", unroot: false, relock: false, restore: false };
+    this.volteConfig = defaultVolteConfig();
+    if (task === "unlock" || task === "relock") this.volteConfig.bootloaderAction = task;
+    this.optionsFor = null; this.omdAck = false; this.riskAck = false;
+    this.backupDir = ""; this.backupSummary = null;
+    this.view = task === "verify" ? "communication" : task === "backup" ? "step2" : "warning";
+    if (task === "backup") await this.checkJournal();
+  }
+
+  /** Finished single task returns to the grid without carrying the last task's inputs. */
+  returnToTasks() {
+    if (this.busy > 0 || this.runInDanger || this.runUnfinished) return;
+    this.resetExecution(); this.runSteps = []; this.steps = [];
+    this.opts = { mode: "manual", unroot: false, relock: false, restore: false };
+    this.volteConfig = defaultVolteConfig(); this.optionsFor = null;
+    this.backupDir = ""; this.backupSummary = null;
+    this.view = "manual-tasks";
   }
 
   async startBackupSession() {
     this.startSession();
-    this.opts = { unroot: false, relock: false, restore: false, backupOnly: true };
+    this.chooseMode("manual");
+    this.opts = { mode: "manual", manualTask: "backup", unroot: false, relock: false, restore: false, backupOnly: true };
     this.volteConfig = defaultVolteConfig();
     this.optionsFor = null;
     this.journalReadBlocked = true;
@@ -313,6 +360,7 @@ export class Wizard {
 
   /** 실행 진행 상태 초기화 — 새 실행·재개·세션 변경·처음으로 공통 (실행 결과물·입력값은 유지) */
   private resetExecution() {
+    this.autoAdvance = null;
     void api.efsCancel();
     this.efsRunConfiguration = null;
     this.backupIncompleteAccepted = false;
@@ -353,6 +401,7 @@ export class Wizard {
   /** 기기 세션 초기화 — 실행 상태·결과물·실행 중 입력값 전부 (2단계 선택값은 ensureOptions가 기기별로 관리) */
   private resetSession() {
     this.resetExecution();
+    this.restoreSourceRequest++; this.restoreSourceState = "idle"; this.restoreSourceError = "";
     // 기기 쓰기가 아직 끝나지 않았으면 PC 보호는 그 작업이 끝날 때 해제된다(dispatchEngine)
     this.communicationBefore = null;
     if (this.dangerBusy === 0) this.setGuard(false);
@@ -423,17 +472,17 @@ export class Wizard {
     const d = this.device;
     if (!d) return;
     // 작업 종류(부트로더만 작업 여부)가 바뀌면 기본 선택을 다시 만든다
-    const key = `${d.serial ?? d.serialMasked}|${this.bootloaderOnly ?? ""}|${!!this.opts.backupOnly}`;
+    const key = `${d.serial ?? d.serialMasked}|${this.opts.mode ?? ""}|${this.manualTask ?? ""}|${this.bootloaderOnly ?? ""}|${!!this.opts.backupOnly}`;
     if (this.optionsFor === key) return;
     this.optionsFor = key;
     // 초기화 경로(잠긴 기기의 언락, 부트로더만 언락/리락)가 있으면 백업 기본 전체 선택 — 패치 흐름의 리락은 기본 해제
     const backupOnly = this.opts.backupOnly === true;
-    const defaultOn = backupOnly || (this.hasPatchTarget && d.bootloader === "locked") || this.bootloaderOnly !== null;
+    const defaultOn = backupOnly || this.mode === "update" || (this.hasPatchTarget && d.bootloader === "locked") || this.bootloaderOnly !== null;
     this.groups = mockBackupGroups.map((g) => ({
       ...g,
       items: g.items.map((i) => ({ ...i, checked: defaultOn })),
     }));
-    this.opts = { unroot: false, relock: false, restore: defaultOn && !backupOnly, backupOnly };
+    this.opts = { mode: this.opts.mode, manualTask: this.opts.manualTask, unroot: false, relock: false, restore: this.mode !== "manual" && this.mode !== "update" && defaultOn && !backupOnly, backupOnly };
     if (measure) void this.loadMeasurements(key, d.serial);
   }
 
@@ -478,6 +527,7 @@ export class Wizard {
   running = $state(false);
   finished = $state(false);
   awaitingNext = $state<string | null>(null);
+  private autoAdvance: { gen: number; cursor: number } | null = null;
   /** 백업·복구 중 현재 작업 표시(예: "APK 파일 [12 / 92]") — 작업이 끝나면 비운다 */
   transferStatus = $state("");
   backupOmissionNotice = $state(false);
@@ -488,6 +538,46 @@ export class Wizard {
   backupSummary: BackupSummary | null = $state(null);
   /** 실전 백업이 만든 폴더(manifest 위치) — 재시도 이어받기·복구·journal에 저장 */
   backupDir = $state("");
+  restoreSourceState = $state<LoadState>("idle");
+  restoreSourceError = $state("");
+  private restoreSourceRequest = 0;
+
+  async loadRestoreSource(path: string) {
+    this.backupDir = ""; this.backupSummary = null;
+    this.restoreSourceState = "loading"; this.restoreSourceError = "";
+    const request = ++this.restoreSourceRequest;
+    const gen = this.runGen;
+    const sourceDevice = this.device?.serial;
+    try {
+      const summary = await api.backupManifestCheck(path);
+      const key = await this.deviceKeyHex();
+      if (request !== this.restoreSourceRequest || gen !== this.runGen || sourceDevice !== this.device?.serial) return;
+      if (!summary?.complete || !key || summary.deviceKey?.toLowerCase() !== key) throw new Error("백업 파일·해시가 완전하고 원본 기기가 현재 기기와 같아야 합니다");
+      this.backupSummary = summary; this.backupDir = path;
+      for (const group of this.groups) for (const item of group.items) item.checked = summary.items.some(entry => entry.id === item.id && entry.status === "done");
+      this.restoreSourceState = "done";
+    } catch (error) {
+      if (request !== this.restoreSourceRequest || gen !== this.runGen) return;
+      this.restoreSourceState = "failed";
+      this.restoreSourceError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  private async validateRestoreSource(path: string): Promise<boolean> {
+    const gen = this.runGen;
+    try {
+      const summary = await api.backupManifestCheck(path);
+      const key = await this.deviceKeyHex();
+      if (gen !== this.runGen) return false;
+      if (!summary?.complete || !key || summary.deviceKey?.toLowerCase() !== key) throw new Error("복구 백업과 현재 기기의 파일·해시·원본 기기 검증 실패");
+      if (this.checkedBackupItems().some(id => !summary.items.some(item => item.id === id && item.status === "done"))) throw new Error("선택한 복구 항목이 검증된 백업에 없습니다");
+      this.backupSummary = summary;
+      return true;
+    } catch (error) {
+      if (gen === this.runGen) this.failStep(error instanceof Error ? error.message : String(error));
+      return false;
+    }
+  }
   /** 완료 화면 [백업 파일 삭제] 상태 */
   backupDeleteState = $state<"idle" | "deleting" | "deleted" | "failed">("idle");
   backupDeleteError = $state("");
@@ -531,6 +621,8 @@ export class Wizard {
   get journalBlocked() {return this.journalReadBlocked || this.pendingJournal!==null;}
 
   launch() {
+    if (this.mode === "update" || this.plan.some(step => step.enabled && step.id === "fw-flash")) return;
+    if (this.mode === "manual" && this.manualTask === "restore" && (!this.backupDir || this.restoreSourceState !== "done")) return;
     if (this.journalReadBlocked || this.pendingJournal || this.plan.length === 0) return;
     this.steps = this.plan;
     this.view = "step3";
@@ -654,7 +746,7 @@ export class Wizard {
     this.backupDir = "";
     this.patchedImage = "";
     this.backupSummary = null;
-    this.view = this.opts.backupOnly ? "step2" : "step1";
+    this.view = this.opts.backupOnly || (this.mode === "manual" && this.manualTask !== "volte") ? "step2" : "step1";
   }
 
   /** [이어서 진행] — 선택했던 옵션·진행 상황을 되살리고 실행 화면으로 (자동 시작하지 않음) */
@@ -669,9 +761,10 @@ export class Wizard {
     }
     this.resetExecution();
     this.volteConfig = { ...defaultVolteConfig(), ...j.config };
+    this.opts = { ...j.opts, mode: j.opts.mode ?? (j.opts.backupOnly || j.config.bootloaderAction ? "manual" : "automatic"), manualTask: j.opts.manualTask ?? (j.opts.backupOnly ? "backup" : j.config.bootloaderAction ?? undefined) };
     this.ensureOptions(false);
     for (const g of this.groups) for (const i of g.items) i.checked = j.backupItems.includes(i.id);
-    this.opts = { ...j.opts };
+    this.opts = { ...this.opts, ...j.opts };
     this.backupPath = j.backupPath;
     this.backupDir = j.backupDir ?? "";
     this.patchedImage = j.patchedImage ?? "";
@@ -915,6 +1008,7 @@ export class Wizard {
     if (this.running || this.usbError || this.stepError || this.awaitingNext || this.backupOmissionNotice) return;
     if (this.firmwareDirState === "loading") return;
     if (this.journalReadBlocked) return this.failStep(this.journalError);
+    if (this.mode === "update" || this.runSteps.some(step => step.id === "fw-flash")) return this.failStep("전체 펌웨어 기록의 Newflasher 연결·기기별 검증이 끝나지 않아 업데이트 실행을 준비 중입니다");
     const problem = executionPlanProblem(this.runSteps.map(s => s.id), this.executionFlags);
     if (problem) return this.failStep(problem);
     this.running = true;
@@ -975,7 +1069,7 @@ export class Wizard {
   /** 진행 중 작업 수를 세며 기다린다 — 끝나면 busy에서 뺀다 */
   private track<T>(work: Promise<T>): Promise<T> {
     this.busy++;
-    return work.finally(() => this.busy--);
+    return work.finally(() => { this.busy--; this.flushAutoAdvance(); });
   }
 
   private dispatchEngine(work: () => Promise<void>, danger = true) {
@@ -988,10 +1082,10 @@ export class Wizard {
       })
       .finally(() => {
         this.busy--;
-        if (!danger) return;
-        this.dangerBusy--;
+        if (danger) this.dangerBusy--;
+        this.flushAutoAdvance();
         // 중단·실패·처음으로 때 미뤄 둔 PC 보호 해제 — 진행 중이거나 폰 확인 대기 중이면 계속 보호
-        if (this.dangerBusy === 0 && !this.running && this.runSteps[this.cursor]?.status !== "manual-wait") this.setGuard(false);
+        if (this.dangerBusy === 0 && !this.running && !this.autoAdvance && this.runSteps[this.cursor]?.status !== "manual-wait") this.setGuard(false);
       });
   }
 
@@ -1904,6 +1998,7 @@ export class Wizard {
       this.ackManual();
     } finally {
       this.manualChecking = false;
+      this.flushAutoAdvance();
     }
   }
 
@@ -2354,10 +2449,26 @@ export class Wizard {
     this.log(cur, "[완료]");
     this.pause();
     this.cursor++;
-    this.awaitingNext = this.cursor < this.runSteps.length ? cur.id : null;
-    if (this.dangerBusy === 0) this.setGuard(false);
+    const wait = this.mode === null || cur.id === "backup";
+    this.awaitingNext = wait && this.cursor < this.runSteps.length ? cur.id : null;
+    this.autoAdvance = !wait && this.cursor < this.runSteps.length ? { gen: this.runGen, cursor: this.cursor } : null;
+    if (!this.autoAdvance && this.dangerBusy === 0) this.setGuard(false);
     if (this.cursor >= this.runSteps.length) this.complete();
-    else { this.log(cur, `[대기] 다음 단계: ${this.nextStepTitle} — [다음]을 눌러 진행하세요`); void this.persist(true); }
+    else {
+      this.log(cur, wait ? `[대기] 다음 단계: ${this.nextStepTitle} — [다음 과정 진행]을 눌러 진행하세요` : `[자동] 다음 단계: ${this.nextStepTitle}`);
+      void this.persist(true);
+      queueMicrotask(() => this.flushAutoAdvance());
+    }
+  }
+
+  private flushAutoAdvance() {
+    const pending = this.autoAdvance;
+    if (!pending) return;
+    if (pending.gen !== this.runGen || pending.cursor !== this.cursor || this.finished || this.stepError || this.usbError) { this.autoAdvance = null; return; }
+    if (this.busy > 0 || this.dangerBusy > 0 || this.manualChecking || this.manualCurrent || this.backupOmissionNotice || this.running) return;
+    this.autoAdvance = null;
+    // No next I/O until the previous engine's finally/unsubscription and lock release settled.
+    this.begin();
   }
 
   /** 실전 복구 러너 — APK 재설치 → tar 스트리밍 → 설정 → 연락처 전송 후, 문자·통화(smsie)는 수동 개입 */
@@ -2366,6 +2477,10 @@ export class Wizard {
     if (!this.backupDir) {
       this.failStep("복구할 백업 폴더가 없습니다");
       return;
+    }
+    if (this.mode === "manual" && this.manualTask === "restore") {
+      const path = this.backupDir;
+      if (!(await this.validateRestoreSource(path)) || gen !== this.runGen) return;
     }
     const items = this.checkedBackupItems();
     this.log(cur, `[실전] 복구 시작 — ${this.backupDir}`);

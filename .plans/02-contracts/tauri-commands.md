@@ -398,3 +398,8 @@ invoke('firmware_dir_check', { dir, partition }) → { file, path, fingerprint, 
 - 공식 API의 서명된 임시 주소로 zip을 받아 Sony WinUSB INF를 확인한 뒤, 관리자 권한(UAC 한 번)으로 저장소에 추가하고 SetupAPI로 그 장치에 지정한다. 이미 드라이버가 있으면 아무것도 하지 않는다.
 - facade `fastbootDriverEnsure`는 `REAL_STEPS.fastboot`일 때만 호출한다. `usb_modes`는 드라이버 없는 부트로더 폰을 `mode: "fastboot-nodriver"`로 알린다.
 2026-10-08 복원 전송 변경(실기기): 파일·격리 복원은 sync push(`push_with_mtime`)로 `<dst>/.xvolte-restore-…` 단계 폴더에 올린 뒤 기기 셸 한 번으로 합친다. 이미 있는 파일은 지운 뒤 옮기고, 옮긴 수·남은 수를 검증한다. exec stdin tar 스트리밍은 없앴다. APK는 `/data/local/tmp`에 push한 뒤 `pm install-write … <경로>`로 넘긴다. app-data는 루트가 있고 앱이 설치된 경우에만 복원하고, 끝나면 루트로 소유권(uid:1078)·프로젝트 ID·P를 맞춘다.
+
+
+## 2026-10-08 ?? ?? ??
+
+? IPC ??. ??/?? ??? device_list ?? ???, ?? ? ?? ??? update ??? firmware_versions ??. ?? ??? backup_manifest_check? ?? ?? ?? ?? ???. ??/??? journal opts? optional mode/manualTask? ????.

@@ -10,6 +10,10 @@
   import RunProgressView from "$lib/views/RunProgressView.svelte";
   import FinishView from "$lib/views/FinishView.svelte";
   import ResumeJournal from "$lib/components/ResumeJournal.svelte";
+  import ModeSelectView from "$lib/views/ModeSelectView.svelte";
+  import ManualTasksView from "$lib/views/ManualTasksView.svelte";
+  import UpdateConfigView from "$lib/views/UpdateConfigView.svelte";
+  import CommunicationView from "$lib/views/CommunicationView.svelte";
 
   import { onMount } from "svelte";
   import { observeDesktopWindow } from "$lib/api";
@@ -65,8 +69,8 @@
   }
 
   const canNext = $derived(
-    wizard.view === "warning" ? wizard.omdAck && wizard.riskAck
-    : wizard.view === "step1" ? wizard.hasAnyTask
+    wizard.view === "warning" ? (wizard.mode === "manual" && wizard.manualTask !== "volte" || wizard.omdAck) && wizard.riskAck
+    : wizard.view === "step1" ? wizard.hasAnyTask && (wizard.mode !== "update" || wizard.riskAck)
     : true
   );
 
@@ -77,7 +81,7 @@
         // 같은 폰의 끝나지 않은 작업이 있으면 불러올지 먼저 묻는다
         checkingJournal = true;
         try {
-          if (!(await wizard.checkJournal())) wizard.view = "step1";
+          if (!(await wizard.checkJournal())) wizard.view = wizard.mode === "manual" && wizard.manualTask !== "volte" ? "step2" : "step1";
         } finally {
           checkingJournal = false;
         }
@@ -89,9 +93,9 @@
   }
 
   function onPrev() {
-    if (wizard.view === "step2") wizard.view = wizard.opts.backupOnly ? "device" : "step1";
-    else if (wizard.view === "step1") wizard.view = "warning";
-    else if (wizard.view === "warning") wizard.view = "device";
+    if (wizard.view === "step2") wizard.view = wizard.optionsPrevious;
+    else if (wizard.view === "step1") wizard.view = wizard.mode === "update" ? "mode-select" : "warning";
+    else if (wizard.view === "warning") wizard.view = wizard.mode === "manual" ? "manual-tasks" : "mode-select";
   }
 </script>
 
@@ -107,6 +111,7 @@
     <!-- 헤더 -->
     <header class="h-10 shrink-0 border-b flex items-center px-4 gap-2 select-none">
       <span class="text-sm font-semibold tracking-tight">Xperia VoLTE Activator</span>
+      {#if wizard.mode && wizard.view !== "mode-select"}<span class="text-xs text-muted-foreground">· {wizard.taskTitle}</span>{/if}
       <span class="ml-auto text-[11px] text-muted-foreground">v0.1.0</span>
     </header>
     {#if wizard.journalError}
@@ -116,15 +121,21 @@
     {/if}
     <!-- 사이드바 + 콘텐츠 (경고 페이지는 1~4단계 시작 전이라 사이드바 없음) -->
     <div class="flex-1 min-h-0 flex">
-      {#if wizard.view !== "warning"}
+      {#if ["step1", "step2", "step3", "step4"].includes(wizard.view)}
         <Sidebar />
       {/if}
 
       <div class="flex-1 min-w-0 flex flex-col">
-        {#if wizard.view === "warning"}
+        {#if wizard.view === "mode-select"}
+          <ModeSelectView />
+        {:else if wizard.view === "manual-tasks"}
+          <ManualTasksView />
+        {:else if wizard.view === "communication"}
+          <CommunicationView />
+        {:else if wizard.view === "warning"}
           <WarningView />
         {:else if wizard.view === "step1"}
-          <VolteConfigView />
+          {#if wizard.mode === "update"}<UpdateConfigView />{:else}<VolteConfigView />{/if}
         {:else if wizard.view === "step2"}
           <PlanReviewView />
         {:else if wizard.view === "step3"}

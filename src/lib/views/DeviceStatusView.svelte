@@ -202,7 +202,7 @@
               flex items-center gap-3"
             onclick={start}
           >
-            VoLTE 작업 시작
+            시작하기
             <ArrowRight size={20} />
           </button>
       </div>

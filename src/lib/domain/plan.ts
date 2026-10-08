@@ -1,11 +1,14 @@
 // 실행 계획 생성 — 단일 공급원. "실행 순서" 미리보기와 실제 실행이 모두 이 결과를 쓴다.
 // 순서/내용은 원본 CLI(cliInterface.py)의 언락 → 루팅 → EFS 업로드 → VoLTE 설정 → 언루팅 → 리락 흐름과
 // 수동 가이드의 "수동 업데이트"(newflasher, .ta·userdata 제외)를 따른다.
-import type { DeviceStatus, ManualId, PlanStep, VolteConfig } from "$lib/types";
+import type { DeviceStatus, ManualId, ManualTask, PlanStep, VolteConfig, WorkflowMode } from "$lib/types";
 import { CARRIER_LABEL } from "$lib/types";
 import { deviceWorkflow } from "$lib/data/devices";
+import { manualTaskProblem, updateProblem } from "$lib/domain/workflow";
 
 export interface PlanOptions {
+  mode?: WorkflowMode;
+  manualTask?: ManualTask;
   backupOnly?: boolean;
   unroot: boolean;
   relock: boolean;
@@ -40,6 +43,20 @@ export function buildPlan(
   hasBackup: boolean,
 ): PlanStep[] {
   if (!device) return [];
+  if (opts.mode === "manual") return manualPlan(device, config, opts, hasBackup);
+  if (opts.mode === "update") {
+    const version = updateTarget(device, config);
+    if (updateProblem(device) || !version) return [];
+    return finalize([
+      ...(hasBackup ? [backupStep()] : []),
+      { id: "fw-download", kind: "fw-download", title: "업데이트 펌웨어 준비", desc: `${version} 전체 펌웨어와 보존 정책 확인`, estSec: 900 },
+      { id: "fw-flash", kind: "fw-flash", title: "펌웨어 업데이트", desc: "Newflasher 기반 기록 · 모뎀·DSP·TA·사용자 데이터 제외 · 잠금 상태 유지", risk: "danger", estSec: 900, manual: ["flash-mode"] },
+      { id: "fw-verify", kind: "fw-verify", title: "업데이트 확인", desc: "목표 버전·지문·루트 정책 확인", estSec: 180 },
+      { id: "final-verify", kind: "final-verify", title: "통신 확인", desc: "기존 VoLTE 등록과 실제 통화 확인", estSec: 300, manual: ["ims-check"] },
+    ]);
+  }
+  // Firmware updates and standalone bootloader operations belong to their own routes.
+  if (opts.mode === "automatic") config = { ...config, firmware: null, bootloaderAction: null };
   if (opts.backupOnly) return hasBackup ? finalize([{ id: "backup", kind: "backup", title: "백업", desc: "선택한 항목과 원본 속성을 PC에 보존합니다", risk: "warn", estSec: 1800, manual: ["backup-notice"] }]) : [];
   const only = bootloaderOnly(device, config);
   if (only) return finalize(bootloaderOnlyPlan(device, only, opts, hasBackup));
@@ -146,6 +163,29 @@ function finalize(steps: Seed[]): PlanStep[] {
   return steps.map((s) => ({ ...s, optional: false, enabled: true, risk: s.risk ?? "safe", wipe: s.wipe ?? false }));
 }
 
+function backupStep(): Seed {
+  return { id: "backup", kind: "backup", title: "백업", desc: "선택한 데이터를 PC에 저장합니다", risk: "warn", estSec: 1800, manual: ["backup-notice"] };
+}
+
+function manualPlan(device: DeviceStatus, config: VolteConfig, opts: PlanOptions, hasBackup: boolean): PlanStep[] {
+  const task = opts.manualTask;
+  if (!task || manualTaskProblem(task, device)) return [];
+  if (task === "backup") return hasBackup ? finalize([backupStep()]) : [];
+  if (task === "restore") return hasBackup ? finalize([{ id: "restore", kind: "restore", title: "복구", desc: "선택한 기존 백업 데이터를 현재 기기에 복원", risk: "danger", estSec: 1500 }]) : [];
+  if (task === "unlock" || task === "relock") return finalize(bootloaderOnlyPlan(device, task, { ...opts, restore: false }, hasBackup));
+  if (task === "volte") {
+    // Keep only this task's SIM choices; stale firmware/post-processing cannot add other writes.
+    return buildPlan(device, { ...config, firmware: null, bootloaderAction: null }, { unroot: false, relock: false, restore: false }, hasBackup);
+  }
+  if (task === "verify") return [];
+  const partition = deviceWorkflow(device.model, [], false).partition;
+  return finalize([
+    { id: "prep", kind: "setup", title: "순정 이미지 준비", desc: "현재 기기·펌웨어와 같은 순정 부트 이미지 확인", estSec: 300, manual: ["firmware-select"] },
+    ...(hasBackup ? [backupStep()] : []),
+    { id: task, kind: task, title: task === "root" ? "루팅" : "언루팅", desc: task === "root" ? `Magisk로 ${partition} 패치·기록·매니저 설치·권한 확인` : `순정 ${partition} 양 슬롯 복원·OS 복귀·루트 확인`, risk: "warn", estSec: 600 },
+  ]);
+}
+
 function setupAfterWipe(id: string): Seed {
   return { id, kind: "setup", title: "기본 설정", desc: "초기화 후 폰 초기 설정 · 개발자 옵션 · USB 디버깅", estSec: 300, manual: ["usb-debug"] };
 }
@@ -196,7 +236,9 @@ export function stepHazard(step: Pick<PlanStep, "kind" | "wipe">): { short: stri
   }
   switch (step.kind) {
     case "fw-flash":
-      return { short: "사용자 데이터 유지", detail: "펌웨어를 기록합니다 — 사용자 데이터는 유지되지만, 중간에 연결이 끊기지 않도록 주의해 주세요." };
+      return { short: "펌웨어 기록", detail: "사용자 데이터 유지를 목표로 기록하지만 손실·부팅 실패 가능성이 있습니다. 중요한 데이터는 별도로 백업하세요." };
+    case "restore":
+      return { short: "기존 데이터 덮어쓰기", detail: "선택한 백업 데이터를 현재 기기에 복원합니다. 현재 데이터·설정이 덮어써질 수 있습니다." };
     case "root":
       return { short: "부트 이미지 수정 기록", detail: "Magisk로 수정한 부트 이미지를 양쪽 슬롯에 기록합니다 — 기록 중 연결이 끊기면 부팅되지 않을 수 있습니다." };
     case "unroot":

@@ -99,6 +99,10 @@ export interface AdbStatus {
 
 export type Profile = "clean-return" | "keep-root" | "unroot-only";
 
+export type WorkflowMode = "automatic" | "manual" | "update";
+export const MANUAL_TASK_IDS = ["backup", "restore", "unlock", "relock", "root", "unroot", "volte", "verify"] as const;
+export type ManualTask = (typeof MANUAL_TASK_IDS)[number];
+
 /** 진행 기록 검증(domain/journal.ts)도 이 목록을 쓴다 — 타입과 검증 목록이 어긋나지 않게 한 곳에서 정의 */
 export const STEP_KINDS = [
   "backup", "unlock", "setup", "root", "efs-preflight", "efs", "verify", "volte-props",
@@ -357,7 +361,7 @@ export interface RunJournal {
   startedAt: string; // ISO
   updatedAt: string;
   config: VolteConfig;
-  opts: { unroot: boolean; relock: boolean; restore: boolean; backupOnly?: boolean };
+  opts: { mode?: WorkflowMode; manualTask?: ManualTask; unroot: boolean; relock: boolean; restore: boolean; backupOnly?: boolean };
   backupPath: string;
   /** 실전 백업이 만든 백업 폴더(manifest.json 위치) — 복구·이어받기에 사용 */
   backupDir?: string;

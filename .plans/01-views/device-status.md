@@ -55,3 +55,8 @@ DeviceHero(gradient 히어로 + 폰 SVG 일러스트 + 반투명 상태 칩) / U
 2026-10-07 후속(사용자 지시, 위 3단계 규칙을 대체): VoLTE는 켜짐과 꺼짐만 표시한다. 첫 화면 SIM 카드는 IMS 상세 진단(등록·음성·SMS·전송 기술) 줄을 없애고, `cellularReady`일 때 "VoLTE 활성", 아니면 "VoLTE 비활성"만 보인다. 사이드바 배지도 ✓/✗ 두 가지다. 상세 IMS 진단은 VoLTE 적용 후 확인 단계(CommunicationPanel)에만 남는다.
 - 2026-10-07 IMS 조회 수정(실기기 XQ-DQ44 확인): 기존 명령은 덤프를 셸 변수에 담아 `printf '%s\n' "$ims_dump"`로 grep에 넘겼다. Android sh의 printf는 외부 명령이라 5,713줄 덤프에서 "Argument list too long"이 나 IMS 줄이 전부 버려졌다. 또 정상 덤프의 SIM 로그 줄에 있는 "Exception" 때문에 실패로도 판정됐다. 이제 `{ dumpsys …; echo __IMS_RC__=$?; } | grep`으로 바로 넘기고, 실패는 종료 코드와 줄 맨 앞의 dumpsys 오류 문구로만 판단한다. 실기기 결과: SIM1 registering·voice=false → VoLTE 꺼짐, SIM2 sim-not-ready. 읽기 전용 진단 `adb::tests::live_ims_dump_failure_markers`(ignored)를 추가했다.
 - 2026-10-07 (사용자 지시): 첫 화면의 [백업만 실행] 버튼을 제거했다. 실기기 GUI 백업 테스트용이었고 테스트가 끝났다. 내부 backupOnly 경로(진행 기록 호환 포함)는 남아 있지만 화면에서 들어갈 수 없다.
+
+
+## 2026-10-08 ?? ?? ??
+
+????? mode-select? ????. ?? ??? ?? ???? ????. ??? ?? ? device_list ??? ???. ???: ?? ?? ??, ?? ?? ??/IMS ?? ??.
