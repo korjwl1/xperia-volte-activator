@@ -337,11 +337,21 @@ pub async fn root_preset_push(serial: String) -> Result<String, String> {
         if apk_verify::sha256_hex(bytes) != "99f730a53ba3474b0581bb28622844ece43dd4cdeb479c6ce13b53d6af897dfb" {
             return Err("HMA preset 해시 불일치".into());
         }
-        let remote = "/storage/emulated/0/Download/HMA-OSS_SonyUserCommunity_2026-10-01.json";
+        const NAME: &str = "HMA-OSS_SonyUserCommunity_2026-10-01.json";
+        let remote = format!("/storage/emulated/0/Download/{NAME}");
         crate::adb::with_first_device(&Some(serial), |dev| {
-            dev.push(&mut std::io::Cursor::new(bytes), &remote)
+            // Download 폴더는 모듈 설치 뒤 앱 소유(drwxrws---)로 바뀌어 shell이 직접 못 쓴다(2026-10-09 실측).
+            // shell이 쓸 수 있는 임시 폴더에 올린 뒤 루트로 복사한다 — 복사된 파일은 미디어 그룹이라 HMA 앱이 읽는다.
+            let tmp = "/data/local/tmp/xvolte-hma.json";
+            dev.push(&mut std::io::Cursor::new(bytes), &tmp)
                 .map_err(|e| format!("HMA 프리셋 전송 실패: {e}"))?;
-            Ok(remote.to_string())
+            let out = crate::device_io::shell_write(
+                dev,
+                &crate::device_io::su_command(&format!("cp {tmp} '{remote}' && rm -f {tmp} && test -f '{remote}'")),
+            );
+            let _ = crate::device_io::shell(dev, &format!("rm -f {tmp}"));
+            out.map_err(|e| format!("HMA 프리셋을 Download로 복사하지 못했습니다: {e}"))?;
+            Ok(remote)
         })
     })
     .await
