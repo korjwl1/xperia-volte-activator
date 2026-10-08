@@ -3061,6 +3061,10 @@ export class Wizard {
     this.log(cur, `[루팅] ReSukiSU ${tag} 매니저 설치 (sha256 ${prepared.value.sha256.slice(0, 12)}…)`);
     this.markSub(cur, 1);
     cur.progress = 0.15;
+    // 재부팅 직후 첫 잠금 해제 전에는 폰 저장소(Download)가 열리지 않는다 — 화면을 켜고 잠금 해제를 기다린다
+    const unlocked = await this.waitForScreenUnlock(gen, cur);
+    if (gen !== this.runGen) return;
+    if (!unlocked) return this.failStep("폰 잠금이 풀리지 않았습니다 — 잠금을 푼 뒤 [이 단계 다시 시도]를 눌러 주세요");
     const staged = await api.resukisuStageStock(serial, imagePath);
     if (gen !== this.runGen) return;
     if (!staged.ok) return this.failStep(`순정 이미지 전송 실패: ${staged.error}`);
@@ -3070,6 +3074,22 @@ export class Wizard {
     this.markSub(cur, 2);
     void this.persist(true);
     this.openEngineManual(cur, "resukisu-patch");
+  }
+
+  /** 화면을 켜고 잠금이 풀릴 때까지 기다린다(최대 5분) — 잠금 상태를 읽지 못하면 막지 않는다 */
+  private async waitForScreenUnlock(gen: number, cur: RunStep): Promise<boolean> {
+    const serial = this.device?.serial;
+    let asked = false;
+    return this.waitFor(gen, async () => {
+      const s = await api.screenState(serial);
+      if (!s.ok) return true;
+      if (!s.value.awake) { await api.screenWake(serial); return false; }
+      if (s.value.locked) {
+        if (!asked) { asked = true; this.log(cur, "[대기] 폰 잠금을 풀어 주세요 — 재부팅 뒤 잠금을 풀어야 폰 저장소에 파일을 넣을 수 있습니다"); void api.attention("폰 잠금을 풀어 주세요", "재부팅 뒤 잠금을 풀어야 다음 단계로 진행합니다"); }
+        return false;
+      }
+      return true;
+    }, 300_000, 2000);
   }
 
   /** 폰 Download에 새 패치 결과가 생겼는지 — 생겼으면 PC로 받아 둔다 */

@@ -312,7 +312,8 @@ pub async fn resukisu_install(serial: String, sha256: String, confirm: bool) -> 
 /// 처음부터 ReSukiSU로 루팅(2026-10-08 사용자 결정): 순정 init_boot를 폰 Download에 둔다.
 /// 사용자는 ReSukiSU 매니저 → 설치 → 파일 선택으로 이 파일을 패치하고, 매니저(ksud boot-patch -o Download)가
 /// `kernelsu_patched_<시각>.img`를 같은 폴더에 만든다. 반환한 기기 시각 이후의 결과만 받는다.
-const STAGE_DIR: &str = "/sdcard/Download";
+// /sdcard 심볼릭 링크 대신 실제 경로. 재부팅 뒤 첫 잠금 해제 전에는 이 폴더가 열리지 않는다(파일 기반 암호화)
+const STAGE_DIR: &str = "/storage/emulated/0/Download";
 const PATCHED_MAX: u64 = 128 * 1024 * 1024;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -338,6 +339,9 @@ pub fn stage_work(dev: &mut dyn ADBDeviceExt, stock: &Path) -> Result<Staged, St
         return Err(
             "ReSukiSU 패치 경로는 init_boot 기종만 준비됐습니다 — boot 기종은 별도 검증 필요".into(),
         );
+    }
+    if device_io::shell(dev, &format!("test -d {STAGE_DIR} && echo ok")).map(|o| o.trim() == "ok").unwrap_or(false) == false {
+        return Err("폰 저장소가 아직 열리지 않았습니다 — 폰 잠금을 풀어 주세요".into());
     }
     let bytes = boot_image::read(stock)?;
     let since = device_io::shell(dev, "date +%s")?
