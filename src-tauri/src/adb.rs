@@ -405,7 +405,14 @@ fn root_state(su_raw: Option<&str>, bootloader: &str) -> Rooted {
         None => Rooted::Unknown,
         Some(raw) if su_visible(raw) || raw.lines().any(|l| l.trim().starts_with("__ROOTD__=")) => Rooted::Yes,
         Some(_) if bootloader == "locked" => Rooted::No,
-        Some(raw) if raw.lines().any(|l| l.trim().starts_with("__KSUMGR__=")) => Rooted::Unknown,
+        // KernelSU 계열 매니저 앱만 있을 때: 순정 Sony 커널에서는 LKM(/proc/modules의 kernelsu)으로만 동작하므로
+        // 모듈 목록을 읽었는데 없으면 루팅 아님. 목록을 못 읽었을 때만 판별 불가(2026-10-08 — 매니저 설치 직후 "확인 불가")
+        Some(raw)
+            if raw.lines().any(|l| l.trim().starts_with("__KSUMGR__="))
+                && !raw.lines().any(|l| l.trim() == "__MODS_OK__") =>
+        {
+            Rooted::Unknown
+        }
         Some(raw) if raw.lines().any(|l| l.trim() == "__PS_OK__") => Rooted::No,
         Some(_) => Rooted::Unknown,
     }
@@ -611,7 +618,7 @@ fn device_status(dev: &mut dyn ADBDeviceExt, serial_hint: &str) -> Result<Device
         dev,
         "getprop; echo __SU__; which su || for p in /debug_ramdisk/su /system/xbin/su /sbin/su; do [ -x \"$p\" ] && echo \"$p\"; done; true; \
          ps -A -o NAME >/dev/null 2>&1 && echo __PS_OK__; ps -A -o NAME 2>/dev/null | grep -xE 'magiskd|ksud|apd' | sed 's/^/__ROOTD__=/'; \
-         awk '$1==\"kernelsu\"{print \"__ROOTD__=kernelsu\"}' /proc/modules 2>/dev/null; \
+         test -r /proc/modules && echo __MODS_OK__; awk '$1==\"kernelsu\"{print \"__ROOTD__=kernelsu\"}' /proc/modules 2>/dev/null; \
          pm list packages 2>/dev/null | grep -xE 'package:(com[.]resukisu[.]resukisu|me[.]weishu[.]kernelsu|com[.]sukisu[.]ultra|me[.]bmax[.]apatch)' | sed 's/^package:/__KSUMGR__=/'; echo __ISUB__; \
          dumpsys isub | sed -n '/^Active subscriptions:/,/^All subscriptions:/p' \
            | grep -oE 'simSlotIndex=-?[0-9]+( portIndex=-?[0-9]+)? isEmbedded=(true|false|[01])' || true; echo __IMS__; \
@@ -1776,6 +1783,11 @@ Filesystem     1K-blocks      Used Available Use% Mounted on\n\
         assert_eq!(
             root_state(Some("__PS_OK__\n__KSUMGR__=com.resukisu.resukisu\n"), "unlocked"),
             Rooted::Unknown
+        );
+        // 모듈 목록을 읽었는데 kernelsu가 없으면 매니저 앱만 깔린 순정 상태
+        assert_eq!(
+            root_state(Some("__PS_OK__\n__MODS_OK__\n__KSUMGR__=com.resukisu.resukisu\n"), "unlocked"),
+            Rooted::No
         );
         // 프로세스 목록을 못 읽으면 숨긴 루팅과 구분할 수 없다
         assert_eq!(root_state(Some(""), "unlocked"), Rooted::Unknown);
