@@ -13,3 +13,4 @@ status: implemented / live default disabled (2026-10-08)
 비주얼: MD3 톤·lucide·시스템 테마·pane 스크롤, 좌 기능/우 로그. 모듈은 세트 카드·의존 배지·선택 드롭다운, 매니저 변경은 별도 section. 첫 화면의 별도 루트 도구 버튼은 제거했다.
 
 [계약](../02-contracts/tauri-commands.md) · [현재 동작](../../docs/structure/root-tools.md).
+- 2026-10-09 (사용자 지적): 모듈 화면의 [동봉 HMA 프리셋 PC 저장]·[WebUI 설치 안내]·[MMRL 설치 안내]를 없앴다. HMA 단계에서 카페 프리셋을 폰 Download에 자동으로 넣고(`root_preset_push`) 가져오기만 안내한다. WebUI는 TrickyAddon이 스스로 설치한다. [재부팅]은 끄기·제거 예약 뒤 재부팅이 남았을 때만 보인다.

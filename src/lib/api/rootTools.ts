@@ -13,6 +13,8 @@ export const rootToolsApi = {
   resukisuReleases: () => transport.result<RootRelease[]>("resukisu_releases", {}),
   rootPackagePrepare: (id: string, tag?: string) => transport.result<RootPackage>("root_package_prepare", { id, tag: tag ?? null }),
   rootPresetExport: (dest: string) => transport.result<string>("root_preset_export", { dest }),
+  /** 카페 HMA 프리셋을 폰 Download에 넣는다 — 폰 경로 반환 */
+  rootPresetPush: (serial: string) => rootWrite<string>("root_preset_push", { serial }),
   rootModulesInspect: (serial: string) => transport.result<RootModuleInventory>("root_modules_inspect", { serial }),
   rootModuleInstall: (serial: string, sha256: string, confirm: boolean, confirmExternal: boolean) => rootWrite<RootModuleInventory>("root_module_install", { serial, sha256, confirm, confirmExternal }),
   rootModuleAction: (serial: string, moduleId: string, action: "disable" | "remove", confirm: boolean) => rootWrite<null>("root_module_action", { serial, moduleId, action, confirm }),

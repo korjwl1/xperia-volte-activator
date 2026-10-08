@@ -123,6 +123,7 @@ pub fn run() {
             root_tools::packages::resukisu_releases,
             root_tools::packages::root_package_prepare,
             root_tools::packages::root_preset_export,
+            root_tools::packages::root_preset_push,
             root_tools::modules::root_modules_inspect,
             root_tools::modules::root_module_install,
             root_tools::modules::root_module_action,

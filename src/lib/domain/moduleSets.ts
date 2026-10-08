@@ -69,6 +69,7 @@ export interface ModuleSetPort {
   rootPackagePrepare(id: string): Promise<ApiResult<RootPackage>>;
   rootModuleInstall(serial: string, sha256: string, confirm: boolean, confirmExternal: boolean): Promise<ApiResult<RootModuleInventory>>;
   rootReboot(serial: string, target: "os"): Promise<ApiResult<unknown>>;
+  rootPresetPush(serial: string): Promise<ApiResult<string>>;
 }
 export interface ModuleSetHooks {
   check(): void;
@@ -115,7 +116,13 @@ export async function installModuleSets(port: ModuleSetPort, serial: string, sel
     }
     if (id === "play-integrity-fork") await hooks.instruction("폰 매니저에서 PlayIntegrityFork Action(autopif)을 실행하고 설정을 확인하세요.");
     if (id === "tricky-addon") await hooks.instruction("폰의 매니저에서 TrickyAddon을 열어(WebUI가 없으면 자동 설치됨) target·keybox를 설정하세요. 설정 완료 후 계속하세요.");
-    if (id === "hma") await hooks.instruction("HMA에 동봉된 소니 카페 JSON을 그대로 가져오고 필요한 은행 앱 scope를 확인하세요. 설정을 직접 구성해 대체하지 않습니다.");
+    if (id === "hma") {
+      // 카페 프리셋을 폰 Download에 넣어 두고 가져오기만 안내한다(PC 저장 → 폰 이동 단계를 없앰, 2026-10-09)
+      const pushed = await port.rootPresetPush(serial); hooks.check();
+      await hooks.instruction(pushed.ok
+        ? "폰 Download 폴더에 카페 HMA 프리셋(HMA-OSS_SonyUserCommunity_2026-10-01.json)을 넣어 두었습니다. HMA 앱 → 설정 → 가져오기에서 그 파일을 고르고, 필요한 은행 앱이 대상에 들어 있는지 확인하세요."
+        : `HMA 프리셋을 폰에 넣지 못했습니다(${pushed.error}). 소니 카페 HMA JSON을 직접 가져와 주세요.`);
+    }
     if (["play-integrity-fork", "tricky-addon", "hma"].includes(id)) {
       hooks.progress(`${id}: 폰 설정 후 재부팅·적용 확인 중`, index, packages.length);
       hooks.check(); inventory = await reboot();

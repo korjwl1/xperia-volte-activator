@@ -325,6 +325,28 @@ fn bundled(id: &str) -> Result<(&'static [u8], &'static str), String> {
         _ => Err("동봉 패키지 없음".into()),
     }
 }
+/// 카페 HMA 프리셋을 폰 Download에 넣는다(2026-10-09 사용자 요청) — PC에 저장해 옮기던 수고를 없앤다.
+/// 사용자는 HMA 앱에서 이 파일을 가져오기만 하면 된다. 같은 이름이 있으면 덮어쓴다(동봉 원본과 해시가 같은 파일).
+#[tauri::command]
+pub async fn root_preset_push(serial: String) -> Result<String, String> {
+    super::write_gate(&serial, true)?;
+    let operation = crate::device_io::WriteOperation::acquire()?;
+    crate::tasks::blocking("HMA preset push", move || {
+        let _operation = operation;
+        let bytes: &[u8] = include_bytes!("../../assets/root/HMA-OSS_SonyUserCommunity_2026-10-01.json");
+        if apk_verify::sha256_hex(bytes) != "99f730a53ba3474b0581bb28622844ece43dd4cdeb479c6ce13b53d6af897dfb" {
+            return Err("HMA preset 해시 불일치".into());
+        }
+        let remote = "/storage/emulated/0/Download/HMA-OSS_SonyUserCommunity_2026-10-01.json";
+        crate::adb::with_first_device(&Some(serial), |dev| {
+            dev.push(&mut std::io::Cursor::new(bytes), &remote)
+                .map_err(|e| format!("HMA 프리셋 전송 실패: {e}"))?;
+            Ok(remote.to_string())
+        })
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn root_preset_export(dest: String) -> Result<String, String> {
     crate::tasks::blocking("HMA preset export", move || {

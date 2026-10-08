@@ -121,7 +121,6 @@
     patched = null; root = null; inventory = null; updatePlan = null;
     await enterFastboot(); await flashRootImage(api, serial, image);
   }
-  async function exportPreset() { const dest = await api.pickFolder(); if (dest) log = [...log, requireResult(await api.rootPresetExport(dest))]; }
   function finishInstruction(completed: boolean) {
     const resolve = moduleInstructionResolve; moduleInstructionResolve = null; moduleInstruction = ""; resolve?.(completed);
   }
@@ -210,11 +209,9 @@
         {#if inventory?.rebootRequired}<p class="text-xs text-warning">이전 모듈 설치·변경 이후 재부팅이 필요합니다. 재부팅 후 권한·엔진·모듈 조회로 확인하세요.</p>{/if}
         {#if inventory?.uncertain}<div class="space-y-2"><p class="text-xs text-destructive">설치 결과를 확인할 수 없습니다. 모듈을 점검하고 필요한 경우 비활성화·제거하세요. 자동 재시도하지 않습니다.</p><Button size="sm" variant="outline" disabled={busy || !riskAck} onclick={() => work("재부팅 후 모듈 기록 재확인", async () => { inventory = requireResult(await api.rootModuleReconcile(serial, true)); })}>재부팅 후 오류·모듈 목록을 검토했습니다</Button></div>{/if}
         {#if inventory}<div class="max-h-48 overflow-y-auto rounded-lg bg-muted text-xs">{#each inventory.modules as m}<div class="flex items-center gap-2 p-2 border-b"><span class="flex-1">{m.id} · {m.state}</span><Button size="sm" variant="outline" disabled={busy || !canWrite} onclick={() => work("모듈 비활성화", async () => { requireResult(await api.rootModuleAction(serial, m.id, "disable", true)); await inspect(); }, true)}>끄기</Button><Button size="sm" variant="destructive" disabled={busy || !canWrite} onclick={() => work("모듈 제거 예약", async () => { requireResult(await api.rootModuleAction(serial, m.id, "remove", true)); await inspect(); }, true)}>제거</Button></div>{/each}</div>{/if}
-        <div class="flex gap-2 flex-wrap"><Button size="sm" variant="outline" disabled={busy || !canWrite} onclick={() => work("모듈 변경 후 OS 재부팅", async () => { requireResult(await api.rootReboot(serial, "os")); inventory = null; }, true)}><RefreshCw size={14} /> 재부팅</Button>
-          <Button size="sm" variant="outline" disabled={busy} onclick={() => work("HMA 프리셋 저장", exportPreset)}>동봉 HMA 프리셋 PC 저장</Button>
-          <Button size="sm" variant="ghost" disabled={busy} onclick={() => api.openExternal("https://github.com/MeowDump/KsuWebUIStandalone/releases")}>WebUI 설치 안내</Button>
-          <Button size="sm" variant="ghost" disabled={busy} onclick={() => api.openExternal("https://github.com/MMRLApp/MMRL/releases")}>MMRL 설치 안내</Button></div>
-        <p class="text-xs text-muted-foreground">PIF Action·TrickyAddon 설정은 폰에서 직접 진행하세요. HMA는 동봉된 카페 프리셋을 그대로 가져오세요. 앱 데이터·계정은 자동 삭제하지 않습니다.</p>
+        <!-- 설치는 모듈마다 자동으로 재부팅한다 — 끄기·제거 예약처럼 재부팅이 남았을 때만 버튼을 보인다.
+             HMA 프리셋은 설치 중 폰 Download에 자동으로 넣고, WebUI는 TrickyAddon이 스스로 설치한다(2026-10-09 정리) -->
+        {#if inventory?.rebootRequired}<div><Button size="sm" variant="outline" disabled={busy || !canWrite} onclick={() => work("모듈 변경 후 OS 재부팅", async () => { requireResult(await api.rootReboot(serial, "os")); inventory = null; }, true)}><RefreshCw size={14} /> 재부팅해서 적용</Button></div>{/if}
       </section>{/if}
     </main>
     <aside class="w-72 shrink-0 flex flex-col rounded-xl bg-muted elev-1 overflow-hidden">

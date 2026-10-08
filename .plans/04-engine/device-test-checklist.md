@@ -2,7 +2,7 @@
 
 ## 2026-10-08 ReSukiSU 처음 루팅 — 실기기 미검증 (`REAL_STEPS.rootTools`, `root-tools-write`)
 
-- [ ] 비루팅 XQ-DQ44(KMI android13-5.15)에서 매니저 설치·순정 init_boot 전송·폰 패치(파일 선택 후 패치)·kernelsu_patched 결과 자동 감지·PC 검사·fastbootd 양 슬롯 기록·부팅
+- [x] 비루팅 XQ-DQ44(KMI android13-5.15)에서 ReSukiSU v4.2.0-rc3 루팅 — 2026-10-09 GUI 루팅 매니저 변경(Magisk → ReSukiSU): 기존 루팅 해제(/data/adb 삭제·순정 기록·Magisk 앱 삭제) → 매니저 설치 → 재부팅 직후 저장소 잠김(secure_mkdirs 실패)으로 잠금 해제 대기 추가 → 패치 → kernelsu_patched 자동 감지·PC 검사·양 슬롯 기록·부팅, /proc/modules에 kernelsu, Shell 허용 후 uid=0(u:r:ksu). 패치는 매니저 APK의 libksud.so를 셸로 실행해 얻었고, 이 자동 패치를 기본 경로로 넣었다(폰 직접 패치는 실패 시 대체). 자동 패치 경로의 GUI 단독 실행은 다음 ReSukiSU 루팅에서 확인
 - [ ] Shell 루트 허용 안내 후 uid=0 확인, 기기 상태 카드가 /proc/modules의 kernelsu로 "루팅됨" 표시
 - [ ] ReSukiSU 루팅 상태에서 VoLTE(DIAG 전환·EFS) 단계의 su 동작, 언루팅(순정 복원) 후 매니저 앱 처리
 - [ ] Magisk 언루팅 후 Magisk 앱 자동 삭제(`magisk_uninstall`) 확인

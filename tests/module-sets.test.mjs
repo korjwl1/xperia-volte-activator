@@ -27,6 +27,7 @@ function fake(engine = "magisk", fail = "") {
       return { ok: true, value: inventory };
     },
     rootReboot: async () => { events.push("reboot"); inventory = { ...inventory, rebootRequired: false, bootId: `boot-${++boots}` }; return { ok: true, value: null }; },
+    rootPresetPush: async () => { events.push("preset"); return { ok: true, value: "/storage/emulated/0/Download/hma.json" }; },
   };
   const hooks = { check() {}, progress() {}, rebooted: async () => { events.push("verify"); return inventory; }, instruction: async message => { events.push(`instruction:${message}`); } };
   return { port, hooks, events, get inventory() { return inventory; } };
@@ -60,7 +61,8 @@ test("set installation verifies every reboot and executes phone-setting gates", 
   for (const [index, event] of f.events.entries()) if (event.startsWith("install:")) assert.deepEqual(f.events.slice(index + 1, index + 3), ["reboot", "verify"]);
   // 매니저 설정(설치 전) + PIF·TrickyAddon·HMA 설정
   assert.equal(f.events.filter(event => event.startsWith("instruction:")).length, 4);
-  assert.ok(f.events.find(event => event.includes("카페 JSON")));
+  // HMA는 카페 프리셋을 폰 Download에 넣은 뒤 가져오기만 안내한다
+  assert.ok(f.events.indexOf("preset") >= 0 && f.events.indexOf("preset") < f.events.findIndex(event => event.includes("카페 HMA 프리셋")));
 });
 test("failed, ambiguous or cancelled module work never installs the next dependency", async () => {
   const failed = fake("magisk", "neozygisk"); await assert.rejects(domain.installModuleSets(failed.port, "sample", selection(), failed.hooks), /failure/);
