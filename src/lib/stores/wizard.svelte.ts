@@ -825,7 +825,10 @@ export class Wizard {
     if (!j) return;
     // 시작 화면에서 고른 경우 이 폰으로 세션을 연다(새 앱이라 지울 상태가 없으므로 초기화하지 않는다)
     if (this.view === "device" && this.device) this.sessionFor = `${this.device.model}|${this.device.serial ?? this.device.serialMasked}`;
-    if (!j.opts.backupOnly && (!this.omdAck || !this.riskAck)) {
+    // 경고 화면 [다음]과 같은 기준 — OMD 확인은 VoLTE를 다루는 작업(자동·수동 VoLTE)에서만 묻는다.
+    // 수동 단일 작업(매니저 변경 등)은 OMD 항목이 화면에 없어 동의할 수 없으므로 책임 고지만 본다(2026-10-09 [다음]이 안 넘어가던 문제)
+    const needsOmd = j.opts.mode !== "manual" || j.opts.manualTask === "volte";
+    if (!j.opts.backupOnly && ((needsOmd && !this.omdAck) || !this.riskAck)) {
       // 안내 문구가 이어 갈 작업에 맞게 보이도록 작업 종류를 먼저 맞춘다
       this.opts = { ...this.opts, mode: j.opts.mode ?? "automatic", manualTask: j.opts.manualTask };
       this.resumeAfterWarning = j;
