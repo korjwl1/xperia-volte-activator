@@ -261,3 +261,9 @@ status: 진행 전 — 2026-10-05 기준 아래 항목은 모두 **실기기에�
 ## 2026-10-08 VoLTE 되돌리기 — 실기기 미검증 (`REAL_STEPS.volteRollback`)
 - [~] 루팅된 XQ-DQ44에서 기록된 SKT 패치 전 사본으로 복원 → 재부팅 → VoLTE 해제 확인 — 2026-10-08: GUI 실행은 PUT 응답 검사에서 두 번 멈춤(① stat 모드의 아이템 종류 비트를 PUT에 실음 ② 폰이 PUT 쓴 바이트 수를 0으로 돌려줌, 원본 EfsTools는 이 값을 검사하지 않음). 두 가지를 고친 엔진으로 CLI 실행 82/82 복원·리드백 일치, 재부팅 후 SIM1 IMS 미등록·Voice false 확인. GUI 되돌리기 재실행과 다시 VoLTE 패치 복귀는 남음
 - [ ] 백업 완결·VoLTE 패치 때 폰별 기록(`devices/<키>.json`) 갱신, 복원 화면이 마지막 백업 폴더를 먼저 고름
+
+## 2026-10-09 VoLTE 순방향 패치 GUI 전체 흐름 — DIAG→ADB 복귀 대기 버그 수정
+- [x] XQ-DQ44 GUI 순방향 패치: DIAG 전환 → EFS 업로드 2회(82/82) → 리드백 80/82 일치(불일치 2개는 모뎀 재저장 항목)까지 정상. 마지막 "VoLTE 활성화 설정"에서 `volte_props_set`가 `연결된 기기가 없습니다`로 실패. 원인은 DIAG USB 재열거 직후 adb 서버가 기기를 offline/미표시로 들고 있는 순간에 `runRealVolteProps`가 대기 없이 setprop을 호출한 것(백엔드 `volte_props_set`는 2026-10-07 CLI에서 이미 검증됨 — 라인 225). 되돌리기 경로는 setprop 없이 DIAG→재부팅이라 이 전환을 거치지 않아 드러나지 않았다.
+- [x] 수정: `runRealVolteProps`에서 setprop 전에 `usbDebugReady` 폴링(최대 120초)으로 기기가 다시 `device` 상태로 돌아올 때까지 대기(`wizard.svelte.ts`). HMR 반영·타입 오류 없음.
+- [x] 전수 조사(2026-10-09): 같은 "DIAG→ADB 전환 직후 대기 없이 adb 명령" 패턴을 전 흐름에서 점검. 두 번째 구멍은 되돌리기 경로 — `runRealVolteRollback`가 DIAG 복원 뒤 `rebootOsAndReconnect`로 adb 재부팅을 대기 없이 호출. 공용 `rebootOsAndReconnect` 시작에 재부팅 전 `usbDebugReady` 폴링(최대 120초)을 추가(정상 연결 상태인 최종 확인 호출부에선 즉시 통과). 나머지 전환(언락·언루팅·루팅 Magisk/ReSukiSU·모듈 설치·fastboot 모드)은 `enterFastboot`·`returnToAdb`·`waitForModuleReboot`·`waitForScreenUnlock`로 이미 대기가 있어 추가 수정 불필요. 미배포 `verify`의 fw 확인은 `usbDebugReady`만 쓰고 boot_completed 대기는 생략(프롭 읽기만, 저위험).
+- [x] 2026-10-09 실기기 마무리: DIAG에 멈춰 있던 폰을 `adb reboot`로 재부팅 → USB 조성 `adb`로 복귀, persist.dbg 4종=1, EFS 반영. SIM1 SKT LTE IN_SERVICE, IMS가 IWLAN(Wi-Fi 콜링)으로 HOME 등록, CS 도메인 availableServices에 VIDEO 포함. 재부팅 직후라 LTE VoLTE 셀룰러 등록·사용자 통화 확인은 사용자 몫으로 남김.

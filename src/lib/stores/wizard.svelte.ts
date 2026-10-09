@@ -2343,6 +2343,11 @@ export class Wizard {
 
   /** adb로 OS 재부팅 → 연결 끊김 → 다시 연결 대기. 실패 사유 또는 null (호출부에서 세대 확인) */
   private async rebootOsAndReconnect(gen: number): Promise<string | null> {
+    // 재부팅은 adb 명령이다 — DIAG 전환 등으로 기기가 잠시 offline이면 요청이 "기기 없음"으로 실패한다.
+    // 재부팅을 보내기 전에 기기가 다시 "device" 상태인지 확인한다(이미 연결돼 있으면 즉시 통과, 2026-10-09)
+    const ready = await this.waitFor(gen, () => this.usbDebugReady(), 120_000, 2000);
+    if (gen !== this.runGen) return null;
+    if (!ready) return "폰이 ADB로 연결되지 않아 재부팅을 요청할 수 없습니다 — USB 연결을 확인한 뒤 [이 단계 다시 시도]를 눌러 주세요";
     const rb = await api.rootReboot(this.device?.serial, "os");
     if (gen !== this.runGen) return null;
     if (!rb.ok) return `재부팅 요청 실패: ${rb.error}`;
@@ -2457,6 +2462,13 @@ export class Wizard {
   /** VoLTE 활성화 설정 — persist.dbg 4종 setprop 후 재부팅, adb 복귀 대기 */
   private async runRealVolteProps(cur: RunStep) {
     const gen = this.runGen;
+    cur.progress = 0.2;
+    // DIAG 전환으로 USB가 재열거되면 ADB가 잠시 offline이 된다 — setprop은 ADB가 필요하므로
+    // 기기가 다시 "device" 상태로 돌아올 때까지 기다린 뒤 진행한다(2026-10-09, 순방향 패치 실패 수정)
+    this.log(cur, "[대기] DIAG 전환 후 ADB 연결이 돌아오기를 기다립니다");
+    const back = await this.waitFor(gen, () => this.usbDebugReady(), 120_000, 2000);
+    if (gen !== this.runGen) return;
+    if (!back) return this.failStep("DIAG 전환 뒤 ADB로 다시 연결되지 않습니다 — USB 연결을 확인한 뒤 [이 단계 다시 시도]를 눌러 주세요");
     cur.progress = 0.3;
     this.log(cur, "[설정] VoLTE·영상통화·Wi-Fi 통화 프롭 적용 — 루트 권한 필요");
     const r = await api.voltePropsSet(this.device?.serial);
