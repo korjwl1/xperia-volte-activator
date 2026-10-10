@@ -25,6 +25,7 @@ pub(super) fn open(dev: &mut dyn ADBDeviceExt, cancel: &AtomicBool) -> Result<()
     check_cancel(cancel)?;
     // Hanabi's Mark IV exception: persist.usb.eng before opening the EFS port.
     // 1 IV = XQ-CT*, 5 IV = XQ-CQ*. 10 IV is a separate series (XQ-CC*).
+    // ⚠ 이 접두사 목록은 프런트 src/lib/data/devices.ts의 `diagEngineering` 플래그와 같은 집합이어야 한다 — 기기 추가 시 두 곳을 함께 수정한다.
     if model.starts_with("XQ-CT") || model.starts_with("XQ-CQ") {
         crate::device_io::shell_write(dev, IV_ENG)?;
         check_cancel(cancel)?;

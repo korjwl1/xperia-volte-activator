@@ -1,4 +1,6 @@
 // 도메인 타입 — .plans/03-data/mock-schema.md 참조
+import { usesLguVPreset } from "$lib/data/devices";
+
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string };
 export type Unsubscribe = () => void;
 
@@ -250,9 +252,9 @@ export interface VolteConfig {
   bootloaderAction: "unlock" | "relock" | null;
 }
 
-/** LG U+ 선택 시 1 V / 5 V(XQ-DQ*, XQ-DE*)는 전용 프리셋(LGU_V)으로 자동 대체 */
+/** LG U+ 선택 시 1 V / 5 V는 전용 프리셋(LGU_V)으로 자동 대체 (대상 기종은 기종 레지스트리가 정한다) */
 export function resolveCarrier(carrier: CarrierId, model: string): CarrierId {
-  if (carrier === "LGU" && (model.includes("XQ-DQ") || model.includes("XQ-DE"))) return "LGU_V";
+  if (carrier === "LGU" && usesLguVPreset(model)) return "LGU_V";
   return carrier;
 }
 

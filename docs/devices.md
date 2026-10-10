@@ -8,7 +8,14 @@
 
 ## 코드가 선택하는 알고리즘
 
-기준 소스: `src/lib/data/devices.ts`의 `bootPartition/deviceWorkflow/modelSupport`, `types.ts`의 LGU 해석, Rust의 공통 기록/DIAG 엔진. `*`는 모델 접두사 표기이며 모든 접미사를 실측했다는 뜻이 아닙니다.
+기준 소스: `src/lib/data/devices.ts`의 단일 `MODELS` 레지스트리(접두사 → 부트 파티션·개발 포트·PDC·LGU_V·지원 범위). `bootPartition/deviceWorkflow/modelSupport/usesLguVPreset`와 `types.ts`의 LGU 해석이 모두 이 표에서 파생됩니다. `*`는 모델 접두사 표기이며 모든 접미사를 실측했다는 뜻이 아닙니다.
+
+### 새 기기 추가 (단일 수정 지점)
+
+1. **`src/lib/data/devices.ts`의 `MODELS`에 한 줄 추가** — `prefix`(ro.product.model 접두사)와 `partition`은 필수. 필요에 따라 `diagEngineering`(Mark IV식 개발 포트), `manualPdc`, `lguV`, `support`(지원 범위·주의·출처)를 둔다. `support`가 없으면 부트 파티션은 알아도 "지원 미확인"으로 떨어진다.
+2. `diagEngineering: true`를 새로 쓰는 기종이면 **백엔드 `src-tauri/src/efs/diag.rs`의 접두사 분기도 함께 수정**한다(두 곳이 같은 집합이어야 함 — 해당 코드에 교차참조 주석 있음). 그 외 파티션·PDC·LGU_V·지원 범위는 이 표 한 곳이면 충분하다.
+3. 표시용 제품명이 필요하면 `src-tauri/src/adb.rs`의 `product_name` 폴백 표에 추가(기기가 `ro.semc.product.name`을 보고하면 그 값이 우선이므로 선택 사항).
+4. 실기기 검증 전에는 [실기기 체크리스트](../.plans/04-engine/device-test-checklist.md)에 항목을 추가하고, 검증 완료 전까지 쓰기 플래그로 배포하지 않는다.
 
 | 기기 | 모델 접두사 | 부트 대상 | 기종에 따른 처리/안내 | 실기기 범위 |
 |---|---|---|---|---|
