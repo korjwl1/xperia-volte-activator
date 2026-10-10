@@ -2426,7 +2426,7 @@ export class Wizard {
     const targets = this.rollbackTargets(record);
     if (!targets.length) return this.failStep("되돌릴 VoLTE 패치 기록이 없습니다 — 이 앱으로 패치한 기록이 있어야 합니다");
     this.log(cur, "[DIAG] 모뎀 연결 모드로 전환합니다(루트 권한 필요)");
-    const diag = await api.efsDiagOpen(this.device?.serial);
+    const diag = await api.efsDiagOpen(this.device?.serial, this.workflow.diagEngineering);
     if (gen !== this.runGen) return;
     if (!diag.ok) return this.failStep(`DIAG 전환 실패: ${diag.error}`);
     for (const [i, t] of targets.entries()) {
@@ -2572,7 +2572,7 @@ export class Wizard {
         for (const w of warnings) this.log(cur, `[경고/${w.code}] ${w.target}: ${w.message}`);
       };
       if (cur.id === "efs-preflight") {
-        const diag = await api.efsDiagOpen(this.device?.serial);
+        const diag = await api.efsDiagOpen(this.device?.serial, this.workflow.diagEngineering);
         if (gen !== this.runGen) return;
         if (!diag.ok) return this.failStep(diag.error);
         const r = await api.efsPreflight(cfg);

@@ -85,7 +85,7 @@ requests! {
     RelockGateCheck("relock_gate_check", false, true, true) { partition: String = "init_boot", stock_path: String = "<stock image>", device_key: Option<String> = Value::Null }
     FlashHistoryArchive("flash_history_archive", false, true, true) { confirm: bool = false }
     EfsValidatePresets("efs_validate_presets", false, true, true) { preset_dirs: Vec<String> = json!(["<approved balance preset directory>"]) }
-    EfsDiagOpen("efs_diag_open", true, cfg!(feature = "efs-write"), false) { serial: String = "sha256:<serialKey>" }
+    EfsDiagOpen("efs_diag_open", true, cfg!(feature = "efs-write"), false) { serial: String = "sha256:<serialKey>", needs_eng_port: bool = false }
     EfsPreflight("efs_preflight", true, cfg!(feature = "efs-write"), false) { port: String = "COM<number>" }
     EfsSnapshot("efs_snapshot", true, cfg!(feature = "efs-write"), false) { port: String = "COM<number>", preset_dir: String = "<approved balance preset>", dest: String = "<new snapshot folder>" }
     EfsUpload("efs_upload", true, cfg!(feature = "efs-write"), false) { port: String = "COM<number>", preset_dir: String = "<approved balance preset>" }
@@ -291,7 +291,7 @@ async fn dispatch(req: Request, events: Events) -> Result<Value, Value> {
         Request::EfsValidatePresets { preset_dirs } => {
             packed(efs::efs_validate_presets(preset_dirs).await)
         }
-        Request::EfsDiagOpen { serial } => packed(efs::efs_diag_open(serial).await),
+        Request::EfsDiagOpen { serial, needs_eng_port } => packed(efs::efs_diag_open(serial, needs_eng_port).await),
         Request::EfsPreflight { port } => packed(efs::efs_preflight(port).await),
         Request::EfsSnapshot {
             port,
@@ -1202,7 +1202,7 @@ mod tests {
         let req = decode(json!({"command":"restore_run","args":{"serial":"TEST","dir":"backup","items":["dcim"]}})).unwrap();
         assert!(authorize(&req, false).is_err());
         assert!(authorize(&req, true).is_ok());
-        let req = decode(json!({"command":"efs_diag_open","args":{"serial":"TEST"}})).unwrap();
+        let req = decode(json!({"command":"efs_diag_open","args":{"serial":"TEST","needsEngPort":false}})).unwrap();
         assert_eq!(authorize(&req, true).is_ok(), cfg!(feature = "efs-write"));
     }
     #[test]

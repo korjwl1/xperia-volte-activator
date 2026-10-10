@@ -347,7 +347,7 @@ pub async fn efs_validate_presets(preset_dirs: Vec<String>) -> Result<()> {
     .await
 }
 #[tauri::command]
-pub async fn efs_diag_open(serial: String) -> Result<()> {
+pub async fn efs_diag_open(serial: String, needs_eng_port: bool) -> Result<()> {
     gate()?;
     let owner = Operation::acquire()?;
     if serial.is_empty() {
@@ -362,7 +362,7 @@ pub async fn efs_diag_open(serial: String) -> Result<()> {
         *slot = None;
     }
     tauri::async_runtime::spawn_blocking(move || {
-        crate::adb::with_first_device(&Some(serial), |dev| diag::open(dev, &owner.cancel)).map_err(
+        crate::adb::with_first_device(&Some(serial), |dev| diag::open(dev, &owner.cancel, needs_eng_port)).map_err(
             |message| {
                 Error::new(
                     if owner.cancel.load(Ordering::Acquire) {

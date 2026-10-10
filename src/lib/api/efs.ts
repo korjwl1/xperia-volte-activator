@@ -45,7 +45,7 @@ export interface EfsApi {
   efsConfigure(configuration: EfsConfiguration): Promise<EfsResult<null>>;
   efsConfiguration(): Promise<EfsResult<EfsConfiguration | null>>;
   efsToolCheck(): Promise<EfsResult<EfsToolCheck>>;
-  efsDiagOpen(serial: string | undefined): Promise<EfsResult<null>>;
+  efsDiagOpen(serial: string | undefined, needsEngPort: boolean): Promise<EfsResult<null>>;
   efsPreflight(fixed?: EfsConfiguration): Promise<EfsResult<EfsPreflight>>;
   efsUpload(presetDir: string, fixed?: EfsConfiguration): Promise<EfsResult<EfsUploadResult>>;
   efsVerify(presetDir: string, fixed?: EfsConfiguration): Promise<EfsResult<EfsVerifyReport>>;
@@ -72,11 +72,11 @@ export const efsApi: EfsApi = {
   },
   async efsConfiguration() { return inTauri() ? invoke("efs_config_get") : { ok: true, value: browserConfiguration }; },
   async efsToolCheck() { return inTauri() ? invoke("efs_tool_check") : { ok: true, value: { version: "native-rust-v1 (mock)", path: "built-in", native: true, deviceExecution: false, rootExecution: false, fastbootExecution: false } }; },
-  async efsDiagOpen(serial) {
+  async efsDiagOpen(serial, needsEngPort) {
     if (!REAL_STEPS.efs) return disabled;
     if (!inTauri()) return { ok: true, value: null };
     if (!serial) return { ok: false, error: "DIAG 전환에는 선택한 기기의 ADB 일련번호가 필요합니다" };
-    return invoke("efs_diag_open", { serial });
+    return invoke("efs_diag_open", { serial, needsEngPort });
   },
   async efsPreflight(fixed) {
     if (!REAL_STEPS.efs) return disabled;
