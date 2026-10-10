@@ -69,9 +69,10 @@ export function bootPartition(model: string): "init_boot" | "boot" | null {
   return modelEntry(model)?.partition ?? null;
 }
 
-/** LG U+ 선택 시 전용 LGU_V 프리셋을 쓰는 기종인지 (1 V / 5 V) */
+/** LG U+ 선택 시 전용 LGU_V 프리셋을 쓰는 기종인지 (1 V / 5 V).
+ *  모델 코드 어디에든 접두사가 포함되면 참(기존 resolveCarrier의 includes 판정을 그대로 계승). */
 export function usesLguVPreset(model: string): boolean {
-  return !!modelEntry(model)?.lguV;
+  return MODELS.some((m) => m.lguV && model.includes(m.prefix));
 }
 
 /** 기종별 지원 범위 — 표에 support가 없으면 지원 미확인 */
