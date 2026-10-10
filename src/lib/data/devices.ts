@@ -25,6 +25,7 @@ export interface ModelSupport {
 
 const IV_NOTES = [
   "KT·LG U+에서 자동화툴 적용 뒤 통화가 안 되어 PDC·모뎀 작업으로 대응한 보고가 있습니다. 펌웨어에 따라 EFS만으로 성공한 보고도 있습니다",
+  "1·5 IV는 국내 일반 EFS 패치가 안 먹혀 소프트뱅크(SoftBank) MBN을 강제로 올린 뒤 우회한 사례가 보고됐습니다(일부 통신사 한정). 이 앱은 MBN 강제·모뎀 교체를 자동화하지 않습니다 — 필요하면 외부 도구로 직접 진행해야 합니다",
   "이 앱은 Mark IV 개발 포트 보완을 포함하지만 PDC·모뎀 교체는 수행하지 않습니다",
   "모뎀을 섞은 상태에서 리락한 뒤 실패한 사례가 있습니다",
 ];
@@ -47,7 +48,7 @@ const MODEL_SUPPORT: [string, ModelSupport][] = [
 /** 기종별 지원 범위 — 표에 없으면 지원 미확인 */
 export function modelSupport(model: string, carriers?: readonly string[], relock = true): ModelSupport {
   const hit = MODEL_SUPPORT.find(([p]) => model.startsWith(p));
-  if (!hit) return { name: model, level: "지원 미확인", notes: ["이 앱에서 확인된 패치 절차가 없는 기종입니다"] };
+  if (!hit) return { name: model, level: "지원 미확인", notes: ["이 앱에서 확인된 패치 절차가 없는 기종입니다. 지원 대상은 심프리(XQ-*) 모델입니다 — 일본 통신사판(도코모·au·소프트뱅크)은 대개 부트로더 언락이 막혀 있어 패치가 불가능합니다(도코모 임시 루트 등 일부 예외 제외)"] };
   const relevant = carriers === undefined || carriers.length > 0;
   const notes = !relevant
     || (hit[1].notes === IV_NOTES && carriers !== undefined && !carriers.some(c => c === "KT" || c === "LGU"))

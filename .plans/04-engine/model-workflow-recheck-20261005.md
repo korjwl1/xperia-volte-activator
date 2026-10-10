@@ -52,3 +52,11 @@ Orca의 기존 Sony 카페 탭을 읽기 전용으로 사용했다. 서버 응�
 실제 store/API를 가짜 호출로 검증하고 Rust FakeTransport/이력/이미지 픽스처로 조건 통과와 거부·상태 미확인을 검사했다. 최종 프런트 101/101, svelte-check 0 errors/0 warnings, Rust 기본·all-features 각각 214 passed/8 ignored(222개), clippy all-targets/all-features -D warnings 통과. 모든 기본 쓰기 플래그/feature는 비활성이다.
 
 정적 프런트 생산 빌드와 기본 feature release/NSIS 패키징 성공. 산출물은 main의 src-tauri/target/release/bundle/nsis/xperia-volte-activator_0.1.0_x64-setup.exe, 3,434,863 bytes, SHA-256 EEFDD041074676B3E198DB5A5AAD649AD07EB295A79DCB344C64E57383DE4A84. 설치·앱 실행·기기 테스트는 하지 않았다. 로그는 src-tauri/target/relock-workflow-package-20261005.log에 있다. 이 설치 파일의 쓰기 기능은 기본 비활성 상태다.
+
+## 2026-10-10 후속 — 기종 특화·과잉 특화 재검토 (브랜치 `review/model-specifics-20261010`)
+
+사용자가 카페 요약(1·5 IV 소뱅 MBN 강제, V/VI JP↔글로벌 모뎀 교체, VII+ 자유 구성, 통신사판 부트로더 언락 제한)을 전달하며 ① 코드 반영 여부 ② 1 V·내 기기(XQ-DQ44) 과잉 특화 여부를 검토 요청. 라이브 orca 탭은 이 세션에 브라우저 MCP가 없어 열지 못했고, 이전 세션이 저장한 `../tasks/cafe-research*`·`../tasks/efs-*`의 본문/댓글을 1차 소스로 사용했다(카페 본문이 "소프트뱅크를 강제로 잡고 국내 통신", "도코모 버젼이라 볼테를 못했구요(부트로더 언락이 NO)", "10 시리즈는 modem.img 내부에 한국 SW MBN 포함"을 확인).
+
+- **과잉 특화 점검 결과: 프로덕션 로직에 1 V/XQ-DQ44 하드코딩 없음.** 모델 분기는 `devices.ts`의 접두사 표(범용), DIAG 포트는 Qualcomm 05C6 전수 스캔+hello/query 프로브(범용), `adb.rs product_name`은 표시용 폴백(보고명 우선→표→원본), Mark IV persist.usb.eng는 XQ-CT/XQ-CQ로만 게이트. 그 외 XQ-DQ44 언급은 테스트 픽스처·mock 시드·관측 위치 주석뿐이다. `/debug_ramdisk/su`·freeStorage 대기·재부팅 타이밍은 Magisk 버전·Android 동작 특성이지 모델 특화가 아니다.
+- **반영 보강(가이드만, 자동화 신설 없음):** `modelSupport`의 IV 노트에 1·5 IV 소프트뱅크 MBN 강제 우회 사례(일부 통신사 한정, 앱은 자동화 안 함)를 추가. `지원 미확인` 폴백 노트에 심프리(XQ-*) 대상·일본 통신사판(도코모·au·소프트뱅크) 부트로더 언락 제한·도코모 임시 루트 예외를 명시. `docs/devices.md`의 IV·통신사판 항목도 동일하게 갱신. 테스트는 노트 길이/동작만 단정하므로 영향 없음(IV 노트는 KT/LGU 선택 시에만 표시 유지).
+- **반영하지 않음:** V/VI JP↔글로벌 모뎀 교체·재패치는 사용자가 "반영 불필요"로 지시 → 미반영. VII/VIII는 모델 코드 미출시이고 표 밖 `null`로 자동 패치를 차단(파티션 추측 금지 정책)하므로 매핑 추가하지 않음. 1·5 IV MBN 강제를 실제로 수행하는 엔진은 기존 정책(PDC·모뎀·MBN 자동화 신설 금지) 위반·실기기 검증 불가(사용자 기기는 1 V라 IV 테스트 불가)·고위험이라 구현하지 않고 별도 결정 사항으로 남긴다.
