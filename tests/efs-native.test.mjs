@@ -396,6 +396,19 @@ test("VoLTE settings and IMS confirmation stages survive wrapper replacement", a
   assert.equal(final.runSteps[0].status, "manual-wait");
 });
 
+test("VoLTE props does not setprop until adb returns after the DIAG switch", async () => {
+  // 실기기 버그(2026-10-09): DIAG 전환 직후 adb가 offline이면 setprop이 "기기 없음"으로 실패했다.
+  // 계약: adb 복귀 대기가 실패하면 setprop을 시도하지 않고 단계가 실패해야 한다(대기가 setprop을 게이트).
+  const w = wizard("volte-props");
+  const calls = [];
+  w.waitFor = async () => { calls.push("wait"); return false; }; // adb가 끝내 돌아오지 않음
+  api.voltePropsSet = async () => { calls.push("setprop"); return ok([]); };
+  w.tick(); await settled(w);
+  assert.deepEqual(calls, ["wait"]); // setprop은 시도되지 않음
+  assert.equal(w.runSteps[0].status, "failed");
+  assert.match(w.stepError, /ADB/);
+});
+
 test("preset conflict is checked before unlock, rooting, backup or DIAG", async () => {
   const w = wizard("efs-input");
   const plan = buildPlan({ ...w.device, bootloader: "locked", rooted: false, prep: {} }, w.volteConfig, { unroot: true, relock: true, restore: true }, true);
